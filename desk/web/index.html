@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk OS · Control Room</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--muted:#5d6672;--line:#e3e6ea;--accent:#2f6fde;--good:#1f8a4c;--bad:#c23b32;--warn:#b7791f;--chip:#eef1f5;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#98a2ae;--line:#272d35;--accent:#6c9cff;--good:#4cc283;--bad:#ff6b61;--warn:#e3b04b;--chip:#20262e;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;padding:18px 20px 6px}
+h1{font-size:20px;margin:0;letter-spacing:.2px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+.wrap{padding:8px 20px 40px;display:grid;gap:14px;grid-template-columns:repeat(12,1fr)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+.s12{grid-column:span 12}.s8{grid-column:span 8}.s6{grid-column:span 6}.s4{grid-column:span 4}
+@media (max-width:1000px){.s8,.s6,.s4{grid-column:span 12}}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.kpi{background:var(--chip);border-radius:8px;padding:10px}.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}.kpi span{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px}td.n{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{overflow:auto;max-height:420px}.chip{display:inline-block;padding:1px 7px;border-radius:99px;background:var(--chip);font-size:12px}
+.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}.muted{color:var(--muted)}
+.memo{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:13px}
+.ev{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
+a{color:var(--accent);cursor:pointer;text-decoration:none}
+#detail{position:fixed;inset:6% 6%;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;overflow:auto;display:none;z-index:5;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+#detail pre{white-space:pre-wrap;font-size:12px}
+.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+</style>
+</head>
+<body>
+<header><h1>Desk OS · Control Room</h1><div class="muted" id="clock"></div></header>
+<div class="wrap">
+  <section class="card s12"><div class="kpis" id="kpis"></div></section>
+  <section class="card s8"><h2>Agents</h2><div class="scroll"><table id="agents"></table></div></section>
+  <section class="card s4"><h2>Desk memo</h2><div class="memo" id="memo"></div></section>
+  <section class="card s6"><h2>Strategy pipeline</h2><div class="scroll"><table id="strats"></table></div></section>
+  <section class="card s6"><h2>Factor library</h2><div class="scroll"><table id="factors"></table></div></section>
+  <section class="card s6"><h2>Research board</h2><div class="scroll"><table id="board"></table></div></section>
+  <section class="card s6"><h2>Playbook</h2><div class="scroll"><table id="lessons"></table></div></section>
+  <section class="card s6"><h2>Paper trading (Hyperliquid)</h2><div class="scroll" id="paper"></div></section>
+  <section class="card s6"><h2>Funding regime (carry sleeves)</h2><div class="scroll" id="regime"></div></section>
+  <section class="card s6"><h2>Knowledge digest</h2><div class="memo" id="digest"></div></section>
+  <section class="card s12"><h2>Event stream</h2><div class="scroll"><table id="events"></table></div></section>
+</div>
+<div id="detail"><a onclick="detail.style.display='none'">close ✕</a><pre id="detailBody"></pre></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const ago=t=>{if(!t)return'';const s=Date.now()/1000-t;return s<60?Math.round(s)+'s':s<3600?Math.round(s/60)+'m':(s/3600).toFixed(1)+'h'};
+const fmt=n=>n==null?'':Math.abs(n)>=1e6?(n/1e6).toFixed(2)+'M':Math.abs(n)>=1e3?(n/1e3).toFixed(1)+'k':(+n).toFixed?(+n).toFixed(2):n;
+const link=id=>`<a onclick="openItem('${id}')">${esc(id)}</a>`;
+async function openItem(id){const r=await fetch('/api/item?id='+encodeURIComponent(id));$('detailBody').textContent=JSON.stringify(await r.json(),null,1);$('detail').style.display='block'}
+function stCls(s){return /approved|paper|holdout|validating/.test(s)?'good':/rejected|error/.test(s)?'bad':/review|dev_eval|submitted/.test(s)?'warn':''}
+async function tick(){
+ let d;try{d=await (await fetch('/api/state')).json()}catch(e){return}
+ const run=d.run||{};const rem=run.deadline?Math.max(0,(run.deadline-d.now)/3600):null;
+ $('clock').textContent=(d.running?'RUNNING':'idle')+(rem!=null?` · ${rem.toFixed(2)} h remaining`:'')+(d.stop_requested?' · stop requested':'');
+ const funnel=Object.fromEntries((d.strategies||[]).map(x=>[x.status,x.n]));const facs=Object.fromEntries((d.factors||[]).map(x=>[x.status,x.n]));
+ const conc=d.concurrency||{};
+ const k=[['Agents',d.agents.length],['Working',d.agents.filter(a=>a.status=='working').length],['LLM in flight',`${conc.inflight??0}/${conc.limit??'-'}`],
+  ['Tokens total',fmt(d.tokens.prompt+d.tokens.completion)],['Tokens last hour',fmt(d.tokens.last_hour_tokens)],['Requests',d.tokens.requests],
+  ['Factors active',facs.active||0],['Trials (≥10d)',d.trials.distinct_strategies],['Submitted',Object.values(funnel).reduce((a,b)=>a+b,0)],
+  ['In review',funnel.review||0],['Approved',(funnel.approved||0)+(funnel.paper||0)],['Lessons',d.lessons]];
+ $('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><b>${esc(b)}</b><span>${a}</span></div>`).join('');
+ $('agents').innerHTML='<tr><th>Agent</th><th>Pod</th><th>Model</th><th>Status</th><th class=n>Sessions</th><th class=n>Steps</th><th class=n>Tokens</th><th>Active</th></tr>'+
+  d.agents.map(a=>`<tr><td>${link(a.name)}</td><td><span class=chip>${esc(a.pod)}</span></td><td class=muted>${esc((a.model||'').replace('mimo-v2.6-',''))}</td><td class="${a.status=='working'?'good':a.status=='error'?'bad':'muted'}">${esc(a.status)}</td><td class=n>${a.sessions}</td><td class=n>${a.steps}</td><td class=n>${fmt(a.tokens)}</td><td class=muted>${ago(a.last_active)}</td></tr>`).join('');
+ $('memo').textContent=d.memo?`${d.memo.author} · ${ago(d.memo.created)} ago\n\n${d.memo.body}`:'No memo yet.';
+ $('digest').textContent=d.digest?`${d.digest.author} · ${ago(d.digest.created)} ago\n\n${d.digest.body}`:'No digest yet.';
+ $('strats').innerHTML='<tr><th>Id</th><th>Name</th><th>Author</th><th>Status</th><th class=n>Dev SR</th><th class=n>Val SR</th><th class=n>Hold SR</th></tr>'+
+  d.strategy_list.map(s=>`<tr><td>${link(s.id)}</td><td>${esc(s.name).slice(0,60)}</td><td>${esc(s.author)}</td><td class="${stCls(s.status)}">${esc(s.status)}${s.gates&&s.gates.length?'<br><span class=muted>'+esc(s.gates.join(', ')).slice(0,120)+'</span>':''}</td><td class=n>${fmt(s.dev_sharpe)}</td><td class=n>${fmt(s.val_sharpe)}</td><td class=n>${fmt(s.holdout_sharpe)}</td></tr>`).join('');
+ $('factors').innerHTML='<tr><th>Id</th><th>Name</th><th>Author</th><th class=n>Score</th><th class=n>Best h</th><th class=n>t</th><th class=n>Cost cov</th><th class=n>Max corr</th></tr>'+
+  d.factors.map(f=>`<tr><td>${link(f.id)}</td><td>${esc(f.name).slice(0,50)}</td><td>${esc(f.author)}</td><td class=n>${fmt(f.score)}</td><td class=n>${f.best_h??''}s</td><td class=n>${f.t??''}</td><td class=n>${f.cost_cov??''}</td><td class=n>${f.novel??''}</td></tr>`).join('');
+ $('board').innerHTML='<tr><th>Id</th><th>Kind</th><th>Title</th><th>Owner</th><th>Status</th></tr>'+
+  d.board.map(b=>`<tr><td>${link(b.id)}</td><td>${esc(b.kind)}</td><td>${esc(b.title).slice(0,90)}</td><td>${esc(b.assignee||b.author)}</td><td>${esc(b.status)}</td></tr>`).join('');
+ $('lessons').innerHTML='<tr><th>Id</th><th>Lesson</th><th>By</th><th class=n>Conf</th></tr>'+
+  d.lesson_list.map(l=>`<tr><td>${link(l.id)}</td><td>${esc(l.claim).slice(0,220)}</td><td>${esc(l.author)}</td><td class=n>${l.confidence}</td></tr>`).join('');
+ const rg=d.regime;
+ $('regime').innerHTML=rg?`<div>median HL funding <b>${(rg.median_hl_funding_bps_h||0).toFixed(3)}</b> bps/h (spot-carry entry 0.2) · median |HL−BN spread| <b>${(rg.median_abs_spread_bps_h||0).toFixed(3)}</b> bps/h (carry v2 entry 0.3)</div><div>carry v2 open: ${esc((rg.carry_v2_open||[]).join(', ')||'none')}</div><div>spot-carry open: ${esc((rg.spot_carry_open||[]).join(', ')||'none')}</div><table><tr><th>Closest (carry v2)</th><th class=n>spread</th><th class=n>gap</th></tr>`+(rg.closest||[]).map(r=>`<tr><td>${esc(r.coin)}</td><td class=n>${r.spread_bps_h.toFixed(3)}</td><td class=n>${r.carry_v2_gap.toFixed(3)}</td></tr>`).join('')+'</table>':'<span class=muted>regime monitor not running</span>';
+ const p=(d.paper||{}).sessions||[];
+ $('paper').innerHTML=p.length?'<table><tr><th>Session</th><th>Target</th><th class=n>Hours</th><th class=n>PnL $</th><th class=n>Funding $</th><th class=n>Pos</th><th>Drift</th></tr>'+p.map(s=>`<tr><td>${esc(s.session)} ${s.alive?'<span class=good>●</span>':'<span class=muted>○</span>'}</td><td>${esc(s.target)}</td><td class=n>${s.hours}</td><td class="n ${s.pnl_usd>=0?'good':'bad'}">${fmt(s.pnl_usd)}</td><td class=n>${fmt(s.funding_usd||0)}</td><td class=n>${s.n_positions||0}</td><td>${(s.drift||[]).map(x=>`<span class="${x.flag=='ok'?'good':'bad'}">${x.flag} z=${x.z}</span>`).join(' ')}</td></tr>`).join('')+'</table>':'<span class=muted>No paper sessions yet. Approved strategies are paper-traded by the PM.</span>';
+ $('events').innerHTML=d.events.map(e=>`<tr><td class=muted>${ago(e.created)}</td><td>${esc(e.agent)}</td><td><span class=chip>${esc(e.kind)}</span></td><td class=ev>${esc(e.payload)}</td></tr>`).join('');
+}
+tick();setInterval(tick,5000);
+</script>
+</body>
+</html>

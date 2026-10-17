@@ -1,0 +1,282 @@
+{
+  "verified_on_client_date": "2026-09-29",
+  "tests": {
+    "command": "python -m pytest -q",
+    "passed": 80,
+    "failed": 0,
+    "seconds": 12.73
+  },
+  "inventory": {
+    "archives": 331,
+    "bytes": 50053843328,
+    "first_date": "2025-11-01",
+    "last_date": "2026-09-27",
+    "fully_reconstructed_days_in_verification": 1,
+    "exhaustive_archive_audit_complete": false
+  },
+  "full_day": {
+    "date": "2025-11-01",
+    "rows": 86400,
+    "duration_seconds": 86398.995,
+    "quality": {
+      "messages": 86400,
+      "snapshots": 96,
+      "sequence_gaps": 0,
+      "timestamp_gaps": 0,
+      "crossed_books": 0,
+      "duplicate_timestamps": 0,
+      "has_sequence_ids": false,
+      "max_gap_ms": 1722
+    },
+    "cached_load_seconds": 0.01600000000325963,
+    "signal_seconds": 1.375,
+    "replay_seconds": 0.29599999997299165,
+    "summary": {
+      "trades": 218,
+      "orders": 432,
+      "return_fraction": -0.050189201817017914,
+      "pnl": -501.89201817017965,
+      "fees": 490.5016531971607,
+      "max_drawdown_fraction": 0.05018920181701796,
+      "win_rate": 0.0,
+      "halted": true,
+      "fill_model": "taker_cross_spread",
+      "funding_included": false,
+      "funding_boundary_crossings": 0
+    },
+    "interpretation": "Hand-written baseline infrastructure check, not discovered alpha",
+    "initial_cold_reconstruction_seconds": 15.688
+  },
+  "provider": {
+    "provider": "mimo",
+    "model": "mimo-v2.6-pro",
+    "listed": true,
+    "available_models": [
+      "mimo-v2.5",
+      "mimo-v2.5-asr",
+      "mimo-v2.5-pro",
+      "mimo-v2.5-tts",
+      "mimo-v2.5-tts-voiceclone",
+      "mimo-v2.5-tts-voicedesign",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro"
+    ],
+    "base_url": "https://token-plan-ams.xiaomimimo.com/v1"
+  },
+  "campaigns": [
+    {
+      "id": "ca89a6dda14c",
+      "status": "READY",
+      "token_limit": 500000
+    }
+  ],
+  "cycles": [
+    {
+      "id": "1ce14811fbf8",
+      "campaign": "ca89a6dda14c",
+      "status": "COMPLETE"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "1ce14811fbf8:director",
+      "agent": "director",
+      "status": "COMPLETE"
+    },
+    {
+      "id": "1ce14811fbf8:scientist",
+      "agent": "scientist",
+      "status": "COMPLETE"
+    },
+    {
+      "id": "1ce14811fbf8:engineer",
+      "agent": "engineer",
+      "status": "COMPLETE"
+    },
+    {
+      "id": "1ce14811fbf8:falsifier:cohort",
+      "agent": "falsifier",
+      "status": "COMPLETE"
+    },
+    {
+      "id": "1ce14811fbf8:historian:cohort",
+      "agent": "historian",
+      "status": "COMPLETE"
+    }
+  ],
+  "usage": [
+    {
+      "agent": "director",
+      "calls": 3,
+      "charged_tokens": 10393,
+      "known_actual_tokens": 10393,
+      "unknown_or_pending_reservations": 0
+    },
+    {
+      "agent": "engineer",
+      "calls": 10,
+      "charged_tokens": 188119,
+      "known_actual_tokens": 129648,
+      "unknown_or_pending_reservations": 58471
+    },
+    {
+      "agent": "falsifier",
+      "calls": 4,
+      "charged_tokens": 72175,
+      "known_actual_tokens": 72175,
+      "unknown_or_pending_reservations": 0
+    },
+    {
+      "agent": "historian",
+      "calls": 1,
+      "charged_tokens": 4934,
+      "known_actual_tokens": 4934,
+      "unknown_or_pending_reservations": 0
+    },
+    {
+      "agent": "scientist",
+      "calls": 14,
+      "charged_tokens": 212219,
+      "known_actual_tokens": 167433,
+      "unknown_or_pending_reservations": 44786
+    }
+  ],
+  "paper_sessions": [
+    {
+      "directory": "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\paper\\20260929-231445-1cc421",
+      "samples": 12,
+      "feed_errors": 0,
+      "equity": 9999.75418813889,
+      "pnl": -0.2458118611102691,
+      "halted": false,
+      "open_positions": {
+        "infrastructure-probe": 0.0011973395116052132
+      },
+      "fees": 0.22500251946874048,
+      "closed_trades": 2,
+      "funding_included": false,
+      "orders_submitted_to_exchange": 0,
+      "venue_transfer_status": "UNVERIFIED until a sufficiently long Hyperliquid forward paper record exists",
+      "last_exchange_ts": 1790716496650
+    },
+    {
+      "directory": "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\paper\\20260929-232132-bea246",
+      "samples": 330,
+      "feed_errors": 0,
+      "equity": 10000.0,
+      "pnl": 0.0,
+      "halted": false,
+      "open_positions": {
+        "6bc072b37a0b9b55": 0.0
+      },
+      "fees": 0.0,
+      "closed_trades": 0,
+      "funding_included": false,
+      "funding_boundary_crossings": 0,
+      "orders_submitted_to_exchange": 0,
+      "venue_transfer_status": "UNVERIFIED until a sufficiently long Hyperliquid forward paper record exists",
+      "last_exchange_ts": 1790717222372
+    }
+  ],
+  "public_capture": [
+    {
+      "directory": "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\market_data\\hyperliquid-20260929-211252-0dc552",
+      "coin": "BTC",
+      "endpoint": "wss://api.hyperliquid.xyz/ws",
+      "counts": {
+        "l2Book": 3,
+        "trades": 33,
+        "activeAssetCtx": 8,
+        "book_gaps": 1
+      },
+      "duplicate_trades": 0,
+      "reconnects": 0,
+      "errors": 0,
+      "stopped_early": false,
+      "orders_submitted_to_exchange": 0,
+      "coverage_verified": false,
+      "limitation": "Public L2 is aggregated snapshots; trades support execution calibration but do not reveal queue priority. Disconnects may lose events. No automatic maker promotion."
+    },
+    {
+      "directory": "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\market_data\\hyperliquid-20260929-213513-9afe04",
+      "coin": "BTC",
+      "endpoint": "wss://api.hyperliquid.xyz/ws",
+      "counts": {
+        "l2Book": 2,
+        "trades": 40,
+        "activeAssetCtx": 8
+      },
+      "duplicate_trades": 0,
+      "reconnects": 0,
+      "errors": 0,
+      "stopped_early": false,
+      "orders_submitted_to_exchange": 0,
+      "coverage_verified": false,
+      "limitation": "Public L2 is aggregated snapshots; trades support execution calibration but do not reveal queue priority. Disconnects may lose events. No automatic maker promotion."
+    }
+  ],
+  "dashboard": {
+    "url": "http://127.0.0.1:8888",
+    "http_status": 200,
+    "real_ledger_visible": true,
+    "browser_verified": true,
+    "stop_control_present": true,
+    "worker_running_at_handoff": false,
+    "registered_candidates": 6
+  },
+  "source_sha256": {
+    "quantdesk\\__init__.py": "cc5c6ea12dad4c9febe730c01fe9993c5f52799ada7ee85836a6e44ee67e0520",
+    "quantdesk\\__main__.py": "b812b41b045369ff146411157281ea5b4a6f8a5b9a0c693af87e39977e762f3a",
+    "quantdesk\\agents.py": "dca8c915a8aba12cbd43ba9263212b3c9962d1d92ab61a51d04cb51af3948ec6",
+    "quantdesk\\cli.py": "94cc9f17e419b8030fb24b45870d1387e6337242c5d13e1df7dd5b51e4d1f698",
+    "quantdesk\\collector.py": "5ce99c47d652fb97ea922ae87f96d3e3c0c6e0a034d4a5c41ceab94a5c34ca57",
+    "quantdesk\\control.py": "734f0c47fa19f159f1df857a4df3ec7db9e428fcb33c4b95bc84daf73088869c",
+    "quantdesk\\data.py": "e80e0b6cbb6fafa31b4ff1a1bba2f0b9ac4284b58866d5f66df328e645651e14",
+    "quantdesk\\evaluation.py": "ace99396fe81d56587567d2bb286c0e8dd0ad2d0a8067be350a549f5f06add0d",
+    "quantdesk\\execution.py": "62c4cc6583f90bcb36c2d1d4dcdaed38c577c3f03014cdcbfdd72ef21342cb71",
+    "quantdesk\\paper.py": "83c1c048998149045ad93c56bf326155a693ce0b4370084b7aee866e8b7f89db",
+    "quantdesk\\portfolio.py": "02e2f473ae456343de91a274a16fe4582966840ee2268e699691c310420c82b6",
+    "quantdesk\\settings.py": "6553e486a0f050f26b17febcfffc4cba366bcc40d09a06a503631f85e7825432",
+    "quantdesk\\store.py": "dee7020b2f578d5a8237aba5bed44e796196966e902ab96395298c189925100b",
+    "quantdesk\\strategy.py": "69e2d3f12d33aeffd37f3cc1eead38ec31ea0f21d1bfd345c9b5b98284a53f58",
+    "quantdesk\\web.py": "2ee5d173c73a99b9615bd755aef4f4580604f22b3e9387b92851e208ed201fd9",
+    "quantdesk\\worker.py": "e615413a7ff04c888b8df78c6b16c01484514591c7c0a774a2e74c2651407e96"
+  },
+  "claims": {
+    "demonstrated_profitable_strategy": false,
+    "portfolio_proven_profitable": false,
+    "signed_exchange_orders_implemented": false,
+    "full_mimo_cycle_verified": true,
+    "neural_model_weights_trained": false
+  },
+  "limits": [
+    "Short development samples cannot pass promotion",
+    "L2 queue position and exact maker execution unidentified",
+    "Historical funding and calibrated impact remain incomplete",
+    "Venue transfer and portfolio require meaningful fresh forward records",
+    "Provider failures and unknown billing remain charged conservatively"
+  ],
+  "lesson_records": 1,
+  "pending_requests": 0,
+  "execution_attribution": {
+    "candidate_id": "6bc072b37a0b9b55",
+    "development_only": true,
+    "dates": [
+      "2025-12-01",
+      "2026-01-30",
+      "2026-03-31"
+    ],
+    "trades": 3,
+    "gross_mid_pnl": 2.383309774411093,
+    "execution_drag": 0.7611220300636006,
+    "fees": 6.748927457229973,
+    "net_pnl": -5.12673971288248,
+    "trade_logs": [
+      "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\replays\\6bc072b37a0b9b55\\development\\base\\2025-12-01.trades.jsonl",
+      "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\replays\\6bc072b37a0b9b55\\development\\base\\2026-01-30.trades.jsonl",
+      "C:\\Users\\Mathis\\.gemini\\antigravity\\scratch\\quant_lab\\results\\desk\\replays\\6bc072b37a0b9b55\\development\\base\\2026-03-31.trades.jsonl"
+    ],
+    "caveat": "Fresh replay of existing partial development observations to verify attribution; no new alpha or promotion claim"
+  },
+  "live_orders_sent": 0
+}

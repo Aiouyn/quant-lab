@@ -1,0 +1,29 @@
+# Displayed-depth Hyperliquid shadow execution
+
+The previous taker model filled the requested size at the best quote plus fixed slippage, irrespective of displayed size. Newly exported bundles now freeze a separate target-venue policy, `displayed-depth-ioc-v1`, and its hash. Historical OKX replay retains its explicitly uncalibrated quote-based model; the fitted artifact's historical execution assumptions are preserved. This extension improves forward observation rather than retroactively certifying old backtests.
+
+## Modeled execution
+
+At the observed book after routing latency, the local IOC model walks the opposite side in price order. It uses no more than the configured fraction of each displayed level, applies configured adverse slippage, and stops at a price-distance limit or the last observed level. It never extrapolates undisplayed depth. The default participation fraction is 10%, with a five-basis-point sweep limit from the best quote, including adverse slippage. These are explicit conservative assumptions, not measured fill probabilities or impact estimates.
+
+A partial entry opens only its filled size and cancels the remainder. Partial exits reduce the actual position, allocate entry fees proportionally, and retain the residual quantity. Residual exits retry on subsequent books with routing latency. Terminal, gap and risk liquidation also respect available depth; they can leave marked open exposure. A closed trade is recorded once the entire entered quantity is flat, with volume-weighted exit price and midpoint, all fees, and reconciled gross capture/execution drag/net PnL. Long and short paths have monetary regression coverage.
+
+Every accepted public snapshot has one consumption budget shared by all portfolio sleeves, including reset/risk liquidation calls. A later sleeve cannot reuse consumed liquidity from the same snapshot. Sleeve order is deterministic manifest order; this is not a pro-rata allocator or a model of market priority. New snapshot timestamps may replenish modeled capacity, but sampled books cannot establish how much liquidity actually replenished or was canceled between observations.
+
+Raw public books, requested/filled/unfilled quantities, consumed levels, prices and fees remain in the journal. Invalid sizes, unsorted levels, duplicate prices and crossed books fail instead of falling back to an unlimited quote. Liquidity rows are confined to the execution path and are not introduced as new generated-code features.
+
+## Frozen evidence and compatibility
+
+The bundle retains historical `execution` and adds separately hashed `shadow_execution`. Session settings must match the frozen shadow policy. The exact bundle identity and future window bind that policy; changing it requires fresh forward evidence. Qualified shadow sessions and portfolios require freshly exported bundles carrying the policy. Old bundles can still run explicitly exploratory quote-model observations; those observations cannot satisfy the current forward allocation gate.
+
+Forward assessment reconstructs a depth budget from each recorded raw book and checks every fill's requested size, available quantity, swept prices, residual, fees and local cash/position marks. Correct partial exits can reconcile and qualify under the existing coverage/activity/net-return policy; a claimed overfill is rejected even after all file checksums are recomputed. Local checksums and accounting checks do not authenticate a deliberately forged raw market record.
+
+The source feeds have different quantity semantics. [OKX's official API documentation](https://www.okx.com/docs-v5/en/) distinguishes derivative contract counts and contract values. Current instrument metadata alone would not prove historical values over the archive. No arbitrary contract-to-BTC conversion was introduced. [Hyperliquid's public L2 endpoint](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint) returns at most 20 levels per side; deeper liquidity is not observable through this path. Actual order precision, minimum sizes, funding settlements, impact, queue/cancellation behavior and fill calibration remain outstanding before capital use.
+
+## Actual verification, 30 September 2026
+
+The full authored suite passed **212 tests in 65.68 seconds**. One subsequently added partial-exit forward-reconciliation test passed separately; the suite was not rerun merely to aggregate that count. Synthetic monetary checks cover long/short partial exits, bounded sweeps, shared sleeve capacity, thin-book terminal exposure, latency retries, policy integrity, legacy refusal and rehashed overfill rejection. These tests verify implementation invariants rather than venue execution accuracy.
+
+`verify_liquidity_probe.py` ran an explicitly authored constant-long probe through the real numerical worker and actual Hyperliquid mainnet public books in an isolated verification home. It accepted 12 books, performed 12 inferences, recorded two local fills and one closed trade, and consumed up to five price levels in a fill. It had zero feed, strategy or stale-decision errors and no residual position. Fees were approximately 2.25 account units and net PnL was **-2.39**. No partial fills occurred in this particular live probe; partial behavior is covered by synthetic tests. It submitted zero exchange orders, made zero provider requests, exposed no holdout and remained ineligible for forward allocation.
+
+The probe receipt is `results/desk/verification/liquidity/public-probe.json`. A subsequent independent journal audit reconciles swept depth, cash, quantity, fees, marks and the completed trade. Neither a short probe nor hypothetical positive probe PnL would establish alpha. `verification.json` records test scope, source hashes and outstanding requirements. No new paid company pilot was launched, and the overall improvement goal remains active.

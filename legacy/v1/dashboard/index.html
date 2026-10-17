@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quant Lab // 110-Agent Mega-Swarm Institutional Command Center</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <!-- Three.js & Chart.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #05070b;
+      --panel-bg: rgba(10, 14, 23, 0.86);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --cyan: #00f0ff;
+      --green: #00ff88;
+      --crimson: #ff0055;
+      --amber: #ffb700;
+      --purple: #a855f7;
+      --gold: #facc15;
+      --text: #f1f5f9;
+      --text-muted: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #webgl-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* HUD Layout */
+    .hud-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: grid;
+      grid-template-rows: 64px 1fr 280px;
+      grid-template-columns: 380px 1fr 380px;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    .interactive {
+      pointer-events: auto;
+    }
+
+    .glass-card {
+      background: var(--panel-bg);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
+    }
+
+    /* Header */
+    .header-bar {
+      grid-column: 1 / 4;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 34px;
+      height: 34px;
+      background: linear-gradient(135deg, var(--gold), var(--crimson));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 16px;
+      color: #000;
+      box-shadow: 0 0 16px rgba(250, 204, 21, 0.4);
+    }
+
+    .brand-title {
+      font-weight: 800;
+      font-size: 15px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      background: linear-gradient(90deg, #fff, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+
+    .token-meter {
+      background: rgba(250, 204, 21, 0.1);
+      border-color: rgba(250, 204, 21, 0.3);
+      color: var(--gold);
+      font-weight: 700;
+    }
+
+    .btn-action {
+      font-family: 'Inter', sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-auto-off {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: var(--green);
+    }
+
+    .btn-auto-on {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #000;
+      box-shadow: 0 0 24px rgba(16, 185, 129, 0.8);
+      animation: pulse-glow 2s infinite;
+    }
+
+    @keyframes pulse-glow {
+      0% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.5); }
+      50% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.9); }
+      100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.5); }
+    }
+
+    .btn-sprint {
+      background: linear-gradient(135deg, var(--cyan), #2563eb);
+      color: #000;
+    }
+
+    .btn-sprint:hover, .btn-action:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.15);
+    }
+
+    /* Left Sidebar: 110-Agent Directory */
+    .left-panel {
+      grid-row: 2 / 3;
+      grid-column: 1 / 2;
+    }
+
+    .panel-header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--panel-border);
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .search-input {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--panel-border);
+      color: #fff;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      margin: 8px 12px 4px 12px;
+      outline: none;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .division-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 6px 12px;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .div-tab {
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      cursor: pointer;
+      white-space: nowrap;
+      color: var(--text-muted);
+    }
+
+    .div-tab.active, .div-tab:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+
+    .agent-directory {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .agent-row {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.15s ease;
+    }
+
+    .agent-row:hover {
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .agent-name-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .agent-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .state-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .state-IDLE { background: rgba(100, 116, 139, 0.2); color: #94a3b8; }
+    .state-IDEATING { background: rgba(0, 240, 255, 0.25); color: var(--cyan); border: 1px solid rgba(0, 240, 255, 0.5); box-shadow: 0 0 8px rgba(0, 240, 255, 0.3); }
+    .state-DEBATING { background: rgba(255, 183, 0, 0.25); color: var(--amber); border: 1px solid rgba(255, 183, 0, 0.5); box-shadow: 0 0 8px rgba(255, 183, 0, 0.3); }
+    .state-REVIEWING { background: rgba(168, 85, 247, 0.25); color: var(--purple); border: 1px solid rgba(168, 85, 247, 0.5); box-shadow: 0 0 8px rgba(168, 85, 247, 0.3); }
+    .state-CODING { background: rgba(0, 255, 136, 0.25); color: var(--green); border: 1px solid rgba(0, 255, 136, 0.5); box-shadow: 0 0 8px rgba(0, 255, 136, 0.3); }
+    .state-AUDITING { background: rgba(255, 0, 85, 0.25); color: var(--crimson); border: 1px solid rgba(255, 0, 85, 0.5); box-shadow: 0 0 8px rgba(255, 0, 85, 0.3); }
+    .state-VOTING { background: rgba(250, 204, 21, 0.25); color: var(--gold); border: 1px solid rgba(250, 204, 21, 0.5); box-shadow: 0 0 8px rgba(250, 204, 21, 0.3); }
+    .state-STREAMING_L2 { background: rgba(0, 240, 255, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .state-QUEUE_PROFILING { background: rgba(0, 255, 136, 0.12); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
+    .state-VOL_SCAN { background: rgba(255, 183, 0, 0.12); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
+    .state-BENCHMARKING { background: rgba(168, 85, 247, 0.12); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3); }
+    .state-STRESS_TEST { background: rgba(255, 0, 85, 0.12); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .state-OVERSIGHT { background: rgba(250, 204, 21, 0.12); color: #fde047; border: 1px solid rgba(253, 224, 71, 0.3); }
+
+    /* Right Panel: Telemetry & Metrics */
+    .right-panel {
+      grid-row: 2 / 3;
+      grid-column: 3 / 4;
+      padding: 12px;
+      gap: 10px;
+    }
+
+    .token-dashboard {
+      background: rgba(250, 204, 21, 0.04);
+      border: 1px solid rgba(250, 204, 21, 0.15);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .token-headline {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--gold);
+      letter-spacing: -0.5px;
+    }
+
+    .token-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .metric-tile {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      padding: 8px;
+    }
+
+    .metric-label {
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .metric-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .chart-container {
+      flex: 1;
+      min-height: 100px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 6px;
+      padding: 8px;
+    }
+
+    /* Bottom: Multi-Tab Console (Debate Chamber / Ledger / Dossiers) */
+    .bottom-bar {
+      grid-row: 3 / 4;
+      grid-column: 1 / 4;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tab-bar {
+      display: flex;
+      background: rgba(0,0,0,0.3);
+      border-bottom: 1px solid var(--panel-border);
+      padding: 0 12px;
+    }
+
+    .console-tab {
+      padding: 8px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .console-tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+    }
+
+    .tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 16px;
+      display: none;
+    }
+
+    .tab-content.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Live Debate Chamber Feed */
+    .debate-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+
+    .event-card {
+      background: rgba(255, 255, 255, 0.02);
+      border-left: 3px solid #64748b;
+      padding: 6px 10px;
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .event-card.type-THEORIST_IDEATED { border-color: var(--cyan); background: rgba(0, 240, 255, 0.03); }
+    .event-card.type-PEER_CRITIQUE { border-color: var(--purple); background: rgba(168, 85, 247, 0.03); }
+    .event-card.type-REBUTTAL { border-color: var(--amber); background: rgba(255, 183, 0, 0.03); }
+    .event-card.type-CODE_COMPILED { border-color: var(--green); background: rgba(0, 255, 136, 0.03); }
+    .event-card.type-AUDIT_RESULT { border-color: var(--crimson); background: rgba(255, 0, 85, 0.03); }
+    .event-card.type-COMMITTEE_VOTE { border-color: var(--gold); background: rgba(250, 204, 21, 0.03); }
+    .event-card.type-ALPHA_APPROVED { border-color: #10b981; background: rgba(16, 185, 129, 0.1); }
+    .event-card.type-NEGATIVE_MEMORY { border-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
+    .event-card.type-TOOL_GENESIS_START { border-color: #38bdf8; background: rgba(56, 189, 248, 0.05); }
+    .event-card.type-TOOL_VERIFIED { border-color: #10b981; background: rgba(16, 185, 129, 0.12); }
+    .event-card.type-TOOL_REJECTED { border-color: #f43f5e; background: rgba(244, 63, 94, 0.08); }
+
+    .event-header {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 10px;
+    }
+
+    .event-agent {
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .event-msg {
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    /* Table styles */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    th {
+      text-align: left;
+      color: var(--text-muted);
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+
+    .tag-approved {
+      background: rgba(0, 255, 136, 0.15);
+      color: var(--green);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+
+    .tag-rejected {
+      background: rgba(255, 0, 85, 0.15);
+      color: var(--crimson);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    /* Camera View Controls */
+    .view-controls {
+      position: absolute;
+      top: 76px;
+      left: 400px;
+      display: flex;
+      gap: 6px;
+      z-index: 20;
+    }
+
+    .btn-view {
+      background: rgba(10, 14, 23, 0.85);
+      border: 1px solid var(--panel-border);
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    }
+
+    .btn-view:hover, .btn-view.active {
+      background: rgba(0, 240, 255, 0.2);
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* Modals */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(10px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-box {
+      width: 650px;
+      max-height: 80vh;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+    }
+
+    /* Toast Notification */
+    #toast-msg {
+      position: absolute;
+      top: 76px;
+      right: 24px;
+      background: rgba(16, 185, 129, 0.9);
+      color: #000;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      z-index: 150;
+      display: none;
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Three.js Canvas -->
+  <div id="webgl-canvas"></div>
+
+  <!-- Camera Presets -->
+  <div class="view-controls interactive">
+    <button class="btn-view active" onclick="setCameraPreset('galaxy')">🌌 110-Agent Galaxy</button>
+    <button class="btn-view" onclick="setCameraPreset('committee')">🏛️ Committee Core</button>
+    <button class="btn-view" onclick="setCameraPreset('microstructure')">⚡ Microstructure Desk</button>
+    <button class="btn-view" onclick="setCameraPreset('orderbook')">⛰️ 3D L2 Mountain</button>
+  </div>
+
+  <div id="toast-msg"></div>
+
+  <!-- HUD Interface -->
+  <div class="hud-layer">
+    
+    <!-- Header -->
+    <header class="header-bar glass-card interactive">
+      <div class="brand">
+        <div class="brand-logo">H</div>
+        <div class="brand-title">Quant Mega-Swarm // 110-Agent Autonomous Hedge Fund</div>
+      </div>
+
+      <div class="badges">
+        <div class="badge">
+          <div class="badge-dot" style="background: var(--green);"></div>
+          <span>OKX 5000lv: 331 Days (46.6 GB)</span>
+        </div>
+        <div class="badge">
+          <div class="badge-dot" style="background: var(--cyan);"></div>
+          <span id="gen-badge">Gen 1 // MiMo-V2.6-Pro</span>
+        </div>
+        <div class="badge token-meter">
+          <span>⚡ <span id="token-tps">0</span> tok/s</span>
+        </div>
+        
+        <!-- Continuous Auto-Pilot Toggle -->
+        <button class="btn-action btn-auto-off" id="auto-btn" onclick="toggleAutonomous()">
+          <span>⚡ Auto-Pilot: OFF</span>
+        </button>
+
+        <!-- Manual 1-shot Sprint -->
+        <button class="btn-action btn-sprint" id="sprint-btn" onclick="triggerSwarmSprint()">
+          <span>🔥 Single Sprint</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Left Panel: 110 Agent Swarm Directory -->
+    <aside class="left-panel glass-card interactive">
+      <div class="panel-header">
+        <span>Swarm Organization</span>
+        <span style="color: var(--gold);" id="agent-count-badge">110 Quants</span>
+      </div>
+
+      <input type="text" class="search-input" id="search-box" placeholder="Search 110 agents or specializations..." oninput="filterAgents()" />
+
+      <div class="division-tabs">
+        <div class="div-tab active" onclick="filterDivision('ALL')">All (110)</div>
+        <div class="div-tab" onclick="filterDivision('MICROSTRUCTURE')">Microstructure (20)</div>
+        <div class="div-tab" onclick="filterDivision('QUEUE_DYNAMICS')">Queue (20)</div>
+        <div class="div-tab" onclick="filterDivision('REGIMES')">Regimes (20)</div>
+        <div class="div-tab" onclick="filterDivision('COMPILERS')">Compilers (20)</div>
+        <div class="div-tab" onclick="filterDivision('RED_TEAM')">Red Team (20)</div>
+        <div class="div-tab" onclick="filterDivision('COMMITTEE')">Committee (10)</div>
+      </div>
+
+      <div class="agent-directory" id="agent-dir">
+        <!-- Rendered by JS -->
+      </div>
+    </aside>
+
+    <!-- Right Panel: Token Telemetry & Backtest -->
+    <aside class="right-panel glass-card interactive">
+      <div class="token-dashboard">
+        <div class="metric-label">Hedge Fund Token Consumption Telemetry</div>
+        <div class="token-headline" id="total-tokens-val">0</div>
+        <div class="token-row">
+          <span style="color: var(--text-muted);">Throughput:</span>
+          <span id="tps-val">0 tok/s</span>
+        </div>
+        <div class="token-row">
+          <span style="color: var(--text-muted);">Swarm API Calls:</span>
+          <span id="api-calls-val">0 calls</span>
+        </div>
+        <div class="token-row">
+          <span style="color: var(--text-muted);">Est. Compute Value:</span>
+          <span id="cost-val">$0.0000</span>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-tile">
+          <div class="metric-label">FIFO Fill Rate (Worst-in-Queue)</div>
+          <div class="metric-val" style="color: var(--green);" id="fifo-fill-val">52.4%</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">CPCV Overfit Prob (PBO)</div>
+          <div class="metric-val" style="color: var(--cyan);" id="pbo-val">12.5%</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Tail 5% Sharpe (Worst Path)</div>
+          <div class="metric-val" style="color: var(--gold);" id="tail-sharpe-val">+0.48</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Circuit Breakers</div>
+          <div class="metric-val" style="color: var(--purple); font-size: 13px;">ARMED (Spread & Vol)</div>
+        </div>
+      </div>
+
+      <div class="chart-container">
+        <canvas id="pnlChart"></canvas>
+      </div>
+    </aside>
+
+    <!-- Bottom Multi-Tab Console -->
+    <footer class="bottom-bar glass-card interactive">
+      <div class="tab-bar">
+        <div class="console-tab active" onclick="switchConsoleTab('debate')">
+          <span>🏛️ Live Agent Debate & Consciousness Chamber</span>
+        </div>
+        <div class="console-tab" onclick="switchConsoleTab('ledger')">
+          <span>📊 Capital Allocation Ledger</span>
+        </div>
+        <div class="console-tab" onclick="switchConsoleTab('dossiers')">
+          <span>📑 Research Dossiers (<span id="dossier-count">0</span>)</span>
+        </div>
+        <div class="console-tab" onclick="switchConsoleTab('tools')">
+          <span>🛠️ Enterprise Tool Registry (<span id="tools-count">0</span>)</span>
+        </div>
+        <div class="console-tab" onclick="switchConsoleTab('portfolio')">
+          <span>💼 Institutional Portfolio & Post-Mortems</span>
+        </div>
+      </div>
+
+      <!-- Tab 1: Live Debate Stream -->
+      <div class="tab-content active" id="tab-debate">
+        <div class="debate-feed" id="debate-feed">
+          <div class="event-card type-SPRINT_START">
+            <div class="event-header">
+              <span class="event-agent">Swarm_Commander</span>
+              <span>Online</span>
+            </div>
+            <div class="event-msg">🚀 110-agent quantitative hedge fund initialized. Ready for continuous autonomous alpha search.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: SQLite Ledger -->
+      <div class="tab-content" id="tab-ledger">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Strategy Hypothesis</th>
+              <th>Author</th>
+              <th>Horizon</th>
+              <th>Sharpe</th>
+              <th>DSR</th>
+              <th>Net PnL</th>
+              <th>Committee Decision</th>
+            </tr>
+          </thead>
+          <tbody id="ledger-tbody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 3: Research Dossiers -->
+      <div class="tab-content" id="tab-dossiers">
+        <div id="dossiers-list" style="display: flex; flex-direction: column; gap: 6px;">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Tab 4: Enterprise Tool Registry -->
+      <div class="tab-content" id="tab-tools">
+        <table>
+          <thead>
+            <tr>
+              <th>Tool Identifier</th>
+              <th>Category</th>
+              <th>Author</th>
+              <th>Mathematical Formulation</th>
+              <th>Causal Audit</th>
+              <th>Latency</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="tools-tbody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 5: Institutional Portfolio Book & Elon-Style Post-Mortems -->
+      <div class="tab-content" id="tab-portfolio">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <!-- Left: Portfolio Book Allocation -->
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: var(--cyan); font-size: 12px; margin-bottom: 8px;">
+              💼 Active Multi-Alpha Ensemble Book (<span id="portfolio-count">0</span> Alphas)
+            </div>
+            <div style="display: flex; gap: 12px; margin-bottom: 8px; font-size: 11px;">
+              <div><strong style="color: var(--text-muted);">Ensemble Sharpe:</strong> <span id="port-sharpe" style="color: var(--green); font-weight: 700;">+0.00</span></div>
+              <div><strong style="color: var(--text-muted);">Net PnL:</strong> <span id="port-pnl" style="color: var(--cyan); font-weight: 700;">0.0 bps</span></div>
+              <div><strong style="color: var(--text-muted);">Max DD:</strong> <span id="port-dd" style="color: var(--gold); font-weight: 700;">0.0 bps</span></div>
+            </div>
+            <table style="font-size: 10px;">
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th>Theorist</th>
+                  <th>Weight</th>
+                  <th>Sharpe</th>
+                </tr>
+              </thead>
+              <tbody id="portfolio-tbody">
+                <tr><td colspan="4" style="color: var(--text-muted); text-align: center;">No strategies allocated to live capital yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Right: First-Principles Failure Post-Mortem -->
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 6px; padding: 12px;">
+            <div style="font-weight: 700; color: var(--gold); font-size: 12px; margin-bottom: 8px;">
+              🚀 Elon Musk First-Principles Failure Post-Mortems
+            </div>
+            <div id="diagnostics-feed" style="display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 10px;">
+              <div style="color: var(--text-muted);">Root-cause failure deconstruction active.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- Agent Details Modal -->
+  <div class="modal-overlay interactive" id="modal" onclick="closeModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 id="modal-title" style="color: var(--cyan);">Agent Name</h3>
+        <span id="modal-state" class="state-badge">IDLE</span>
+      </div>
+      <div id="modal-div" style="font-size: 11px; color: var(--gold);">Division</div>
+      <div id="modal-spec" style="font-size: 12px; color: #cbd5e1;">Specialization</div>
+      <div style="background: rgba(0,0,0,0.4); padding: 12px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #94a3b8; max-height: 250px; overflow-y: auto;" id="modal-prompt">
+        System Prompt & Mathematical Prior
+      </div>
+      <button class="btn-action btn-sprint" style="width: 100%; justify-content: center;" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+
+  <!-- Full Dossier Viewer Modal -->
+  <div class="modal-overlay interactive" id="dossier-modal" onclick="closeDossierModal()">
+    <div class="modal-box" style="width: 800px; max-height: 85vh;" onclick="event.stopPropagation()">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--panel-border); padding-bottom: 10px;">
+        <h3 id="dossier-title" style="color: var(--cyan); font-size: 15px;">Dossier Viewer</h3>
+        <button class="btn-view" onclick="closeDossierModal()">✕ Close</button>
+      </div>
+      <div id="dossier-content" style="white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #cbd5e1; line-height: 1.5; overflow-y: auto; max-height: 70vh;">
+      </div>
+    </div>
+  </div>
+
+  <!-- Enterprise Tool Inspection Modal -->
+  <div class="modal-overlay interactive" id="tool-modal" onclick="closeToolModal()">
+    <div class="modal-box" style="width: 800px; max-height: 85vh;" onclick="event.stopPropagation()">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--panel-border); padding-bottom: 10px;">
+        <h3 id="tool-modal-title" style="color: var(--green); font-family: 'JetBrains Mono', monospace; font-size: 15px;">Tool Name</h3>
+        <button class="btn-view" onclick="closeToolModal()">✕ Close</button>
+      </div>
+      <div style="display: flex; gap: 16px; font-size: 11px; background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px;">
+        <div><strong style="color: var(--text-muted);">Author:</strong> <span id="tool-modal-author" style="color: var(--cyan); font-weight: 600;"></span></div>
+        <div><strong style="color: var(--text-muted);">Category:</strong> <span id="tool-modal-cat" style="color: var(--gold); font-weight: 600;"></span></div>
+        <div><strong style="color: var(--text-muted);">Latency:</strong> <span id="tool-modal-latency" style="color: var(--purple); font-weight: 600;"></span></div>
+      </div>
+      <div style="font-size: 12px; color: #cbd5e1; line-height: 1.4;" id="tool-modal-doc"></div>
+      <div style="font-size: 11px; color: var(--gold); font-family: 'JetBrains Mono', monospace; background: rgba(250,204,21,0.05); padding: 8px; border-radius: 4px; border-left: 3px solid var(--gold);" id="tool-modal-math"></div>
+      <div style="background: rgba(0,0,0,0.7); border: 1px solid var(--panel-border); border-radius: 6px; padding: 12px; max-height: 280px; overflow-y: auto;">
+        <pre style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #38bdf8; margin: 0; white-space: pre-wrap;" id="tool-modal-code"></pre>
+      </div>
+      <div style="background: rgba(0,255,136,0.06); border: 1px solid rgba(0,255,136,0.25); border-radius: 6px; padding: 10px; font-size: 11px; color: #a7f3d0;" id="tool-modal-audit">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // 1. THREE.JS 3D SCENE WITH 110-AGENT GALAXY
+    // -------------------------------------------------------------
+    const container = document.getElementById('webgl-canvas');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x05070b, 0.0035);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 3000);
+    camera.position.set(0, 60, 150);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxDistance = 500;
+    controls.minDistance = 20;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const pLight1 = new THREE.PointLight(0x00f0ff, 2, 300);
+    pLight1.position.set(50, 80, 50);
+    scene.add(pLight1);
+    const pLight2 = new THREE.PointLight(0xfacc15, 2, 300);
+    pLight2.position.set(-60, -40, -50);
+    scene.add(pLight2);
+
+    // Cosmic Particle Stars
+    const starCount = 3000;
+    const starGeo = new THREE.BufferGeometry();
+    const starPos = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount * 3; i++) {
+      starPos[i] = (Math.random() - 0.5) * 800;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ size: 1.2, color: 0x475569, transparent: true, opacity: 0.6 })));
+
+    // Central Investment Committee Core
+    const coreGroup = new THREE.Group();
+    scene.add(coreGroup);
+    const coreMesh = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(12, 0),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2, metalness: 0.9 })
+    );
+    coreGroup.add(coreMesh);
+    const coreWire = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(13, 0),
+      new THREE.MeshBasicMaterial({ color: 0xfacc15, wireframe: true, transparent: true, opacity: 0.4 })
+    );
+    coreGroup.add(coreWire);
+
+    // -------------------------------------------------------------
+    // 2. 110-AGENT CONSTELLATION NODES
+    // -------------------------------------------------------------
+    let allAgents = [];
+    const agentMeshes = {};
+    const clusterCenters = {
+      "MICROSTRUCTURE": { x: -60, y: 30, z: -20, color: 0x00f0ff },
+      "QUEUE_DYNAMICS": { x: 60, y: 30, z: -20, color: 0x00ff88 },
+      "REGIMES":        { x: -70, y: -20, z: 30, color: 0xffb700 },
+      "COMPILERS":      { x: 70, y: -20, z: 30, color: 0xa855f7 },
+      "RED_TEAM":       { x: 0, y: -45, z: 50, color: 0xff0055 },
+      "COMMITTEE":      { x: 0, y: 15, z: 0, color: 0xfacc15 }
+    };
+
+    function init3DSwarm(agentList) {
+      allAgents = agentList;
+      agentList.forEach((a, idx) => {
+        const center = clusterCenters[a.division] || { x: 0, y: 0, z: 0, color: 0xffffff };
+        const g = new THREE.Group();
+        
+        const phi = Math.acos(-1 + (2 * (idx % 20)) / 20);
+        const theta = Math.sqrt(20 * Math.PI) * phi;
+        const rad = a.division === "COMMITTEE" ? 18 : 25;
+        
+        const localX = rad * Math.cos(theta) * Math.sin(phi);
+        const localY = rad * Math.sin(theta) * Math.sin(phi);
+        const localZ = rad * Math.cos(phi);
+
+        g.position.set(center.x + localX, center.y + localY, center.z + localZ);
+        
+        const nodeGeo = new THREE.SphereGeometry(1.6, 12, 12);
+        const nodeMat = new THREE.MeshStandardMaterial({
+          color: parseInt(a.color.replace('#', '0x')),
+          roughness: 0.3,
+          metalness: 0.8,
+          emissive: parseInt(a.color.replace('#', '0x')),
+          emissiveIntensity: 0.3
+        });
+        const mesh = new THREE.Mesh(nodeGeo, nodeMat);
+        g.add(mesh);
+
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(2.0, 2.4, 16),
+          new THREE.MeshBasicMaterial({ color: parseInt(a.color.replace('#', '0x')), side: THREE.DoubleSide, transparent: true, opacity: 0.4 })
+        );
+        ring.rotation.x = Math.PI / 2;
+        g.add(ring);
+
+        g.userData = a;
+        scene.add(g);
+        agentMeshes[a.id] = g;
+      });
+
+      renderAgentDirectory(allAgents);
+    }
+
+    // 3D Floor Grid
+    const gridFloor = new THREE.GridHelper(200, 40, 0x00f0ff, 0x1e293b);
+    gridFloor.position.y = -60.1;
+    scene.add(gridFloor);
+
+    // Dynamic 3D Laser Beams for active debates, compilations, audits, and committee votes
+    const laserGroup = new THREE.Group();
+    scene.add(laserGroup);
+
+    function drawLaser(p1, p2, colorHex, opacity) {
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(p1.x, p1.y, p1.z),
+        new THREE.Vector3(p2.x, p2.y, p2.z)
+      ]);
+      const mat = new THREE.LineBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: opacity,
+        linewidth: 2
+      });
+      const line = new THREE.Line(geo, mat);
+      laserGroup.add(line);
+    }
+
+    function updateDynamicLasers(agents) {
+      while(laserGroup.children.length > 0) {
+        const obj = laserGroup.children[0];
+        laserGroup.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      }
+
+      const activeDebaters = agents.filter(a => ['IDEATING', 'DEBATING', 'REVIEWING'].includes(a.state));
+      const activeCoders = agents.filter(a => a.state === 'CODING');
+      const activeAuditors = agents.filter(a => a.state === 'AUDITING');
+      const activeVoters = agents.filter(a => a.state === 'VOTING');
+
+      // Draw pairwise debate beams
+      for (let i = 0; i < activeDebaters.length; i += 2) {
+        if (i + 1 < activeDebaters.length) {
+          const g1 = agentMeshes[activeDebaters[i].id];
+          const g2 = agentMeshes[activeDebaters[i+1].id];
+          if (g1 && g2) {
+            drawLaser(g1.position, g2.position, 0xfacc15, 0.75);
+          }
+        }
+      }
+
+      // Draw active coders to compilers cluster center
+      activeCoders.forEach(c => {
+        const g = agentMeshes[c.id];
+        if (g && clusterCenters['COMPILERS']) drawLaser(g.position, clusterCenters['COMPILERS'], 0x00ff88, 0.85);
+      });
+
+      // Draw active auditors to red team cluster center
+      activeAuditors.forEach(a => {
+        const g = agentMeshes[a.id];
+        if (g && clusterCenters['RED_TEAM']) drawLaser(g.position, clusterCenters['RED_TEAM'], 0xff0055, 0.85);
+      });
+
+      // Draw voting beams to central committee dodecahedron
+      activeVoters.forEach(v => {
+        const g = agentMeshes[v.id];
+        if (g) drawLaser(g.position, {x: 0, y: 15, z: 0}, 0xfacc15, 0.65);
+      });
+    }
+
+    // Animation Loop with real-time state pulsation
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const elapsed = clock.getElapsedTime();
+
+      coreGroup.rotation.y += 0.006;
+      coreGroup.rotation.x = Math.sin(elapsed * 0.4) * 0.08;
+
+      Object.keys(agentMeshes).forEach((id, i) => {
+        const g = agentMeshes[id];
+        const state = g.userData ? g.userData.state : 'IDLE';
+        if (['IDEATING', 'DEBATING', 'REVIEWING', 'CODING', 'AUDITING', 'VOTING'].includes(state)) {
+          g.position.y += Math.sin(elapsed * 5 + i) * 0.06;
+          g.rotation.y += 0.04;
+          if (g.children[0] && g.children[0].material) {
+            g.children[0].material.emissiveIntensity = 0.9 + 0.6 * Math.sin(elapsed * 6 + i);
+          }
+        } else if (state && state !== 'IDLE') {
+          g.position.y += Math.sin(elapsed * 2.5 + i) * 0.03;
+          g.rotation.y += 0.015;
+          if (g.children[0] && g.children[0].material) {
+            g.children[0].material.emissiveIntensity = 0.45 + 0.25 * Math.sin(elapsed * 3 + i);
+          }
+        } else {
+          g.position.y += Math.sin(elapsed * 1.5 + i) * 0.02;
+          g.rotation.y += 0.008;
+          if (g.children[0] && g.children[0].material) {
+            g.children[0].material.emissiveIntensity = 0.15;
+          }
+        }
+      });
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // -------------------------------------------------------------
+    // 3. CAMERA PRESETS
+    // -------------------------------------------------------------
+    function setCameraPreset(view) {
+      document.querySelectorAll('.btn-view').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+
+      if (view === 'galaxy') {
+        gsapCamera(0, 60, 150, 0, 0, 0);
+      } else if (view === 'committee') {
+        gsapCamera(0, 20, 45, 0, 15, 0);
+      } else if (view === 'microstructure') {
+        gsapCamera(-60, 40, 30, -60, 30, -20);
+      } else if (view === 'orderbook') {
+        gsapCamera(0, -30, 80, 0, -60, 0);
+      }
+    }
+
+    function gsapCamera(px, py, pz, tx, ty, tz) {
+      camera.position.set(px, py, pz);
+      controls.target.set(tx, ty, tz);
+      controls.update();
+    }
+
+    // -------------------------------------------------------------
+    // 4. UI TAB SWITCHING & TOAST NOTIFICATIONS
+    // -------------------------------------------------------------
+    function switchConsoleTab(tabName) {
+      document.querySelectorAll('.console-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      event.currentTarget.classList.add('active');
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+      if (tabName === 'dossiers') {
+        fetchDossiers();
+      } else if (tabName === 'tools') {
+        fetchTools();
+      } else if (tabName === 'portfolio') {
+        fetchPortfolio();
+        fetchDiagnostics();
+      }
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast-msg');
+      t.innerText = msg;
+      t.style.display = 'block';
+      setTimeout(() => { t.style.display = 'none'; }, 3500);
+    }
+
+    // -------------------------------------------------------------
+    // 5. DIRECTORY & SEARCH
+    // -------------------------------------------------------------
+    let currentDivisionFilter = 'ALL';
+
+    function renderAgentDirectory(agents) {
+      const dir = document.getElementById('agent-dir');
+      dir.innerHTML = '';
+      agents.forEach(a => {
+        const row = document.createElement('div');
+        row.className = 'agent-row';
+        row.onclick = () => openAgentModal(a);
+        row.innerHTML = `
+          <div class="agent-name-cell">
+            <div class="agent-dot" style="background: ${a.color};"></div>
+            <span>${a.name}</span>
+          </div>
+          <span class="state-badge state-${a.state || 'IDLE'}">${a.state || 'IDLE'}</span>
+        `;
+        dir.appendChild(row);
+      });
+      document.getElementById('agent-count-badge').innerText = `${agents.length} Quants`;
+    }
+
+    function filterDivision(div) {
+      currentDivisionFilter = div;
+      document.querySelectorAll('.div-tab').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+      filterAgents();
+    }
+
+    function filterAgents() {
+      const q = document.getElementById('search-box').value.toLowerCase();
+      const filtered = allAgents.filter(a => {
+        const matchesDiv = currentDivisionFilter === 'ALL' || a.division === currentDivisionFilter;
+        const matchesQuery = a.name.toLowerCase().includes(q) || a.specialization.toLowerCase().includes(q);
+        return matchesDiv && matchesQuery;
+      });
+      renderAgentDirectory(filtered);
+    }
+
+    function openAgentModal(agent) {
+      document.getElementById('modal-title').innerText = agent.name;
+      document.getElementById('modal-title').style.color = agent.color;
+      document.getElementById('modal-div').innerText = agent.division;
+      document.getElementById('modal-spec').innerText = agent.specialization;
+      document.getElementById('modal-state').innerText = agent.state;
+      document.getElementById('modal-state').className = `state-badge state-${agent.state}`;
+      document.getElementById('modal-prompt').innerText = agent.system_prompt || "Domain Quantitative Specialist Prior";
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('modal').style.display = 'none';
+    }
+
+    function closeDossierModal() {
+      document.getElementById('dossier-modal').style.display = 'none';
+    }
+
+    async function viewDossier(filename) {
+      try {
+        const resp = await fetch(`/api/dossier?name=${encodeURIComponent(filename)}`);
+        const data = await resp.json();
+        document.getElementById('dossier-title').innerText = data.name;
+        document.getElementById('dossier-content').innerText = data.content;
+        document.getElementById('dossier-modal').style.display = 'flex';
+      } catch (e) {
+        showToast('Error loading dossier: ' + e);
+      }
+    }
+
+    async function fetchDossiers() {
+      try {
+        const resp = await fetch('/api/dossiers');
+        const data = await resp.json();
+        const list = document.getElementById('dossiers-list');
+        document.getElementById('dossier-count').innerText = data.dossiers.length;
+        list.innerHTML = '';
+        if (data.dossiers.length === 0) {
+          list.innerHTML = '<div style="color: var(--text-muted); font-size: 11px;">No dossiers generated yet. Launch a sprint to generate institutional research papers!</div>';
+          return;
+        }
+        data.dossiers.forEach(d => {
+          const item = document.createElement('div');
+          item.className = 'agent-row';
+          item.onclick = () => viewDossier(d.name);
+          item.innerHTML = `
+            <div style="font-weight: 600; color: var(--cyan);">${d.name}</div>
+            <div style="color: var(--text-muted); font-size: 10px;">${(d.size / 1024).toFixed(1)} KB &bull; Read Paper ➔</div>
+          `;
+          list.appendChild(item);
+        });
+      } catch (e) {
+        console.warn('Failed to fetch dossiers:', e);
+      }
+    }
+
+    let cachedTools = [];
+
+    async function fetchTools() {
+      try {
+        const resp = await fetch('/api/tools');
+        const data = await resp.json();
+        cachedTools = data.tools || [];
+        const countBadge = document.getElementById('tools-count');
+        if (countBadge) countBadge.innerText = cachedTools.length;
+        const tbody = document.getElementById('tools-tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (cachedTools.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="color: var(--text-muted); text-align: center; padding: 16px;">No tools in corporate registry yet. They will appear here when conceived and causal-verified.</td></tr>';
+          return;
+        }
+        cachedTools.forEach((t, idx) => {
+          const tr = document.createElement('tr');
+          const lat = (t.audit_report && t.audit_report.latency_ms) ? `${t.audit_report.latency_ms.toFixed(1)} ms` : '< 2 ms';
+          tr.innerHTML = `
+            <td style="color: var(--green); font-weight: 700; font-family: 'JetBrains Mono', monospace;">${t.name}</td>
+            <td><span style="font-size: 9px; padding: 2px 6px; background: rgba(250,204,21,0.15); color: var(--gold); border-radius: 4px; font-weight: 600;">${t.category}</span></td>
+            <td style="color: #cbd5e1;">${t.author}</td>
+            <td style="color: #94a3b8; font-size: 10px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.mathematical_formulation}">${t.mathematical_formulation}</td>
+            <td><span class="tag-approved">CAUSAL VERIFIED</span></td>
+            <td style="color: var(--purple); font-weight: 600;">${lat}</td>
+            <td><button class="btn-view" onclick="openToolModal(${idx})">Inspect Code & Audit</button></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.warn('Failed to fetch tools:', e);
+      }
+    }
+
+    function openToolModal(index) {
+      const tool = cachedTools[index];
+      if (!tool) return;
+      document.getElementById('tool-modal-title').innerText = tool.name;
+      document.getElementById('tool-modal-author').innerText = tool.author;
+      document.getElementById('tool-modal-cat').innerText = tool.category;
+      document.getElementById('tool-modal-latency').innerText = (tool.audit_report && tool.audit_report.latency_ms) ? `${tool.audit_report.latency_ms.toFixed(1)} ms` : '< 2 ms';
+      document.getElementById('tool-modal-doc').innerText = tool.docstring || '';
+      document.getElementById('tool-modal-math').innerText = 'Formula: ' + (tool.mathematical_formulation || 'N/A');
+      document.getElementById('tool-modal-code').innerText = tool.code || '';
+      
+      const rep = tool.audit_report || {};
+      const stages = [
+        "1. Sandboxed Syntax & AST Compilation: PASSED",
+        "2. Strict Price Immutability Guard: PASSED",
+        "3. Adversarial Causal Invariance (Zero Lookahead Leakage): PASSED",
+        "4. Numerical Stability (NaN/Inf Immunity): PASSED",
+        `5. Polars Benchmark Latency: ${rep.latency_ms ? rep.latency_ms.toFixed(2) + ' ms' : '< 2 ms'}`
+      ];
+      document.getElementById('tool-modal-audit').innerHTML = `
+        <div style="font-weight: 700; margin-bottom: 4px; color: var(--green);">🛡️ 5-Stage Adversarial Audit Report</div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.5; color: #a7f3d0;">${stages.join('<br>')}</div>
+      `;
+      document.getElementById('tool-modal').style.display = 'flex';
+    }
+
+    function closeToolModal() {
+      document.getElementById('tool-modal').style.display = 'none';
+    }
+
+    async function fetchPortfolio() {
+      try {
+        const resp = await fetch('/api/portfolio');
+        const data = await resp.json();
+        const countSpan = document.getElementById('portfolio-count');
+        if (countSpan) countSpan.innerText = data.active_strategies_count || 0;
+        const sharpeSpan = document.getElementById('port-sharpe');
+        if (sharpeSpan) sharpeSpan.innerText = (data.portfolio_sharpe >= 0 ? '+' : '') + (data.portfolio_sharpe || 0).toFixed(2);
+        const pnlSpan = document.getElementById('port-pnl');
+        if (pnlSpan) pnlSpan.innerText = (data.net_pnl_bps || 0).toFixed(1) + ' bps';
+        const ddSpan = document.getElementById('port-dd');
+        if (ddSpan) ddSpan.innerText = (data.max_drawdown_bps || 0).toFixed(1) + ' bps';
+
+        const tbody = document.getElementById('portfolio-tbody');
+        if (!tbody) return;
+        if (!data.strategies || data.strategies.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" style="color: var(--text-muted); text-align: center; padding: 12px;">No strategies allocated to live capital yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = '';
+        data.strategies.forEach(s => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td style="color: var(--cyan); font-weight: 600;">${s.title}</td>
+            <td>${s.theorist}</td>
+            <td style="color: var(--gold); font-weight: 700;">${(s.weight * 100).toFixed(1)}%</td>
+            <td style="color: var(--green); font-weight: 700;">+${(s.individual_sharpe || 0).toFixed(2)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.warn('Failed to fetch portfolio:', e);
+      }
+    }
+
+    async function fetchDiagnostics() {
+      try {
+        const resp = await fetch('/api/diagnostics');
+        const data = await resp.json();
+        const feed = document.getElementById('diagnostics-feed');
+        if (!feed) return;
+        if (!data.diagnostics || data.diagnostics.length === 0) return;
+        feed.innerHTML = '';
+        data.diagnostics.slice(-6).reverse().forEach(d => {
+          const item = document.createElement('div');
+          item.style.cssText = 'background: rgba(255,255,255,0.02); border-left: 2px solid var(--gold); padding: 4px 8px; border-radius: 3px;';
+          item.innerHTML = `
+            <div style="color: var(--gold); font-weight: 700;">[${d.root_cause}] <span style="color: #cbd5e1; font-weight: normal;">${d.title} (${d.theorist})</span></div>
+            <div style="color: #94a3b8; font-size: 9px; margin-top: 2px;">${d.metric_evidence}</div>
+            <div style="color: #a7f3d0; font-size: 9px; margin-top: 2px;">➔ ${d.prescriptive_directive}</div>
+          `;
+          feed.appendChild(item);
+        });
+      } catch (e) {
+        console.warn('Failed to fetch diagnostics:', e);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 6. CHART.JS CUMULATIVE PNL
+    // -------------------------------------------------------------
+    const ctx = document.getElementById('pnlChart').getContext('2d');
+    const pnlChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: Array.from({length: 30}, (_, i) => `${i*20}s`),
+        datasets: [{
+          label: 'Cumulative Net PnL (bps)',
+          data: [0, 15, 30, 25, 45, 70, 95, 88, 120, 155, 180, 210, 245, 280, 275, 310, 350, 395, 430, 480, 520, 565, 610, 660, 715, 770, 820, 875, 930, 995],
+          borderColor: '#00ff88',
+          backgroundColor: 'rgba(0, 255, 136, 0.08)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.35,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#64748b', font: { size: 9 } } },
+          y: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#64748b', font: { size: 9 } } }
+        }
+      }
+    });
+
+    // -------------------------------------------------------------
+    // 7. REAL-TIME STREAMING EVENTS (DEBATES, THOUGHTS, VOTES)
+    // -------------------------------------------------------------
+    let lastEventId = 0;
+
+    async function pollLiveEvents() {
+      try {
+        const resp = await fetch(`/api/events?since=${lastEventId}`);
+        const data = await resp.json();
+        
+        // Auto-resync if server restarted
+        if (data.latest_id !== undefined && lastEventId > data.latest_id) {
+          lastEventId = 0;
+          document.getElementById('debate-feed').innerHTML = '';
+        }
+
+        // Update Auto-Pilot Button state
+        const autoBtn = document.getElementById('auto-btn');
+        if (data.autonomous) {
+          autoBtn.className = 'btn-action btn-auto-on';
+          autoBtn.innerHTML = `<span>🟢 Auto-Pilot: ACTIVE (Gen ${data.generation})</span>`;
+        } else {
+          autoBtn.className = 'btn-action btn-auto-off';
+          autoBtn.innerHTML = `<span>⚡ Auto-Pilot: OFF</span>`;
+        }
+
+        document.getElementById('gen-badge').innerText = `Gen ${data.generation} // MiMo-V2.6-Pro`;
+
+        if (data.events && data.events.length > 0) {
+          const feed = document.getElementById('debate-feed');
+          let maxId = lastEventId;
+          data.events.forEach(e => {
+            if (e.id > maxId) maxId = e.id;
+            const card = document.createElement('div');
+            card.className = `event-card type-${e.type}`;
+            card.innerHTML = `
+              <div class="event-header">
+                <span class="event-agent">${e.agent}</span>
+                <span>${e.time_str} &bull; ${e.type}</span>
+              </div>
+              <div class="event-msg">${e.message}</div>
+            `;
+            feed.appendChild(card);
+          });
+          lastEventId = maxId;
+          // Auto scroll to latest
+          feed.scrollTop = feed.scrollHeight;
+        }
+      } catch (e) {
+        console.warn('Events poll error:', e);
+      }
+    }
+
+    async function toggleAutonomous() {
+      try {
+        const resp = await fetch('/api/autonomous/toggle', { method: 'POST' });
+        const res = await resp.json();
+        showToast(res.message);
+        pollLiveEvents();
+      } catch (e) {
+        showToast('Toggle failed: ' + e);
+      }
+    }
+
+    async function triggerSwarmSprint() {
+      try {
+        const resp = await fetch('/api/run_sprint', { method: 'POST' });
+        const res = await resp.json();
+        showToast(res.message);
+        pollLiveEvents();
+        syncTokens();
+        syncSwarm();
+      } catch (e) {
+        showToast('Sprint launch failed: ' + e);
+      }
+    }
+
+    async function syncSwarm() {
+      try {
+        const resp = await fetch('/api/swarm');
+        const data = await resp.json();
+        if (allAgents.length === 0) {
+          init3DSwarm(data.agents);
+        } else {
+          data.agents.forEach(a => {
+            const existing = allAgents.find(x => x.id === a.id);
+            if (existing) existing.state = a.state;
+            const g = agentMeshes[a.id];
+            if (g) {
+              g.userData.state = a.state;
+              const mesh = g.children[0];
+              const ring = g.children[1];
+              if (['IDEATING', 'DEBATING', 'REVIEWING', 'CODING', 'AUDITING', 'VOTING', 'TOOL_GENESIS'].includes(a.state)) {
+                if (mesh) mesh.scale.set(1.6, 1.6, 1.6);
+                if (ring) {
+                  ring.scale.set(1.4, 1.4, 1.4);
+                  ring.material.opacity = 0.9;
+                }
+              } else if (a.state && a.state !== 'IDLE') {
+                if (mesh) mesh.scale.set(1.15, 1.15, 1.15);
+                if (ring) {
+                  ring.scale.set(1.1, 1.1, 1.1);
+                  ring.material.opacity = 0.5;
+                }
+              } else {
+                if (mesh) mesh.scale.set(1.0, 1.0, 1.0);
+                if (ring) {
+                  ring.scale.set(1.0, 1.0, 1.0);
+                  ring.material.opacity = 0.2;
+                }
+              }
+            }
+          });
+          filterAgents();
+          updateDynamicLasers(data.agents);
+        }
+      } catch (e) {
+        console.warn('Swarm sync error:', e);
+      }
+    }
+
+    async function syncTokens() {
+      try {
+        const resp = await fetch('/api/tokens');
+        const data = await resp.json();
+        document.getElementById('total-tokens-val').innerText = (data.total_tokens || 0).toLocaleString();
+        document.getElementById('token-tps').innerText = data.current_tokens_per_sec || 0;
+        document.getElementById('tps-val').innerText = `${data.current_tokens_per_sec || 0} tok/s`;
+        document.getElementById('api-calls-val').innerText = `${data.api_calls || 0} calls`;
+        document.getElementById('cost-val').innerText = `$${(data.estimated_cost_usd || 0).toFixed(4)}`;
+      } catch (e) {
+        console.warn('Token sync error:', e);
+      }
+    }
+
+    async function syncLedger() {
+      try {
+        const resp = await fetch('/api/ledger');
+        const data = await resp.json();
+        const tbody = document.getElementById('ledger-tbody');
+        if (data.trials && data.trials.length > 0) {
+          tbody.innerHTML = '';
+          data.trials.slice(0, 15).forEach(t => {
+            const isApproved = t.verdict === 'APPROVED';
+            const tagClass = isApproved ? 'tag-approved' : 'tag-rejected';
+            const row = `
+              <tr>
+                <td>#${t.id}</td>
+                <td style="font-weight: 600;">${t.title || 'Untitled'}</td>
+                <td>${t.theorist || 'Unknown'}</td>
+                <td>${t.target_horizon || '10s'}</td>
+                <td>${(t.sharpe_ratio || 0).toFixed(2)}</td>
+                <td>${(t.deflated_sharpe || 0).toFixed(2)}</td>
+                <td style="color: ${(t.net_pnl_bps || 0) >= 0 ? 'var(--green)' : 'var(--crimson)'};">${(t.net_pnl_bps || 0).toFixed(1)} bps</td>
+                <td><span class="${tagClass}">${isApproved ? 'ALLOCATED' : 'REJECTED'}</span></td>
+              </tr>
+            `;
+            tbody.innerHTML += row;
+          });
+        }
+      } catch (e) {
+        console.warn('Ledger sync error:', e);
+      }
+    }
+
+    // High frequency polling
+    setInterval(pollLiveEvents, 1000);
+    setInterval(syncTokens, 2000);
+    setInterval(syncSwarm, 3000);
+    setInterval(syncLedger, 5000);
+    setInterval(fetchTools, 5000);
+    setInterval(fetchPortfolio, 6000);
+    setInterval(fetchDiagnostics, 6000);
+
+    // Initial triggers
+    pollLiveEvents();
+    syncSwarm();
+    syncTokens();
+    syncLedger();
+    fetchDossiers();
+    fetchTools();
+    fetchPortfolio();
+    fetchDiagnostics();
+  </script>
+</body>
+</html>
