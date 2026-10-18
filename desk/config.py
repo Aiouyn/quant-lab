@@ -12,12 +12,78 @@ load_dotenv(ROOT / '.env')
 
 
 def _key():
-    key = os.getenv('MIMO_API_KEY', '')
-    desktop = Path.home() / 'Desktop' / 'mimo key.txt'
-    if not key and desktop.exists():
-        lines = [l.strip() for l in desktop.read_text(encoding='utf-8').splitlines() if l.strip()]
-        key = next((l for l in lines if l.startswith(('tp-', 'ttp-', 'sk-'))), '')
+    key = os.getenv('OPENCODE_API_KEY') or os.getenv('MIMO_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
+    for fname in ('opencode key.txt', 'mimo key.txt'):
+        desktop = Path.home() / 'Desktop' / fname
+        if not key and desktop.exists():
+            lines = [l.strip() for l in desktop.read_text(encoding='utf-8').splitlines() if l.strip()]
+            key = next((l for l in lines if l.startswith(('tp-', 'ttp-', 'sk-', 'oc-'))), lines[0] if lines else '')
     return key
+
+
+def _provider() -> str:
+    prov = os.getenv('LLM_PROVIDER', '').strip().lower()
+    if prov:
+        return prov
+    if os.getenv('OPENCODE_API_KEY'):
+        return 'opencode'
+    if os.getenv('MIMO_API_KEY') and 'xiaomimimo' in os.getenv('MIMO_BASE_URL', 'xiaomimimo'):
+        return 'mimo'
+    return 'opencode'
+
+
+def _base_url() -> str:
+    for env_var in ('LLM_BASE_URL', 'OPENCODE_BASE_URL'):
+        val = os.getenv(env_var, '').strip()
+        if val:
+            return val
+    if _provider() == 'opencode':
+        mimo_url = os.getenv('MIMO_BASE_URL', '').strip()
+        if mimo_url and 'xiaomimimo.com' not in mimo_url:
+            return mimo_url
+        return 'https://opencode.ai/zen/v1'
+    return os.getenv('MIMO_BASE_URL', 'https://token-plan-ams.xiaomimimo.com/v1').strip()
+
+
+def _default_model() -> str:
+    m = os.getenv('MODEL_NAME', '').strip()
+    if _provider() == 'opencode':
+        if m and not m.startswith('mimo-'):
+            return m
+        fm = os.getenv('DESK_FLASH_MODEL', '').strip()
+        if fm and not fm.startswith('mimo-'):
+            return fm
+        return 'deepseek-v4.1-flash-free'
+    return m or 'mimo-v2.6-pro'
+
+
+def _default_flash_model() -> str:
+    fm = os.getenv('DESK_FLASH_MODEL', '').strip()
+    if _provider() == 'opencode':
+        if fm and not fm.startswith('mimo-'):
+            return fm
+        m = os.getenv('MODEL_NAME', '').strip()
+        if m and not m.startswith('mimo-'):
+            return m
+        return 'deepseek-v4.1-flash-free'
+    return fm or 'mimo-v2.6-flash'
+
+
+def _default_data_dir() -> Path:
+    env_dir = os.getenv('OKX_DATA_DIR', '').strip()
+    if env_dir and not (len(env_dir) > 1 and env_dir[1] == ':' and os.name != 'nt'):
+        p = Path(env_dir)
+        return p if p.is_absolute() else ROOT / p
+    win_drive = Path(r'G:\Mon Drive\OKX_L2_BTC')
+    return win_drive if (os.name == 'nt' and win_drive.exists()) else ROOT / 'data' / 'okx_l2_btc'
+
+
+def _default_home() -> Path:
+    env_res = os.getenv('RESULTS_DIR', '').strip()
+    if env_res and env_res not in ('results', 'results/'):
+        p = Path(env_res)
+        return p if p.is_absolute() else ROOT / p
+    return ROOT / 'results' / 'v3'
 
 
 @dataclass(frozen=True)
@@ -33,8 +99,8 @@ class Venue:
 
 @dataclass(frozen=True)
 class Settings:
-    data_dir: Path = Path(os.getenv('OKX_DATA_DIR', r'G:\Mon Drive\OKX_L2_BTC'))
-    home: Path = ROOT / 'results' / 'v3'
+    data_dir: Path = field(default_factory=_default_data_dir)
+    home: Path = field(default_factory=_default_home)
     store_dir: Path | None = None        # defaults to home/store; lets a run share the real store with its own ledger
     venue: Venue = field(default_factory=Venue)
     # chronological split of the archive frozen at first ingest
@@ -51,15 +117,16 @@ class Settings:
     max_drawdown: float = 0.20
     max_top5_day_share: float = 0.5
     min_holdout_sharpe: float = 0.5
-    # LLM / organization
-    model: str = os.getenv('MODEL_NAME', 'mimo-v2.6-pro')
-    flash_model: str = os.getenv('DESK_FLASH_MODEL', 'mimo-v2.6-flash')
+    # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1` + `deepseek-v4.1-flash`)
+    provider: str = field(default_factory=_provider)
+    model: str = field(default_factory=_default_model)
+    flash_model: str = field(default_factory=_default_flash_model)
     # roles that run on the fast/cheap model (default: everyone). Pro for the judgment layer:
     # DESK_FLASH_ROLES=researcher,toolsmith
     flash_roles: tuple = tuple(r.strip() for r in os.getenv('DESK_FLASH_ROLES', 'cio,lead,researcher,officer,pm,execution,librarian,toolsmith').split(',') if r.strip())
     api_key: str = field(default_factory=_key)
-    base_url: str = os.getenv('MIMO_BASE_URL', 'https://token-plan-ams.xiaomimimo.com/v1')
-    max_concurrency: int = int(os.getenv('DESK_MAX_CONCURRENCY', '32'))
+    base_url: str = field(default_factory=_base_url)
+    max_concurrency: int = int(os.getenv('DESK_MAX_CONCURRENCY', '24'))
     start_concurrency: int = int(os.getenv('DESK_START_CONCURRENCY', '8'))
     request_timeout_s: int = 600
     max_completion_tokens: int = 16000
@@ -78,6 +145,10 @@ class Settings:
 
     @property
     def ledger(self) -> Path:
+        db_env = os.getenv('DATABASE_PATH', '').strip()
+        if db_env and db_env.endswith('.sqlite3') and self.home == _default_home():
+            p = Path(db_env)
+            return p if p.is_absolute() else ROOT / p
         return self.home / 'desk.sqlite3'
 
     @property

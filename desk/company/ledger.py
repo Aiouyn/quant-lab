@@ -36,10 +36,20 @@ CREATE TABLE IF NOT EXISTS control(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS pods(name TEXT PRIMARY KEY, mandate TEXT, weight REAL, updated REAL);
 CREATE TABLE IF NOT EXISTS cost_models(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, params TEXT, rationale TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS portfolios(id TEXT PRIMARY KEY, author TEXT, members TEXT, weights TEXT, report TEXT, status TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS dynamic_hints(id TEXT PRIMARY KEY, pattern TEXT, hint TEXT, source_error TEXT, author TEXT,
+  hits INT DEFAULT 0, resolved_count INT DEFAULT 0, status TEXT DEFAULT 'active', created REAL);
+CREATE TABLE IF NOT EXISTS primitive_usages(id INTEGER PRIMARY KEY AUTOINCREMENT, primitive TEXT, agent TEXT, kind TEXT,
+  ref_id TEXT, success INT DEFAULT 1, metric_val REAL, created REAL);
+CREATE TABLE IF NOT EXISTS lineages(child_id TEXT PRIMARY KEY, child_kind TEXT, parent_ids TEXT, operator TEXT, desk TEXT,
+  delta_score REAL, created REAL);
+CREATE TABLE IF NOT EXISTS charter_versions(id TEXT PRIMARY KEY, role TEXT, pod TEXT, patch_text TEXT, rationale TEXT,
+  status TEXT DEFAULT 'candidate', drill_planted_score REAL, drill_null_fdr INT DEFAULT 0, error_rate_delta REAL, created REAL);
+CREATE TABLE IF NOT EXISTS rsi_runs(id TEXT PRIMARY KEY, kind TEXT, summary TEXT, metrics TEXT, created REAL);
 CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(kind, ref, title, body, author, tokenize='porter');
 CREATE INDEX IF NOT EXISTS ix_events ON events(created);
 CREATE INDEX IF NOT EXISTS ix_msg ON messages(to_agent, read);
 CREATE INDEX IF NOT EXISTS ix_board ON board(status, pod);
+CREATE INDEX IF NOT EXISTS ix_prim ON primitive_usages(primitive, kind);
 '''
 
 
@@ -308,3 +318,44 @@ class Ledger:
             'pods': self.q('SELECT name, weight, mandate FROM pods'),
             'concurrency': self.get('concurrency'),
         }
+
+    # ----------------------------------------------------------------- RSI (Recursive Self-Improvement)
+    def add_dynamic_hint(self, pattern, hint, source_error='', author='rsi-compiler', hits=0, resolved=0, status='active'):
+        existing = self.q('SELECT id FROM dynamic_hints WHERE pattern=?', (pattern,))
+        if existing:
+            hid = existing[0]['id']
+            self.x('UPDATE dynamic_hints SET hint=?, status=? WHERE id=?', (hint, status, hid))
+            return hid
+        hid = _id('H')
+        self.x('INSERT INTO dynamic_hints(id,pattern,hint,source_error,author,hits,resolved_count,status,created) VALUES(?,?,?,?,?,?,?,?,?)',
+               (hid, pattern, hint, (source_error or '')[:500], author, int(hits), int(resolved), status, time.time()))
+        return hid
+
+    def log_primitive_usage(self, primitive, agent, kind, ref_id='', success=True, metric_val=None):
+        self.x('INSERT INTO primitive_usages(primitive,agent,kind,ref_id,success,metric_val,created) VALUES(?,?,?,?,?,?,?)',
+               (primitive, agent, kind, str(ref_id or ''), 1 if success else 0,
+                float(metric_val) if metric_val is not None else None, time.time()))
+
+    def add_lineage(self, child_id, child_kind, parent_ids, operator, desk, delta_score=0.0):
+        pids = json.dumps(list(parent_ids) if isinstance(parent_ids, (list, tuple, set)) else [str(parent_ids)])
+        self.x('INSERT OR REPLACE INTO lineages(child_id,child_kind,parent_ids,operator,desk,delta_score,created) VALUES(?,?,?,?,?,?,?)',
+               (str(child_id), str(child_kind), pids, str(operator), str(desk), float(delta_score or 0.0), time.time()))
+
+    def add_charter_version(self, role, patch_text, rationale, pod=None, status='candidate',
+                            drill_planted_score=None, drill_null_fdr=0, error_rate_delta=None):
+        cid = _id('C')
+        self.x('INSERT INTO charter_versions(id,role,pod,patch_text,rationale,status,drill_planted_score,drill_null_fdr,error_rate_delta,created) '
+               'VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (cid, role, pod or '', patch_text, rationale, status,
+                float(drill_planted_score) if drill_planted_score is not None else None,
+                int(drill_null_fdr or 0),
+                float(error_rate_delta) if error_rate_delta is not None else None,
+                time.time()))
+        return cid
+
+    def log_rsi_run(self, kind, summary, metrics=None):
+        rid = _id('RSI')
+        self.x('INSERT INTO rsi_runs(id,kind,summary,metrics,created) VALUES(?,?,?,?,?)',
+               (rid, kind, str(summary)[:2000], json.dumps(metrics or {}, default=str), time.time()))
+        return rid
+

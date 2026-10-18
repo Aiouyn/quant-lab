@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import orjson
+try:
+    import orjson
+except ImportError:
+    import json as orjson
 import polars as pl
 
 from .book import GridBook, COLUMNS

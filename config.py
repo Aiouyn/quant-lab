@@ -28,6 +28,9 @@ if desktop_key_path.exists() and not os.getenv("MIMO_API_KEY"):
         pass
 
 # API Keys & Endpoints
+OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "")
+OPENCODE_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"))
+
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 
 # Automatically select endpoint based on key type:
@@ -46,12 +49,16 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-# Determine active provider & key
-ACTIVE_KEY = ""
-ACTIVE_BASE_URL = ""
-ACTIVE_PROVIDER = ""
+# Determine active provider & key (defaults to OpenCode + deepseek-v4.1-flash-free)
+ACTIVE_KEY = OPENCODE_API_KEY
+ACTIVE_BASE_URL = OPENCODE_BASE_URL
+ACTIVE_PROVIDER = "opencode"
 
-if MIMO_API_KEY:
+if OPENCODE_API_KEY or os.getenv("LLM_PROVIDER", "opencode").lower() == "opencode":
+    ACTIVE_KEY = OPENCODE_API_KEY or MIMO_API_KEY
+    ACTIVE_BASE_URL = OPENCODE_BASE_URL
+    ACTIVE_PROVIDER = "opencode"
+elif MIMO_API_KEY:
     ACTIVE_KEY = MIMO_API_KEY
     ACTIVE_BASE_URL = MIMO_BASE_URL
     ACTIVE_PROVIDER = "mimo"
@@ -64,12 +71,16 @@ elif OPENAI_API_KEY:
     ACTIVE_BASE_URL = OPENAI_BASE_URL
     ACTIVE_PROVIDER = "openai"
 
-DEFAULT_MODEL = os.getenv("MODEL_NAME", "mimo-v2.6-pro" if ACTIVE_PROVIDER == "mimo" else "gpt-4o")
+_raw_model = os.getenv("MODEL_NAME", "").strip()
+if ACTIVE_PROVIDER == "opencode" and (not _raw_model or _raw_model.startswith("mimo-")):
+    DEFAULT_MODEL = os.getenv("DESK_FLASH_MODEL", "deepseek-v4.1-flash-free")
+else:
+    DEFAULT_MODEL = _raw_model or ("mimo-v2.6-pro" if ACTIVE_PROVIDER == "mimo" else "gpt-4o")
 
 # Storage Paths
-DATA_DIR = Path(os.getenv("OKX_DATA_DIR", r"G:\Mon Drive\OKX_L2_BTC"))
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(BASE_DIR / "database" / "research_ledger.db")))
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", str(BASE_DIR / "results")))
+DATA_DIR = Path(os.getenv("OKX_DATA_DIR", str(BASE_DIR / "data" / "okx_l2_btc")))
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", str(BASE_DIR / "results" / "v3")))
+DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(RESULTS_DIR / "desk.sqlite3")))
 
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)

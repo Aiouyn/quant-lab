@@ -237,12 +237,20 @@ colleague's session brief, so make each line count.''',
     'toolsmith': '''ROLE: Toolsmith. You compound the firm's capability. Watch the board, messages and repeated code in
 researchers' work; build reusable, tested, causal primitives (contribute_primitive): e.g. rolling z-scores that reset
 correctly, event detectors, HAR vol forecasts, triple-barrier labels for research, purged walk-forward helpers,
-fast grid evaluators that log trials. Announce new primitives to everyone with a usage example.''',
+fast grid evaluators that log trials. Check primitive_lift and compile_hints to harden low-pass-rate modules and
+compile recurring sandbox errors into dynamic fix hints. Announce new primitives to everyone with a usage example.''',
 }
 
 
-def charter(role, pod=None):
+def charter(role, pod=None, ledger=None):
     text = ROLES[role]
     if '{pod}' in text:
         text = text.format(pod=pod, mandate=PODS.get(pod, ''))
-    return HANDBOOK + '\n' + text
+    out = HANDBOOK + '\n' + text
+    if ledger is not None:
+        from .rsi import active_charter_overlay
+        overlay = active_charter_overlay(ledger, role, pod)
+        if overlay:
+            out += '\n\n' + overlay
+    return out
+

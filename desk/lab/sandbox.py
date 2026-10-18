@@ -14,7 +14,10 @@ import time
 import uuid
 from pathlib import Path
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from ..config import ROOT
 
@@ -49,10 +52,12 @@ SYSTEM_FLOOR_MB = 1500                                   # free-RAM floor for th
 async def _watch(proc, timeout_s, mem_mb):
     start = time.time()
     peak = 0
-    try:
-        ps = psutil.Process(proc.pid)
-    except psutil.Error:
-        ps = None
+    ps = None
+    if psutil is not None:
+        try:
+            ps = psutil.Process(proc.pid)
+        except psutil.Error:
+            ps = None
     while proc.returncode is None:
         await asyncio.sleep(0.5)
         if ps is not None:
@@ -76,6 +81,12 @@ async def _watch(proc, timeout_s, mem_mb):
 
 
 def _kill(proc):
+    if psutil is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
     try:
         p = psutil.Process(proc.pid)
         for c in p.children(recursive=True):
@@ -89,7 +100,8 @@ async def _wait_for_memory(mem_mb, headroom_mb=1500, typical_mb=2000, max_wait_s
     """Start a subprocess only when the machine has room for a TYPICAL run (most use < 1 GB) plus headroom for the
     user's own apps. Requiring the full cap stalled the firm for 5 h on 2026-10-07 (cap 4 GB + 4 GB headroom vs ~5 GB
     free): every run waited 15 min, then finished in 1.5 s. Runs that do grow are stopped by _watch's system floor."""
-    import psutil
+    if psutil is None:
+        return 0.0
     need = min(mem_mb, typical_mb) + headroom_mb
     t0 = time.time()
     while psutil.virtual_memory().available / 1e6 < need and time.time() - t0 < max_wait_s:
@@ -142,7 +154,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     job = dict(job, _home=str(settings.home), _store=str(settings.store))   # the harness evaluates on THIS run's store
     jp.write_text(json.dumps(job, default=str))
     env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
-    env.pop('MIMO_API_KEY', None)
+    for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
+        env.pop(secret_key, None)
     async with (slot or _nullslot()):
         await _wait_for_memory(mem_mb)
         proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op), cwd=str(ROOT),

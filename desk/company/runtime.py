@@ -200,6 +200,10 @@ class Org:
         idx = Path(__file__).resolve().parent.parent / 'lib' / 'contrib' / 'INDEX.md'
         if idx.exists() and agent.role in ('lead', 'researcher', 'toolsmith', 'officer'):
             parts.append('== SHARED PRIMITIVES (desk.lib.contrib) ==\n' + idx.read_text(encoding='utf-8')[-2500:])
+            from .rsi import format_primitive_brief
+            pb = format_primitive_brief(L, limit=8)
+            if pb:
+                parts.append(pb)
         cost = self.cost_params()
         parts.append(f'== COST MODEL == taker {cost["taker_bps"]} bps + slippage {cost["slippage_bps"]} bps per side, '
                      f'impact x{cost["impact_mult"]}, latency {cost["latency_s"]}s, hourly funding on.')
@@ -234,6 +238,8 @@ class Org:
         out['bandit_suggested_weights'] = {p: round(0.5 + 2.5 * w, 2) for p, w in zip(draws, win)}
         out['funnel'] = {r['status']: r['n'] for r in L.q('SELECT status, COUNT(*) n FROM strategies GROUP BY status')}
         out['tokens_total'] = L.status()['tokens']
+        from .rsi import rsi_snapshot
+        out['rsi'] = rsi_snapshot(L)['kpis']
         return out
 
 
@@ -268,10 +274,18 @@ async def _main(settings, n_agents, hours, concurrency, tokens_per_hour=None):
 
     async def watchdog():
         from ..data.store import FeatureStore
+        from .rsi import compile_error_hints
         last_view = time.time()
+        last_rsi = time.time()
         last_forward = time.time() - 3 * 3600          # first forward check ~3h into the run, then every 6h
         while not org.should_stop():
             await asyncio.sleep(10)
+            if time.time() - last_rsi > 1800:          # every 30m: auto-compile unhinted sandbox failures into dynamic hints
+                last_rsi = time.time()
+                try:
+                    compile_error_hints(L)
+                except Exception as e:
+                    L.event('runtime', 'RSI_ERROR', {'error': repr(e)[:400]})
             if time.time() - last_forward > 6 * 3600:
                 last_forward = time.time()
                 try:

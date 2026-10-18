@@ -1,0 +1,6 @@
+{
+  "summary": "Phase 3 Implementation Plan for Closed-Loop Out-of-Sample RSI in Desk OS v3: Full Truth Machine gate (dev, sealed val with Deflated Sharpe Ratio, one-shot holdout, bundle export), Meta-Bandit operator selection weighted by out-of-sample val survival, automatic Equal-Risk-Contribution (ERC) master portfolio construction, and a continuous background RSI iteration daemon alongside on-demand campaigns.",
+  "updatedAt": "2026-10-17T15:49:22.293342552Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

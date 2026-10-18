@@ -36,6 +36,7 @@ def main(argv=None):
     sub.add_parser('stop', help='ask the running company to stop gracefully')
     stt = sub.add_parser('status', help='company status, KPIs and leaderboard'); stt.add_argument('--drill', choices=['planted', 'null'])
     s = sub.add_parser('serve', help='control-room dashboard'); s.add_argument('--port', type=int, default=8900)
+    s.add_argument('--host', default='0.0.0.0', help='bind address (default 0.0.0.0)')
     s.add_argument('--drill', choices=['planted', 'null'])
     sub.choices['stop'].add_argument('--drill', choices=['planted', 'null'])
     pp = sub.add_parser('paper', help='Hyperliquid paper trading for a bundle or portfolio')
@@ -54,6 +55,14 @@ def main(argv=None):
     dr = sub.add_parser('drill', help='build or score drill markets (measure the firm itself)')
     dr.add_argument('kind', choices=['planted', 'null']); dr.add_argument('--report', action='store_true')
     dr.add_argument('--days', type=int, default=90)
+    rsi_p = sub.add_parser('rsi', help='Recursive Self-Improvement (RSI) engine: status, compile-hints, evolve, toolsmith, build-store, validate, bandit, campaign, daemon, benchmark')
+    rsi_p.add_argument('action', nargs='?', default='status',
+                       choices=['status', 'compile-hints', 'evolve', 'toolsmith', 'build-store', 'validate', 'bandit', 'campaign', 'daemon', 'benchmark'])
+    rsi_p.add_argument('--desk', choices=['macro', 'perps', 'pred', 'carry', 'l2'])
+    rsi_p.add_argument('--desks', default='macro,perps,carry,pred', help='comma-separated desks for campaign')
+    rsi_p.add_argument('--generations', type=int, default=3, help='number of RSI generations for campaign')
+    rsi_p.add_argument('--max-children', type=int, default=3)
+    rsi_p.add_argument('--no-llm', action='store_true', help='use deterministic AST operators only')
     a = p.parse_args(argv)
 
     from .config import SETTINGS
@@ -120,7 +129,7 @@ def main(argv=None):
         return 0
     if a.cmd == 'serve':
         from .web.server import serve
-        serve(s, a.port)
+        serve(s, a.port, host=a.host)
         return 0
     if a.cmd == 'paper':
         from .live.paper import run_paper
@@ -175,5 +184,36 @@ def main(argv=None):
     if a.cmd == 'drill':
         from .lab.drills import build_drill, drill_report
         _print(drill_report(s, a.kind) if a.report else build_drill(s, a.kind, n_days=a.days))
+        return 0
+    if a.cmd == 'rsi':
+        from .company.ledger import Ledger
+        from .company.rsi import (
+            ensure_seeded, rsi_snapshot, compile_error_hints, evolve_population,
+            evolve_primitives, run_rsi_campaign, propose_charter_patch, evaluate_rsi_drill,
+            validate_and_promote_population, operator_bandit_leaderboard,
+        )
+        L = ensure_seeded(s, Ledger(s.ledger))
+        if a.action == 'compile-hints':
+            _print(compile_error_hints(L))
+        elif a.action == 'evolve':
+            _print(evolve_population(L, settings=s, desk=a.desk, max_children=a.max_children, use_llm=not a.no_llm))
+        elif a.action == 'toolsmith':
+            _print(evolve_primitives(L, settings=s, use_llm=not a.no_llm))
+        elif a.action == 'build-store':
+            from .data.store_builder import ensure_store_panels
+            _print(ensure_store_panels(s, force=True, try_remote=True))
+        elif a.action == 'validate':
+            _print(validate_and_promote_population(L, settings=s, desk=a.desk, max_candidates=a.max_children * 2))
+        elif a.action == 'bandit':
+            _print(operator_bandit_leaderboard(L, desk=a.desk))
+        elif a.action in ('campaign', 'daemon'):
+            desks = [d.strip() for d in (a.desks or '').split(',') if d.strip()]
+            _print(run_rsi_campaign(L, settings=s, generations=a.generations, desks=desks,
+                                    max_children_per_gen=a.max_children, use_llm=not a.no_llm))
+        elif a.action == 'benchmark':
+            cand = propose_charter_patch(L)
+            _print({'charter': cand, 'drill_gate': evaluate_rsi_drill(L, settings=s, charter_id=cand['id'])})
+        else:
+            _print(rsi_snapshot(L, settings=s))
         return 0
     return 2

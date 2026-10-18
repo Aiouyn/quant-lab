@@ -11,7 +11,13 @@ import sys
 import time
 from collections import Counter
 
-RATES = {'mimo-v2.6-flash': (2, 100, 200), 'mimo-v2.6-pro': (2.5, 300, 600)}
+RATES = {
+    'mimo-v2.6-flash': (2, 100, 200),
+    'mimo-v2.6-pro': (2.5, 300, 600),
+    'deepseek-v4.1-flash': (2, 100, 200),
+    'deepseek-v4.1-flash-free': (0, 0, 0),
+    'deepseek-v4-pro': (2.5, 300, 600),
+}
 USD_PER_CREDIT = float(os.environ.get('KPI_USD_PER_CREDIT', 16 / 11e9))
 
 

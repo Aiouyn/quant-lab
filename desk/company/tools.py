@@ -111,19 +111,46 @@ SPECS = {
     'contribute_primitive': fn('contribute_primitive', 'Add a tested reusable function to desk.lib.contrib (importable in '
                                'sandboxes). Provide a test that prints OK.',
                                {'name': S, 'code': S, 'test': S, 'doc': S}, ['name', 'code', 'test', 'doc']),
+    # ------------------------------------------------------------ RSI (Recursive Self-Improvement)
+    'evolve_population': fn('evolve_population', 'RSI evolutionary engine: breed top active factors into multi-factor rank '
+                            'strategies and apply targeted gate-repair mutations (vol_scale_tail_clip, hysteresis_buffer, '
+                            'regime_breadth_gate, maker_execution_switch) across desks.',
+                            {'desk': {'type': 'string', 'enum': ['macro', 'perps', 'pred', 'carry', 'l2']}, 'max_children': I}),
+    'compile_hints': fn('compile_hints', 'RSI error-to-hint compiler: cluster recent RUN_PYTHON and TOOL_ERROR tracebacks '
+                        'into verified dynamic regex fix hints.', {}),
+    'primitive_lift': fn('primitive_lift', 'Empirical Bayesian lift leaderboard of desk.lib.contrib primitives '
+                         '(ΔSharpe, Δfactor score, sandbox pass rate, total uses).', {}),
+    'propose_charter_patch': fn('propose_charter_patch', 'Propose a role/pod charter overlay from gate failure bottlenecks '
+                                'and evaluate it on the planted/null drill gate before promotion.',
+                                {'role': S, 'pod': S}),
+    'evolve_primitives': fn('evolve_primitives', 'Autonomous Toolsmith RSI loop: refactor low-lift/failing desk.lib.contrib '
+                            'primitives and synthesize new verified causal primitives from lift telemetry.', {}),
+    'run_rsi_campaign': fn('run_rsi_campaign', 'Run a multi-generation RSI campaign (hints -> Toolsmith primitives -> '
+                           'LLM+AST strategy breeding -> Truth Machine gate -> ERC Master Portfolio) across desks.',
+                           {'generations': I, 'desks': {'type': 'array', 'items': S}, 'use_llm': B}),
+    'validate_and_promote': fn('validate_and_promote', 'Run the strict 3-stage Truth Machine gate (DEV_GATES -> sealed val_gates with DSR -> '
+                               'one-shot holdout_gates -> bundle export) and auto-build the ERC Master Portfolio.',
+                               {'desk': S, 'max_candidates': I}),
+    'operator_bandit': fn('operator_bandit', 'Inspect the Meta-Bandit operator leaderboard weighted by out-of-sample val survival and Sharpe lift.',
+                          {'desk': S}),
 }
 
 COMMON = ['board_post', 'board_list', 'board_read', 'board_update', 'message', 'search', 'read', 'leaderboard',
           'notebook', 'record_lesson', 'end_session']
 ROLE_TOOLS = {
-    'cio': COMMON + ['org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status'],
-    'lead': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy'],
-    'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy'],
-    'officer': COMMON + ['review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy'],
-    'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python'],
+    'cio': COMMON + ['org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status',
+                     'evolve_population', 'compile_hints', 'primitive_lift', 'propose_charter_patch', 'run_rsi_campaign',
+                     'validate_and_promote', 'operator_bandit'],
+    'lead': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy',
+                      'evolve_population', 'primitive_lift', 'run_rsi_campaign', 'validate_and_promote', 'operator_bandit'],
+    'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy',
+                            'evolve_population', 'primitive_lift', 'operator_bandit'],
+    'officer': COMMON + ['review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy', 'validate_and_promote'],
+    'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python', 'validate_and_promote'],
     'execution': COMMON + ['venue_stats', 'set_cost_model', 'run_python', 'approved_strategies'],
-    'librarian': COMMON + ['retire_lesson', 'write_digest'],
-    'toolsmith': COMMON + ['run_python', 'contribute_primitive'],
+    'librarian': COMMON + ['retire_lesson', 'write_digest', 'compile_hints', 'propose_charter_patch'],
+    'toolsmith': COMMON + ['run_python', 'contribute_primitive', 'compile_hints', 'primitive_lift',
+                           'evolve_primitives', 'evolve_population', 'propose_charter_patch', 'operator_bandit'],
 }
 
 
@@ -272,10 +299,14 @@ class Toolbox:
         n = self._collect_trials(trials)
         if n:
             res['trials_logged'] = n
+        from .hints import hints, record_hint_resolution
+        from .rsi import record_primitive_outcome
+        ok = (res['status'] == 'ok')
+        record_hint_resolution(self.L, self.agent.name, ok)
+        record_primitive_outcome(self.L, code, self.agent.name, 'run_python', success=ok, metric_val=1.0 if ok else 0.0)
         err_line = ''
-        if res['status'] != 'ok':
-            from .hints import hints
-            h = hints(res.get('stderr', ''), res['status'])
+        if not ok:
+            h = hints(res.get('stderr', ''), res['status'], ledger=self.L, agent=self.agent.name)
             if h:
                 res['fix_hints'] = h
             lines = [l for l in (res.get('stderr') or '').strip().splitlines() if l.strip()]
@@ -326,6 +357,8 @@ class Toolbox:
         # |t| >= 3 at a tradable horizon: noise factors in the drills peaked at |t| ~ 2 per horizon
         status = 'active' if out.get('causal') and t >= 3.0 else ('rejected_noncausal' if not out.get('causal') else 'weak')
         self.L.factor_report(fid, out, score, status)
+        from .rsi import record_primitive_outcome
+        record_primitive_outcome(self.L, code, self.agent.name, 'factor', ref_id=fid, success=(status == 'active'), metric_val=score)
         self.org.export_library()
         self.L.event(self.agent.name, 'FACTOR', {'id': fid, 'name': name, 'score': round(score, 2), 'status': status})
         brief = {k: out.get(k) for k in ('best_horizon_s', 'best_t', 'best_cost_coverage', 'best_maker_cost_coverage',
@@ -352,6 +385,8 @@ class Toolbox:
         status = ('rejected_noncausal' if not out.get('causal') else
                   'active' if abs(out.get('best_t') or 0) >= 3.0 else 'weak')
         self.L.factor_report(fid, out, score, status)
+        from .rsi import record_primitive_outcome
+        record_primitive_outcome(self.L, code, self.agent.name, 'factor', ref_id=fid, success=(status == 'active'), metric_val=score)
         self.L.event(self.agent.name, 'FACTOR', {'id': fid, 'name': name, 'desk': desk, 'score': round(score, 2), 'status': status})
         return {'id': fid, 'status': status, 'score': round(score, 2), 'report': out,
                 'note': 'active needs |IC t| >= 3 at a horizon where the MEAN quintile spread (also without the 5 best '
@@ -369,8 +404,11 @@ class Toolbox:
         out = await run_job(job, self.s, timeout_s=3600, slot=self.org.job_slots)
         if 'error' in out:
             return out
-        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], out['summary'].get('sharpe'), out['summary'].get('days'))
-        self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': out['summary'].get('sharpe'),
+        sr = out['summary'].get('sharpe')
+        from .rsi import record_primitive_outcome
+        record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
+        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'))
+        self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out
 
@@ -533,3 +571,42 @@ class Toolbox:
             f.write(f'- `from desk.lib.contrib.{name} import ...` - {doc[:300]} (by {self.agent.name})\n')
         self.L.send('all', self.agent.name, f'New primitive desk.lib.contrib.{name}: {doc[:400]}')
         return {'ok': True, 'module': f'desk.lib.contrib.{name}'}
+
+    # ------------------------------------------------------------ RSI handlers
+    async def t_evolve_population(self, desk=None, max_children=3):
+        from .rsi import evolve_population
+        res = evolve_population(self.L, settings=self.s, desk=desk, max_children=min(int(max_children or 3), 6), author=self.agent.name)
+        if res.get('evolved_count'):
+            self._streak = 0
+        return res
+
+    async def t_compile_hints(self):
+        from .rsi import compile_error_hints
+        return compile_error_hints(self.L, author=self.agent.name)
+
+    async def t_primitive_lift(self):
+        from .rsi import primitive_lift_leaderboard
+        return primitive_lift_leaderboard(self.L)
+
+    async def t_propose_charter_patch(self, role='researcher', pod=None):
+        from .rsi import propose_charter_patch, evaluate_rsi_drill
+        cand = propose_charter_patch(self.L, role=role or 'researcher', pod=pod)
+        drill = evaluate_rsi_drill(self.L, settings=self.s, charter_id=cand['id'])
+        return {'charter': cand, 'drill_gate': drill}
+
+    async def t_evolve_primitives(self):
+        from .rsi import evolve_primitives
+        return evolve_primitives(self.L, settings=self.s, author=self.agent.name)
+
+    async def t_run_rsi_campaign(self, generations=2, desks=None, use_llm=True):
+        from .rsi import run_rsi_campaign
+        return run_rsi_campaign(self.L, settings=self.s, generations=int(generations or 2), desks=desks, use_llm=bool(use_llm))
+
+    async def t_validate_and_promote(self, desk=None, max_candidates=6):
+        from .rsi import validate_and_promote_population
+        return validate_and_promote_population(self.L, settings=self.s, desk=desk, max_candidates=int(max_candidates or 6), author=self.agent.name)
+
+    async def t_operator_bandit(self, desk=None):
+        from .rsi import operator_bandit_leaderboard
+        return operator_bandit_leaderboard(self.L, desk=desk)
+

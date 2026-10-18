@@ -56,10 +56,51 @@ RULES = [
 ]
 
 
-def hints(stderr: str, status: str = '') -> list[str]:
+def hints(stderr: str, status: str = '', ledger=None, agent: str | None = None) -> list[str]:
     text = (stderr or '') + ' ' + (status or '')
     out = []
+    matched_dynamic = []
+    if ledger is not None:
+        try:
+            dyn = ledger.q("SELECT id, pattern, hint FROM dynamic_hints WHERE status='active' ORDER BY resolved_count DESC, hits DESC")
+            for row in dyn:
+                if re.search(row['pattern'], text, re.S) and row['hint'] not in out:
+                    out.append(row['hint'])
+                    matched_dynamic.append(row['id'])
+        except Exception:
+            pass
     for pat, hint in RULES:
         if re.search(pat, text, re.S) and hint not in out:
             out.append(hint)
+    if ledger is not None and matched_dynamic:
+        try:
+            for hid in matched_dynamic[:4]:
+                ledger.x('UPDATE dynamic_hints SET hits=hits+1 WHERE id=?', (hid,))
+            if agent:
+                ledger.set(f'pending_hints:{agent}', matched_dynamic[:4])
+        except Exception:
+            pass
     return out[:4]
+
+
+def record_hint_resolution(ledger, agent: str, succeeded: bool):
+    """When an agent's subsequent run_python call succeeds after receiving dynamic hints, credit resolved_count."""
+    if ledger is None or not agent:
+        return
+    try:
+        pending = ledger.get(f'pending_hints:{agent}', [])
+        if not pending:
+            return
+        if succeeded:
+            for hid in pending:
+                ledger.x('UPDATE dynamic_hints SET resolved_count=resolved_count+1 WHERE id=?', (hid,))
+        else:
+            # Auto-retire ineffective dynamic hints that have >= 12 hits and < 15% resolution rate
+            for hid in pending:
+                row = ledger.q('SELECT hits, resolved_count FROM dynamic_hints WHERE id=?', (hid,))
+                if row and row[0]['hits'] >= 12 and (row[0]['resolved_count'] / max(row[0]['hits'], 1)) < 0.15:
+                    ledger.x("UPDATE dynamic_hints SET status='retired' WHERE id=?", (hid,))
+        ledger.set(f'pending_hints:{agent}', [])
+    except Exception:
+        pass
+

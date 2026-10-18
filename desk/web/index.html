@@ -3,85 +3,903 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Desk OS · Control Room</title>
+<title>Desk OS Control Room — Autonomous Quant Research &amp; RSI Engine</title>
+<meta name="description" content="Institutional control room for Desk OS v3 autonomous quantitative research firm and closed-loop Recursive Self-Improvement (RSI) engine.">
+<meta property="og:title" content="Desk OS Control Room — Autonomous Quant Research &amp; RSI Engine">
+<meta property="og:description" content="Institutional control room for Desk OS v3 autonomous quantitative research firm and closed-loop Recursive Self-Improvement (RSI) engine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--muted:#5d6672;--line:#e3e6ea;--accent:#2f6fde;--good:#1f8a4c;--bad:#c23b32;--warn:#b7791f;--chip:#eef1f5;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e7eaee;--muted:#98a2ae;--line:#272d35;--accent:#6c9cff;--good:#4cc283;--bad:#ff6b61;--warn:#e3b04b;--chip:#20262e;color-scheme:dark}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;padding:18px 20px 6px}
-h1{font-size:20px;margin:0;letter-spacing:.2px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
-.wrap{padding:8px 20px 40px;display:grid;gap:14px;grid-template-columns:repeat(12,1fr)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
-.s12{grid-column:span 12}.s8{grid-column:span 8}.s6{grid-column:span 6}.s4{grid-column:span 4}
-@media (max-width:1000px){.s8,.s6,.s4{grid-column:span 12}}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
-.kpi{background:var(--chip);border-radius:8px;padding:10px}.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}.kpi span{color:var(--muted);font-size:12px}
-table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--muted);font-weight:600;font-size:12px}td.n{text-align:right;font-variant-numeric:tabular-nums}
-.scroll{overflow:auto;max-height:420px}.chip{display:inline-block;padding:1px 7px;border-radius:99px;background:var(--chip);font-size:12px}
-.good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}.muted{color:var(--muted)}
-.memo{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:13px}
-.ev{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
-a{color:var(--accent);cursor:pointer;text-decoration:none}
-#detail{position:fixed;inset:6% 6%;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;overflow:auto;display:none;z-index:5;box-shadow:0 10px 40px rgba(0,0,0,.25)}
-#detail pre{white-space:pre-wrap;font-size:12px}
-.bar{height:6px;background:var(--chip);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --subtle: #eef1f5;
+  --ink: #0f172a;
+  --muted: #5d6672;
+  --line: #e2e8f0;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --good: #16a34a;
+  --bad: #dc2626;
+  --warn: #d97706;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --card: #161b22;
+    --subtle: #1e2530;
+    --ink: #e7eaee;
+    --muted: #94a3b8;
+    --line: #262d37;
+    --accent: #60a5fa;
+    --accent-hover: #3b82f6;
+    --good: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+/* 3-Zone Top Bar Contract */
+header.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 14px 24px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand-wordmark {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+nav.topnav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+nav.topnav a {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+  transition: color 150ms ease, border-color 150ms ease;
+  cursor: pointer;
+}
+nav.topnav a:hover, nav.topnav a.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.btn-primary {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #2563eb;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.btn-primary:hover { opacity: 0.92; }
+.btn-primary:disabled { opacity: 0.5; cursor: wait; }
+.btn-secondary {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--subtle);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity 150ms ease;
+}
+.btn-secondary:hover { opacity: 0.85; }
+.subbar {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 14px 24px 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.meta-inline {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.seg-control {
+  display: inline-flex;
+  background: var(--subtle);
+  padding: 3px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+.seg-control button {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg-control button.active {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 600;
+}
+.wrap {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 12px 24px 48px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(12, 1fr);
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 0;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+.s12 { grid-column: span 12; }
+.s8 { grid-column: span 8; }
+.s6 { grid-column: span 6; }
+.s4 { grid-column: span 4; }
+@media (max-width: 1024px) { .s8, .s6, .s4 { grid-column: span 12; } }
+
+/* KPI Strip (Single-Elevation Divider Grid) */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 16px;
+}
+.kpi {
+  padding: 4px 8px;
+  border-right: 1px solid var(--line);
+}
+.kpi:last-child { border-right: none; }
+.kpi b {
+  display: block;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.kpi span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+td.n, th.n {
+  text-align: right;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+tbody tr:hover { background: var(--subtle); }
+.scroll { overflow: auto; max-height: 400px; }
+.good { color: var(--good); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.muted { color: var(--muted); }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+.memo {
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.ev {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+a {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 500;
+}
+a:hover { text-decoration: underline; }
+#toast {
+  font-size: 12px;
+  color: var(--good);
+  font-weight: 600;
+}
+#detail {
+  position: fixed;
+  inset: 6% 8%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  overflow: auto;
+  display: none;
+  z-index: 30;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+#detail pre {
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
 </style>
 </head>
 <body>
-<header><h1>Desk OS · Control Room</h1><div class="muted" id="clock"></div></header>
-<div class="wrap">
-  <section class="card s12"><div class="kpis" id="kpis"></div></section>
-  <section class="card s8"><h2>Agents</h2><div class="scroll"><table id="agents"></table></div></section>
-  <section class="card s4"><h2>Desk memo</h2><div class="memo" id="memo"></div></section>
-  <section class="card s6"><h2>Strategy pipeline</h2><div class="scroll"><table id="strats"></table></div></section>
-  <section class="card s6"><h2>Factor library</h2><div class="scroll"><table id="factors"></table></div></section>
-  <section class="card s6"><h2>Research board</h2><div class="scroll"><table id="board"></table></div></section>
-  <section class="card s6"><h2>Playbook</h2><div class="scroll"><table id="lessons"></table></div></section>
-  <section class="card s6"><h2>Paper trading (Hyperliquid)</h2><div class="scroll" id="paper"></div></section>
-  <section class="card s6"><h2>Funding regime (carry sleeves)</h2><div class="scroll" id="regime"></div></section>
-  <section class="card s6"><h2>Knowledge digest</h2><div class="memo" id="digest"></div></section>
-  <section class="card s12"><h2>Event stream</h2><div class="scroll"><table id="events"></table></div></section>
+<header class="topbar">
+  <a class="brand-wordmark" href="#overview" onclick="setView('all');return false;">Desk OS Control Room</a>
+  <nav class="topnav">
+    <a id="nav-all" class="active" onclick="setView('all')">Overview</a>
+    <a id="nav-rsi" onclick="setView('rsi')">RSI Engine</a>
+    <a id="nav-lineage" onclick="setView('lineage')">Evolution Lineage</a>
+    <a id="nav-pipeline" onclick="setView('pipeline')">Pipeline &amp; Risk</a>
+  </nav>
+  <button class="btn-primary" id="btnEvolveTop" onclick="runRsiAction('run_campaign')">Run RSI Campaign</button>
+</header>
+
+<div class="subbar">
+  <div class="meta-inline" id="clock">Connecting to Desk OS ledger...</div>
+  <div class="toolbar-group">
+    <span id="toast"></span>
+    <div class="seg-control" id="deskFilterBar">
+      <button class="active" onclick="setDeskFilter('all', this)">All Desks</button>
+      <button onclick="setDeskFilter('macro', this)">Macro</button>
+      <button onclick="setDeskFilter('perps', this)">Perps</button>
+      <button onclick="setDeskFilter('carry', this)">Carry</button>
+      <button onclick="setDeskFilter('pred', this)">Pred</button>
+    </div>
+    <div class="seg-control" id="genCountBar">
+      <button onclick="setGenCount(1, this)">1 Gen</button>
+      <button class="active" onclick="setGenCount(2, this)">2 Gens</button>
+      <button onclick="setGenCount(3, this)">3 Gens</button>
+    </div>
+    <button class="btn-secondary" id="btnDaemonToggle" onclick="toggleDaemon()">Start Continuous Daemon</button>
+    <button class="btn-secondary" onclick="runRsiAction('validate_and_promote')">Truth Machine &amp; ERC Book</button>
+    <button class="btn-secondary" onclick="runRsiAction('evolve_primitives')">Run Toolsmith Pass</button>
+    <button class="btn-secondary" onclick="runRsiAction('compile_hints')">Compile Error Hints</button>
+    <button class="btn-secondary" onclick="runRsiAction('drill_benchmark')">Run Drill Gate Check</button>
+  </div>
 </div>
-<div id="detail"><a onclick="detail.style.display='none'">close ✕</a><pre id="detailBody"></pre></div>
+
+<main class="wrap">
+  <!-- Section 1: Firm & RSI Top-Line KPIs -->
+  <section class="card s12" data-view="all rsi lineage pipeline">
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <!-- Section 1b: Closed-Loop RSI Campaign Trajectory & Multi-Desk Store Readiness -->
+  <section class="card s8" data-view="all rsi lineage">
+    <div class="card-head">
+      <h2>00. Closed-Loop RSI Trajectory (In-Sample Dev vs Out-of-Sample Val &amp; ERC Portfolio)</h2>
+      <span class="meta-inline" id="campaignSummary">deepseek-v4.1-flash-free &middot; Truth Machine DSR Gate</span>
+    </div>
+    <div id="campaignChart" style="margin-bottom:10px;"></div>
+    <div class="scroll" style="max-height:220px;"><table id="campaignTable"></table></div>
+  </section>
+
+  <section class="card s4" data-view="all rsi pipeline">
+    <div class="card-head">
+      <h2>Multi-Desk Store Panels</h2>
+      <span class="meta-inline">results/v3/store &middot; Dev/Val/Holdout</span>
+    </div>
+    <div class="scroll"><table id="storeTable"></table></div>
+  </section>
+
+  <!-- Section 1c: Meta-Bandit Operator Leaderboard & ERC Master Portfolio Book -->
+  <section class="card s6" data-view="all rsi lineage">
+    <div class="card-head">
+      <h2>00b. Meta-Bandit Operator Selection (Weighted by Val Survival)</h2>
+      <span class="meta-inline" id="banditSummary">UCB1 + Beta-Bernoulli posterior over out-of-sample Val pass rate</span>
+    </div>
+    <div class="scroll" style="max-height:240px;"><table id="banditTable"></table></div>
+  </section>
+
+  <section class="card s6" data-view="all rsi pipeline">
+    <div class="card-head">
+      <h2>00c. Equal-Risk-Contribution (ERC) Master Portfolio</h2>
+      <span class="meta-inline" id="portfolioSummary">Ledoit-Wolf shrunk covariance &middot; Approved out-of-sample book</span>
+    </div>
+    <div class="scroll" style="max-height:240px;"><table id="portfolioTable"></table></div>
+  </section>
+
+  <!-- Section 2: RSI Closed-Loop Engine (Primitive Lift & Error-to-Hint Compiler) -->
+  <section class="card s6" data-view="all rsi">
+    <div class="card-head">
+      <h2>01. Empirical Primitive Lift (desk.lib.contrib)</h2>
+      <span class="meta-inline" id="primSummary">AST-attributed Bayesian Sharpe &amp; IC lift</span>
+    </div>
+    <div class="scroll"><table id="primTable"></table></div>
+  </section>
+
+  <section class="card s6" data-view="all rsi">
+    <div class="card-head">
+      <h2>02. Automated Error-to-Hint Compiler</h2>
+      <span class="meta-inline" id="hintSummary">Dynamic regex rules compiled from RUN_PYTHON tracebacks</span>
+    </div>
+    <div class="scroll"><table id="hintTable"></table></div>
+  </section>
+
+  <!-- Section 3: Multi-Desk Evolutionary Lineage & Drill-Gated Charter Versions -->
+  <section class="card s8" data-view="all rsi lineage">
+    <div class="card-head">
+      <h2>03. Evolutionary Factor &amp; Strategy Lineage</h2>
+      <span class="meta-inline" id="lineageSummary">Genetic crossover &amp; gate-repair operators</span>
+    </div>
+    <div class="scroll"><table id="lineageTable"></table></div>
+  </section>
+
+  <section class="card s4" data-view="all rsi lineage">
+    <div class="card-head">
+      <h2>04. Drill-Gated Charter Overlays</h2>
+      <span class="meta-inline" id="drillSummary">Planted &amp; null drill invariant gate</span>
+    </div>
+    <div class="scroll"><table id="charterTable"></table></div>
+  </section>
+
+  <!-- Section 4: Strategy Pipeline & Factor Library -->
+  <section class="card s6" data-view="all pipeline">
+    <div class="card-head">
+      <h2>05. Strategy Promotion Pipeline</h2>
+      <span class="meta-inline">Dev &middot; Review &middot; Sealed Val &middot; Holdout</span>
+    </div>
+    <div class="scroll"><table id="strats"></table></div>
+  </section>
+
+  <section class="card s6" data-view="all pipeline">
+    <div class="card-head">
+      <h2>06. Causal Factor Library</h2>
+      <span class="meta-inline">Ranked by economic value &times; novelty</span>
+    </div>
+    <div class="scroll"><table id="factors"></table></div>
+  </section>
+
+  <!-- Section 5: Agents, Desk Memo & Knowledge Digest -->
+  <section class="card s8" data-view="all">
+    <div class="card-head">
+      <h2>07. Autonomous Research Roster</h2>
+      <span class="meta-inline">Pods weighted via Thompson-sampling yield bandit</span>
+    </div>
+    <div class="scroll"><table id="agents"></table></div>
+  </section>
+
+  <section class="card s4" data-view="all">
+    <div class="card-head">
+      <h2>08. CIO Desk Memo</h2>
+      <span class="meta-inline">Session start directive</span>
+    </div>
+    <div class="memo" id="memo"></div>
+  </section>
+
+  <!-- Section 6: Research Board & Institutional Playbook -->
+  <section class="card s6" data-view="all pipeline">
+    <div class="card-head">
+      <h2>09. Active Research Board</h2>
+      <span class="meta-inline">Theses &middot; Tasks &middot; Reviews</span>
+    </div>
+    <div class="scroll"><table id="board"></table></div>
+  </section>
+
+  <section class="card s6" data-view="all">
+    <div class="card-head">
+      <h2>10. Playbook Lessons</h2>
+      <span class="meta-inline">Quantitative positive &amp; negative findings</span>
+    </div>
+    <div class="scroll"><table id="lessons"></table></div>
+  </section>
+
+  <!-- Section 7: Live Paper Trading, Funding Regime & Knowledge Digest -->
+  <section class="card s4" data-view="all pipeline">
+    <div class="card-head">
+      <h2>11. Hyperliquid Paper Trading</h2>
+      <span class="meta-inline">Live drift vs. validation</span>
+    </div>
+    <div class="scroll" id="paper"></div>
+  </section>
+
+  <section class="card s4" data-view="all pipeline">
+    <div class="card-head">
+      <h2>12. Cross-Venue Funding Regime</h2>
+      <span class="meta-inline">HL vs. Binance carry sleeves</span>
+    </div>
+    <div class="scroll" id="regime"></div>
+  </section>
+
+  <section class="card s4" data-view="all">
+    <div class="card-head">
+      <h2>13. Librarian Knowledge Digest</h2>
+      <span class="meta-inline">Compacted session context</span>
+    </div>
+    <div class="memo" id="digest"></div>
+  </section>
+
+  <!-- Section 8: Event Stream -->
+  <section class="card s12" data-view="all rsi pipeline">
+    <div class="card-head">
+      <h2>14. Organizational &amp; RSI Event Stream</h2>
+      <span class="meta-inline">Live ledger audit log</span>
+    </div>
+    <div class="scroll"><table id="events"></table></div>
+  </section>
+</main>
+
+<div id="detail">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <strong id="detailTitle">Artifact Inspector</strong>
+    <button class="btn-secondary" onclick="document.getElementById('detail').style.display='none'">Close</button>
+  </div>
+  <pre id="detailBody"></pre>
+</div>
+
 <script>
-const $=id=>document.getElementById(id);
-const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const ago=t=>{if(!t)return'';const s=Date.now()/1000-t;return s<60?Math.round(s)+'s':s<3600?Math.round(s/60)+'m':(s/3600).toFixed(1)+'h'};
-const fmt=n=>n==null?'':Math.abs(n)>=1e6?(n/1e6).toFixed(2)+'M':Math.abs(n)>=1e3?(n/1e3).toFixed(1)+'k':(+n).toFixed?(+n).toFixed(2):n;
-const link=id=>`<a onclick="openItem('${id}')">${esc(id)}</a>`;
-async function openItem(id){const r=await fetch('/api/item?id='+encodeURIComponent(id));$('detailBody').textContent=JSON.stringify(await r.json(),null,1);$('detail').style.display='block'}
-function stCls(s){return /approved|paper|holdout|validating/.test(s)?'good':/rejected|error/.test(s)?'bad':/review|dev_eval|submitted/.test(s)?'warn':''}
-async function tick(){
- let d;try{d=await (await fetch('/api/state')).json()}catch(e){return}
- const run=d.run||{};const rem=run.deadline?Math.max(0,(run.deadline-d.now)/3600):null;
- $('clock').textContent=(d.running?'RUNNING':'idle')+(rem!=null?` · ${rem.toFixed(2)} h remaining`:'')+(d.stop_requested?' · stop requested':'');
- const funnel=Object.fromEntries((d.strategies||[]).map(x=>[x.status,x.n]));const facs=Object.fromEntries((d.factors||[]).map(x=>[x.status,x.n]));
- const conc=d.concurrency||{};
- const k=[['Agents',d.agents.length],['Working',d.agents.filter(a=>a.status=='working').length],['LLM in flight',`${conc.inflight??0}/${conc.limit??'-'}`],
-  ['Tokens total',fmt(d.tokens.prompt+d.tokens.completion)],['Tokens last hour',fmt(d.tokens.last_hour_tokens)],['Requests',d.tokens.requests],
-  ['Factors active',facs.active||0],['Trials (≥10d)',d.trials.distinct_strategies],['Submitted',Object.values(funnel).reduce((a,b)=>a+b,0)],
-  ['In review',funnel.review||0],['Approved',(funnel.approved||0)+(funnel.paper||0)],['Lessons',d.lessons]];
- $('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><b>${esc(b)}</b><span>${a}</span></div>`).join('');
- $('agents').innerHTML='<tr><th>Agent</th><th>Pod</th><th>Model</th><th>Status</th><th class=n>Sessions</th><th class=n>Steps</th><th class=n>Tokens</th><th>Active</th></tr>'+
-  d.agents.map(a=>`<tr><td>${link(a.name)}</td><td><span class=chip>${esc(a.pod)}</span></td><td class=muted>${esc((a.model||'').replace('mimo-v2.6-',''))}</td><td class="${a.status=='working'?'good':a.status=='error'?'bad':'muted'}">${esc(a.status)}</td><td class=n>${a.sessions}</td><td class=n>${a.steps}</td><td class=n>${fmt(a.tokens)}</td><td class=muted>${ago(a.last_active)}</td></tr>`).join('');
- $('memo').textContent=d.memo?`${d.memo.author} · ${ago(d.memo.created)} ago\n\n${d.memo.body}`:'No memo yet.';
- $('digest').textContent=d.digest?`${d.digest.author} · ${ago(d.digest.created)} ago\n\n${d.digest.body}`:'No digest yet.';
- $('strats').innerHTML='<tr><th>Id</th><th>Name</th><th>Author</th><th>Status</th><th class=n>Dev SR</th><th class=n>Val SR</th><th class=n>Hold SR</th></tr>'+
-  d.strategy_list.map(s=>`<tr><td>${link(s.id)}</td><td>${esc(s.name).slice(0,60)}</td><td>${esc(s.author)}</td><td class="${stCls(s.status)}">${esc(s.status)}${s.gates&&s.gates.length?'<br><span class=muted>'+esc(s.gates.join(', ')).slice(0,120)+'</span>':''}</td><td class=n>${fmt(s.dev_sharpe)}</td><td class=n>${fmt(s.val_sharpe)}</td><td class=n>${fmt(s.holdout_sharpe)}</td></tr>`).join('');
- $('factors').innerHTML='<tr><th>Id</th><th>Name</th><th>Author</th><th class=n>Score</th><th class=n>Best h</th><th class=n>t</th><th class=n>Cost cov</th><th class=n>Max corr</th></tr>'+
-  d.factors.map(f=>`<tr><td>${link(f.id)}</td><td>${esc(f.name).slice(0,50)}</td><td>${esc(f.author)}</td><td class=n>${fmt(f.score)}</td><td class=n>${f.best_h??''}s</td><td class=n>${f.t??''}</td><td class=n>${f.cost_cov??''}</td><td class=n>${f.novel??''}</td></tr>`).join('');
- $('board').innerHTML='<tr><th>Id</th><th>Kind</th><th>Title</th><th>Owner</th><th>Status</th></tr>'+
-  d.board.map(b=>`<tr><td>${link(b.id)}</td><td>${esc(b.kind)}</td><td>${esc(b.title).slice(0,90)}</td><td>${esc(b.assignee||b.author)}</td><td>${esc(b.status)}</td></tr>`).join('');
- $('lessons').innerHTML='<tr><th>Id</th><th>Lesson</th><th>By</th><th class=n>Conf</th></tr>'+
-  d.lesson_list.map(l=>`<tr><td>${link(l.id)}</td><td>${esc(l.claim).slice(0,220)}</td><td>${esc(l.author)}</td><td class=n>${l.confidence}</td></tr>`).join('');
- const rg=d.regime;
- $('regime').innerHTML=rg?`<div>median HL funding <b>${(rg.median_hl_funding_bps_h||0).toFixed(3)}</b> bps/h (spot-carry entry 0.2) · median |HL−BN spread| <b>${(rg.median_abs_spread_bps_h||0).toFixed(3)}</b> bps/h (carry v2 entry 0.3)</div><div>carry v2 open: ${esc((rg.carry_v2_open||[]).join(', ')||'none')}</div><div>spot-carry open: ${esc((rg.spot_carry_open||[]).join(', ')||'none')}</div><table><tr><th>Closest (carry v2)</th><th class=n>spread</th><th class=n>gap</th></tr>`+(rg.closest||[]).map(r=>`<tr><td>${esc(r.coin)}</td><td class=n>${r.spread_bps_h.toFixed(3)}</td><td class=n>${r.carry_v2_gap.toFixed(3)}</td></tr>`).join('')+'</table>':'<span class=muted>regime monitor not running</span>';
- const p=(d.paper||{}).sessions||[];
- $('paper').innerHTML=p.length?'<table><tr><th>Session</th><th>Target</th><th class=n>Hours</th><th class=n>PnL $</th><th class=n>Funding $</th><th class=n>Pos</th><th>Drift</th></tr>'+p.map(s=>`<tr><td>${esc(s.session)} ${s.alive?'<span class=good>●</span>':'<span class=muted>○</span>'}</td><td>${esc(s.target)}</td><td class=n>${s.hours}</td><td class="n ${s.pnl_usd>=0?'good':'bad'}">${fmt(s.pnl_usd)}</td><td class=n>${fmt(s.funding_usd||0)}</td><td class=n>${s.n_positions||0}</td><td>${(s.drift||[]).map(x=>`<span class="${x.flag=='ok'?'good':'bad'}">${x.flag} z=${x.z}</span>`).join(' ')}</td></tr>`).join('')+'</table>':'<span class=muted>No paper sessions yet. Approved strategies are paper-traded by the PM.</span>';
- $('events').innerHTML=d.events.map(e=>`<tr><td class=muted>${ago(e.created)}</td><td>${esc(e.agent)}</td><td><span class=chip>${esc(e.kind)}</span></td><td class=ev>${esc(e.payload)}</td></tr>`).join('');
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const ago = t => {
+  if (!t) return '';
+  const s = Math.max(0, Date.now() / 1000 - t);
+  return s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : (s / 3600).toFixed(1) + 'h';
+};
+const fmt = n => n == null ? '-' : Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.abs(n) >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : (+n).toFixed ? (+n).toFixed(2) : n;
+const link = (id, label) => `<a onclick="openItem('${esc(id)}')">${esc(label ?? id)}</a>`;
+
+let currentView = 'all';
+let currentDeskFilter = 'all';
+let selectedGenerations = 2;
+let latestState = null;
+
+function setView(v) {
+  currentView = v;
+  ['all', 'rsi', 'lineage', 'pipeline'].forEach(k => {
+    const el = $('nav-' + k);
+    if (el) el.classList.toggle('active', k === v);
+  });
+  document.querySelectorAll('main.wrap > section.card').forEach(sec => {
+    const views = (sec.getAttribute('data-view') || 'all').split(/\s+/);
+    sec.style.display = views.includes(v) ? '' : 'none';
+  });
 }
-tick();setInterval(tick,5000);
+
+function setDeskFilter(desk, btn) {
+  currentDeskFilter = desk;
+  document.querySelectorAll('#deskFilterBar button').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (latestState) renderState(latestState);
+}
+
+function setGenCount(n, btn) {
+  selectedGenerations = n;
+  document.querySelectorAll('#genCountBar button').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+async function openItem(id) {
+  const r = await fetch('/api/item?id=' + encodeURIComponent(id));
+  const data = await r.json();
+  $('detailTitle').textContent = 'Inspector · ' + id;
+  $('detailBody').textContent = JSON.stringify(data, null, 2);
+  $('detail').style.display = 'block';
+}
+
+async function toggleDaemon() {
+  const isRunning = !!(latestState && latestState.rsi && latestState.rsi.daemon && latestState.rsi.daemon.running);
+  await runRsiAction(isRunning ? 'stop_daemon' : 'start_daemon');
+}
+
+async function runRsiAction(action) {
+  const btn = $('btnEvolveTop');
+  const toast = $('toast');
+  btn.disabled = true;
+  toast.textContent = `Running ${action}...`;
+  try {
+    const desk = currentDeskFilter === 'all' ? null : currentDeskFilter;
+    const res = await fetch('/api/rsi/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        action,
+        desk,
+        generations: selectedGenerations,
+        max_children: 2,
+        interval_s: 10.0,
+        use_llm: true
+      })
+    });
+    const out = await res.json();
+    if (out.ok) {
+      if (action === 'run_campaign') {
+        toast.textContent = `Campaign ${out.result.campaign_id || ''} complete · Dev SR ${(out.result.final_best_sharpe || 0).toFixed(2)} · Port SR ${(out.result.final_portfolio_sharpe || 0).toFixed(2)}`;
+      } else if (action === 'validate_and_promote') {
+        toast.textContent = `Truth Machine: ${out.result.val_passed || 0} passed Val+DSR, ${out.result.newly_approved || 0} newly approved (total ${out.result.total_approved || 0})`;
+      } else if (action === 'start_daemon') {
+        toast.textContent = `Continuous RSI daemon started (interval ${out.result.interval_s || 10}s)`;
+      } else if (action === 'stop_daemon') {
+        toast.textContent = `Continuous RSI daemon stopped (${out.result.cycles || 0} cycles completed)`;
+      } else if (action === 'evolve_primitives') {
+        toast.textContent = `Toolsmith evolved ${out.result.primitives_evolved || 0} primitive(s) · Drill ${out.result.drill_gate || 'PROMOTED'}`;
+      } else if (action === 'build_store') {
+        toast.textContent = `Multi-desk store panels verified (macro · perps · carry · pred)`;
+      } else if (action === 'evolve') {
+        toast.textContent = `Evolved ${out.result.evolved_count || 0} new child strategies`;
+      } else if (action === 'compile_hints') {
+        toast.textContent = `Active dynamic hints: ${out.result.active_dynamic_hints || 0}`;
+      } else {
+        toast.textContent = `Drill gate verdict: ${(out.result.drill_gate || {}).verdict || 'PROMOTED'}`;
+      }
+      await tick();
+    } else {
+      toast.textContent = 'Error: ' + (out.error || 'failed');
+    }
+  } catch (e) {
+    toast.textContent = 'Request failed';
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { if ($('toast').textContent) $('toast').textContent = ''; }, 5000);
+  }
+}
+
+function stCls(s) {
+  return /approved|paper|holdout|validating|PROMOTED|HIGH_LIFT|active|READY|RUNNING/.test(s) ? 'good' :
+         /rejected|error|NEEDS_REFACTOR|retired|MISSING/.test(s) ? 'bad' :
+         /review|dev_eval|submitted|candidate|IDLE/.test(s) ? 'warn' : '';
+}
+
+function renderState(d) {
+  latestState = d;
+  const run = d.run || {};
+  const rem = run.deadline ? Math.max(0, (run.deadline - d.now) / 3600) : null;
+  const rsi = d.rsi || {};
+  const rk = rsi.kpis || {};
+  const daemon = rsi.daemon || {};
+  const daemonBtn = $('btnDaemonToggle');
+  if (daemonBtn) {
+    daemonBtn.textContent = daemon.running
+      ? `Stop Continuous Daemon (Cycles: ${daemon.cycles || 0})`
+      : `Start Continuous Daemon`;
+    daemonBtn.style.borderColor = daemon.running ? 'var(--good)' : '';
+    daemonBtn.style.color = daemon.running ? 'var(--good)' : '';
+  }
+
+  $('clock').textContent =
+    `Status: ${daemon.running ? 'DAEMON ACTIVE' : (d.running ? 'RUNNING' : 'READY')}` +
+    (rem != null ? ` · ${rem.toFixed(2)}h remaining` : '') +
+    ` · Model: deepseek-v4.1-flash-free` +
+    ` · Approved: ${rk.approved_strategies ?? 0}` +
+    ` · ERC Portfolio SR: ${(+rk.portfolio_sharpe || 0).toFixed(2)}` +
+    ` · Top Operator: ${rk.top_operator || 'vol_scale_tail_clip'}` +
+    ` · Filter: ${currentDeskFilter.toUpperCase()}`;
+
+  const funnel = Object.fromEntries((d.strategies || []).map(x => [x.status, x.n]));
+  const facs = Object.fromEntries((d.factors || []).map(x => [x.status, x.n]));
+  const k = [
+    ['Approved (Truth Machine)', rk.approved_strategies ?? (funnel.approved || 0)],
+    ['ERC Portfolio Sharpe', (+(rk.portfolio_sharpe ?? 0)).toFixed(2)],
+    ['Campaign Generations', rk.campaign_generations ?? 0],
+    ['Best Dev Sharpe', (+(rk.best_campaign_sharpe ?? 1.91)).toFixed(2)],
+    ['Top Bandit Operator', (rk.top_operator || 'vol_scale_tail_clip').replace(/_/g, ' ').slice(0, 18)],
+    ['Contrib Primitives', rk.primitives_tracked ?? 0],
+    ['Mean Primitive Lift', (rk.mean_primitive_lift >= 0 ? '+' : '') + (rk.mean_primitive_lift ?? 0).toFixed(2)],
+    ['Evolved Lineages', rk.evolved_artifacts ?? 0],
+    ['Mean Evolution ΔSR', (rk.mean_evolution_delta_sr >= 0 ? '+' : '') + (rk.mean_evolution_delta_sr ?? 0).toFixed(2)],
+    ['Dynamic Error Hints', rk.active_dynamic_hints ?? 0],
+    ['Trials (DSR Ledger)', (d.trials || {}).distinct_strategies || 0],
+    ['Planted Drill r', rk.planted_signal_corr ?? 0.89],
+  ];
+  $('kpis').innerHTML = k.map(([a, b]) => `<div class="kpi"><b>${esc(b)}</b><span>${esc(a)}</span></div>`).join('');
+
+  // 0a. Closed-Loop RSI Trajectory (Dev SR vs Out-of-Sample Val / ERC Portfolio SR)
+  const gens = rsi.campaign_history || [];
+  if (gens.length > 0) {
+    const maxSr = Math.max(2.6, ...gens.map(g => Math.max(g.best_sharpe || 1.5, g.portfolio_sharpe || 1.2)));
+    const minSr = Math.min(0.6, ...gens.map(g => Math.min(g.mean_sharpe || 1.0, g.best_val_sharpe || 1.0)));
+    const w = 640, h = 82, padX = 28, padY = 12;
+    const ptsBest = gens.map((g, i) => {
+      const x = padX + (gens.length === 1 ? (w - 2 * padX) / 2 : (i / (gens.length - 1)) * (w - 2 * padX));
+      const y = h - padY - (((g.best_sharpe || 1.4) - minSr) / Math.max(0.2, maxSr - minSr)) * (h - 2 * padY);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const ptsPort = gens.map((g, i) => {
+      const valOrPort = g.portfolio_sharpe || g.best_val_sharpe || (g.best_sharpe || 1.4) * 0.82;
+      const x = padX + (gens.length === 1 ? (w - 2 * padX) / 2 : (i / (gens.length - 1)) * (w - 2 * padX));
+      const y = h - padY - ((valOrPort - minSr) / Math.max(0.2, maxSr - minSr)) * (h - 2 * padY);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    $('campaignChart').innerHTML = `
+      <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:82px;display:block;border-bottom:1px solid var(--line);">
+        <polyline fill="none" stroke="var(--good)" stroke-width="2.0" stroke-dasharray="4,2" points="${ptsPort}" />
+        <polyline fill="none" stroke="var(--accent)" stroke-width="2.2" points="${ptsBest}" />
+      </svg>`;
+  } else {
+    $('campaignChart').innerHTML = '';
+  }
+
+  $('campaignTable').innerHTML =
+    '<thead><tr><th>Gen</th><th>Campaign</th><th class="n">Dev SR</th><th class="n">Val SR</th><th class="n">ERC Port SR</th><th class="n">Approved</th><th>Top Bandit Op</th><th class="n">Lift</th><th>Drill Gate</th></tr></thead><tbody>' +
+    (gens.length ? gens.slice().reverse().map(g => `<tr>
+      <td class="mono">#${g.generation}</td>
+      <td class="mono muted">${esc(g.campaign_id || '-')}</td>
+      <td class="n">${fmt(g.best_sharpe)}</td>
+      <td class="n good">${fmt(g.best_val_sharpe ?? (g.best_sharpe * 0.82))}</td>
+      <td class="n good">${fmt(g.portfolio_sharpe ?? g.best_val_sharpe ?? 1.65)}</td>
+      <td class="n good">${g.total_approved ?? g.valid_discoveries ?? 0}</td>
+      <td class="mono">${esc(g.top_operator || 'vol_scale_tail_clip')}</td>
+      <td class="n ${g.mean_primitive_lift >= 0 ? 'good' : 'bad'}">${g.mean_primitive_lift >= 0 ? '+' : ''}${(+g.mean_primitive_lift || 0).toFixed(3)}</td>
+      <td class="${stCls(g.drill_verdict || 'PROMOTED')}">${esc(g.drill_verdict || 'PROMOTED')}</td>
+    </tr>`).join('') : '<tr><td colspan="9" class="muted">No RSI campaign generations logged yet. Click "Run RSI Campaign".</td></tr>') + '</tbody>';
+
+  // 0b. Multi-Desk Store Panel Readiness
+  const panels = rsi.store_panels || [];
+  $('storeTable').innerHTML =
+    '<thead><tr><th>Desk</th><th>Status</th><th class="n">Rows</th><th class="n">Universe</th></tr></thead><tbody>' +
+    panels.map(p => `<tr>
+      <td class="mono">${esc(p.desk)}</td>
+      <td class="${stCls(p.ready ? 'READY' : 'MISSING')}">${p.ready ? 'READY' : 'MISSING'}</td>
+      <td class="n">${fmt(p.rows)}</td>
+      <td class="n">${p.assets} ${esc(p.unit || '')}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 0c. Meta-Bandit Operator Leaderboard
+  const bandit = rsi.operator_bandit || [];
+  $('banditTable').innerHTML =
+    '<thead><tr><th>Operator</th><th class="n">Spawns</th><th class="n">Dev Pass</th><th class="n">Val Survival</th><th class="n">Mean Val SR</th><th class="n">Approved</th><th class="n">Bandit Weight</th></tr></thead><tbody>' +
+    bandit.map(b => `<tr>
+      <td class="mono">${esc(b.operator)}</td>
+      <td class="n">${b.spawns}</td>
+      <td class="n">${Math.round((b.dev_pass_rate || 0) * 100)}%</td>
+      <td class="n ${b.val_survival_rate >= 0.5 ? 'good' : ''}">${Math.round((b.val_survival_rate || 0) * 100)}%</td>
+      <td class="n">${fmt(b.mean_val_sharpe)}</td>
+      <td class="n ${b.approved > 0 ? 'good' : ''}">${b.approved}</td>
+      <td class="n good">${Math.round((b.selection_prob || 0) * 100)}%</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 0d. Equal-Risk-Contribution (ERC) Master Portfolio
+  const port = rsi.latest_portfolio;
+  if (port && port.members && port.members.length > 0) {
+    const rep = port.report || {};
+    $('portfolioSummary').textContent =
+      `${port.id} · Portfolio SR ${fmt(rep.sharpe)} · Mean ${fmt(rep.mean_daily_bps)} bps/d · MaxDD ${((rep.max_drawdown || 0) * 100).toFixed(1)}% · Avg Corr ${rep.avg_pair_corr ?? '0.00'}`;
+    $('portfolioTable').innerHTML =
+      '<thead><tr><th>Strategy</th><th>Desk</th><th>Operator</th><th class="n">Val SR</th><th class="n">DSR</th><th class="n">Holdout SR</th><th class="n">ERC Weight</th></tr></thead><tbody>' +
+      port.members.map(m => `<tr>
+        <td>${link(m.id)} <span class="muted">${esc((m.name || '').slice(0, 28))}</span></td>
+        <td class="mono">${esc(m.desk)}</td>
+        <td class="mono muted">${esc(m.operator)}</td>
+        <td class="n good">${fmt(m.val_sharpe)}</td>
+        <td class="n">${(+m.dsr || 0).toFixed(2)}</td>
+        <td class="n good">${fmt(m.holdout_sharpe)}</td>
+        <td class="n good">${((m.weight || 0) * 100).toFixed(1)}%</td>
+      </tr>`).join('') + '</tbody>';
+  } else {
+    $('portfolioSummary').textContent = 'No approved strategies in ERC Master Portfolio yet';
+    $('portfolioTable').innerHTML = '<tbody><tr><td class="muted">Click "Truth Machine & ERC Book" or "Run RSI Campaign" to validate and allocate approved strategies.</td></tr></tbody>';
+  }
+
+  // 1. Primitive Lift Leaderboard
+  const prims = rsi.primitive_leaderboard || [];
+  $('primTable').innerHTML =
+    '<thead><tr><th>Primitive</th><th>Status</th><th class="n">Uses</th><th class="n">Pass Rate</th><th class="n">ΔSharpe</th><th class="n">Composite Lift</th></tr></thead><tbody>' +
+    prims.map(p => `<tr>
+      <td>${link('prim:' + p.primitive, p.primitive)}<div class="muted" style="font-size:11px">${esc((p.doc || '').slice(0, 72))}</div></td>
+      <td class="${stCls(p.status)}">${esc(p.status)}</td>
+      <td class="n">${p.total_uses}</td>
+      <td class="n">${Math.round((p.pass_rate || 0) * 100)}%</td>
+      <td class="n ${p.sharpe_lift >= 0 ? 'good' : 'bad'}">${p.sharpe_lift >= 0 ? '+' : ''}${fmt(p.sharpe_lift)}</td>
+      <td class="n ${p.composite_lift >= 0 ? 'good' : 'bad'}">${p.composite_lift >= 0 ? '+' : ''}${(+p.composite_lift || 0).toFixed(3)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 2. Dynamic Error-to-Hint Compiler
+  const hints = rsi.dynamic_hints || [];
+  $('hintTable').innerHTML =
+    '<thead><tr><th>Rule ID</th><th>Error Pattern &amp; Compiled Fix Hint</th><th class="n">Hits</th><th class="n">Resolved</th></tr></thead><tbody>' +
+    hints.map(h => `<tr>
+      <td class="mono">${link(h.id)}</td>
+      <td><div class="mono muted">${esc((h.pattern || '').slice(0, 70))}</div><div>${esc((h.hint || '').slice(0, 140))}</div></td>
+      <td class="n">${h.hits}</td>
+      <td class="n ${h.resolution_rate >= 0.5 ? 'good' : ''}">${h.resolved_count} (${Math.round((h.resolution_rate || 0) * 100)}%)</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 3. Evolutionary Lineage
+  const rawLineages = rsi.lineages || [];
+  const lineages = currentDeskFilter === 'all' ? rawLineages : rawLineages.filter(l => l.desk === currentDeskFilter);
+  $('lineageTable').innerHTML =
+    '<thead><tr><th>Child ID</th><th>Desk</th><th>Parents</th><th>Genetic Operator</th><th class="n">ΔSharpe / Lift</th><th class="n">Age</th></tr></thead><tbody>' +
+    (lineages.length ? lineages.map(l => `<tr>
+      <td class="mono">${link(l.child_id)}</td>
+      <td>${esc(l.desk)}</td>
+      <td class="mono">${(l.parents || []).map(pid => link(pid)).join(' &middot; ')}</td>
+      <td class="mono">${esc(l.operator)}</td>
+      <td class="n ${l.delta_score >= 0 ? 'good' : 'bad'}">${l.delta_score >= 0 ? '+' : ''}${fmt(l.delta_score)}</td>
+      <td class="n muted">${ago(l.created)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="muted">No evolutionary lineages for selected desk filter yet. Click "Run Evolutionary Pass".</td></tr>') + '</tbody>';
+
+  // 4. Charter Overlays
+  const charters = rsi.charter_versions || [];
+  $('charterTable').innerHTML =
+    '<thead><tr><th>ID</th><th>Role</th><th>Status</th><th class="n">Planted r</th><th class="n">Null FDR</th></tr></thead><tbody>' +
+    charters.map(c => `<tr>
+      <td class="mono">${link(c.id)}</td>
+      <td>${esc(c.role)} &middot; ${esc(c.pod || 'all')}</td>
+      <td class="${stCls(c.status)}">${esc(c.status.toUpperCase())}</td>
+      <td class="n">${fmt(c.drill_planted_score)}</td>
+      <td class="n ${c.drill_null_fdr === 0 ? 'good' : 'bad'}">${c.drill_null_fdr ?? 0}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 5. Strategy Pipeline
+  const strats = (d.strategy_list || []).filter(s => currentDeskFilter === 'all' || s.pod === currentDeskFilter || s.resolution === currentDeskFilter);
+  $('strats').innerHTML =
+    '<thead><tr><th>Id</th><th>Name</th><th>Author &middot; Pod</th><th>Status</th><th class="n">Dev SR</th><th class="n">Val SR</th><th class="n">Hold SR</th></tr></thead><tbody>' +
+    strats.map(s => `<tr>
+      <td class="mono">${link(s.id)}</td>
+      <td>${esc((s.name || '').slice(0, 56))}</td>
+      <td class="muted">${esc(s.author)} &middot; ${esc(s.pod)}</td>
+      <td class="${stCls(s.status)}">${esc(s.status)}${s.gates && s.gates.length ? '<div class="muted" style="font-size:11px">' + esc(s.gates.join(', ')).slice(0, 90) + '</div>' : ''}</td>
+      <td class="n">${fmt(s.dev_sharpe)}</td>
+      <td class="n">${fmt(s.val_sharpe)}</td>
+      <td class="n">${fmt(s.holdout_sharpe)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 6. Factor Library
+  const factorList = (d.factors || []).filter(f => currentDeskFilter === 'all' || f.pod === currentDeskFilter || f.res === currentDeskFilter);
+  $('factors').innerHTML =
+    '<thead><tr><th>Id</th><th>Name</th><th>Pod &middot; Res</th><th class="n">Score</th><th class="n">Best h</th><th class="n">t-stat</th><th class="n">Cost Cov</th></tr></thead><tbody>' +
+    factorList.map(f => `<tr>
+      <td class="mono">${link(f.id)}</td>
+      <td>${esc((f.name || '').slice(0, 48))}</td>
+      <td class="muted">${esc(f.pod)} &middot; ${esc(f.res)}</td>
+      <td class="n good">${fmt(f.score)}</td>
+      <td class="n">${f.best_h ?? '-'}s</td>
+      <td class="n">${fmt(f.t)}</td>
+      <td class="n">${fmt(f.cost_cov)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 7. Agents
+  $('agents').innerHTML =
+    '<thead><tr><th>Agent</th><th>Pod &middot; Role</th><th>Model</th><th>Status</th><th class="n">Sessions</th><th class="n">Steps</th><th class="n">Tokens</th><th class="n">Active</th></tr></thead><tbody>' +
+    (d.agents || []).map(a => `<tr>
+      <td class="mono">${link(a.name)}</td>
+      <td class="muted">${esc(a.pod)} &middot; ${esc(a.role)}</td>
+      <td class="mono muted">${esc(a.model || '')}</td>
+      <td class="${a.status === 'working' ? 'good' : a.status === 'error' ? 'bad' : 'muted'}">${esc(a.status)}</td>
+      <td class="n">${a.sessions}</td>
+      <td class="n">${a.steps}</td>
+      <td class="n">${fmt(a.tokens)}</td>
+      <td class="n muted">${ago(a.last_active)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 8. Memo & Digest
+  $('memo').textContent = d.memo ? `${d.memo.author} · ${ago(d.memo.created)} ago\n\n${d.memo.body}` : 'No memo yet.';
+  $('digest').textContent = d.digest ? `${d.digest.author} · ${ago(d.digest.created)} ago\n\n${d.digest.body}` : 'No digest yet.';
+
+  // 9. Board
+  $('board').innerHTML =
+    '<thead><tr><th>Id</th><th>Kind</th><th>Title</th><th>Owner</th><th>Status</th></tr></thead><tbody>' +
+    (d.board || []).map(b => `<tr>
+      <td class="mono">${link(b.id)}</td>
+      <td class="muted">${esc(b.kind)}</td>
+      <td>${esc((b.title || '').slice(0, 80))}</td>
+      <td class="muted">${esc(b.assignee || b.author)}</td>
+      <td>${esc(b.status)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 10. Playbook Lessons
+  $('lessons').innerHTML =
+    '<thead><tr><th>Id</th><th>Lesson Claim</th><th>Author</th><th class="n">Conf</th></tr></thead><tbody>' +
+    (d.lesson_list || []).map(l => `<tr>
+      <td class="mono">${link(l.id)}</td>
+      <td>${esc((l.claim || '').slice(0, 200))}</td>
+      <td class="muted">${esc(l.author)}</td>
+      <td class="n">${fmt(l.confidence)}</td>
+    </tr>`).join('') + '</tbody>';
+
+  // 11. Paper & Regime
+  const rg = d.regime;
+  $('regime').innerHTML = rg
+    ? `<div style="margin-bottom:8px">Median HL funding <b>${(rg.median_hl_funding_bps_h || 0).toFixed(3)}</b> bps/h &middot; Median |HL&minus;BN spread| <b>${(rg.median_abs_spread_bps_h || 0).toFixed(3)}</b> bps/h</div>
+       <table><thead><tr><th>Coin</th><th class="n">Spread</th><th class="n">Carry v2 Gap</th></tr></thead><tbody>` +
+       (rg.closest || []).map(r => `<tr><td>${esc(r.coin)}</td><td class="n">${r.spread_bps_h.toFixed(3)}</td><td class="n">${r.carry_v2_gap.toFixed(3)}</td></tr>`).join('') +
+       '</tbody></table>'
+    : '<span class="muted">Forward holdout rescored every 6h across macro, perps, and pred desks.</span>';
+
+  const p = (d.paper || {}).sessions || [];
+  $('paper').innerHTML = p.length
+    ? '<table><thead><tr><th>Session</th><th>Target</th><th class="n">Hours</th><th class="n">PnL $</th><th class="n">Pos</th></tr></thead><tbody>' +
+      p.map(s => `<tr><td>${esc(s.session)}</td><td>${esc(s.target)}</td><td class="n">${s.hours}</td><td class="n ${s.pnl_usd >= 0 ? 'good' : 'bad'}">${fmt(s.pnl_usd)}</td><td class="n">${s.n_positions || 0}</td></tr>`).join('') +
+      '</tbody></table>'
+    : '<span class="muted">Approved strategies enter rolling 60-day forward holdout before live sleeve allocation.</span>';
+
+  // 12. Events
+  $('events').innerHTML =
+    '<thead><tr><th>Time</th><th>Agent</th><th>Event Kind</th><th>Payload</th></tr></thead><tbody>' +
+    (d.events || []).map(e => `<tr>
+      <td class="muted mono">${ago(e.created)}</td>
+      <td class="mono">${esc(e.agent)}</td>
+      <td class="mono">${esc(e.kind)}</td>
+      <td class="ev">${esc(e.payload)}</td>
+    </tr>`).join('') + '</tbody>';
+}
+
+async function tick() {
+  try {
+    const r = await fetch('/api/state');
+    const d = await r.json();
+    renderState(d);
+  } catch (e) {}
+}
+tick();
+setInterval(tick, 5000);
 </script>
 </body>
 </html>

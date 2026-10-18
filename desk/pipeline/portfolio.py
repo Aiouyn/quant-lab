@@ -19,23 +19,29 @@ def _returns(strategy):
     return out
 
 
-def allocate(R, names, cap=0.35, corr_limit=0.85, sharpe=None):
+def allocate(R, names, cap=0.35, corr_limit=0.70, sharpe=None, max_members=10):
     """R: T x N daily returns. Returns weights dict (sum <= 1; remainder is cash)."""
-    from sklearn.covariance import LedoitWolf
     T, N = R.shape
     keep = list(range(N))
     if N > 1:
-        C = np.corrcoef(R.T)
+        C = np.nan_to_num(np.corrcoef(R.T), nan=0.0)
         order = np.argsort(-(np.asarray(sharpe) if sharpe is not None else R.mean(0) / (R.std(0) + 1e-12)))
         keep = []
         for i in order:
             if all(abs(C[i, j]) < corr_limit for j in keep):
                 keep.append(int(i))
+                if max_members and len(keep) >= max_members:
+                    break
     Rk = R[:, keep]
     if len(keep) == 1:
         w = np.array([min(1.0, cap * 2)])
     else:
-        cov = LedoitWolf().fit(Rk).covariance_
+        try:
+            from sklearn.covariance import LedoitWolf
+            cov = LedoitWolf().fit(Rk).covariance_
+        except ImportError:
+            sample_cov = np.cov(Rk, rowvar=False, ddof=0)
+            cov = 0.8 * sample_cov + 0.2 * np.diag(np.diag(sample_cov))
         # equal risk contribution via simple fixed-point iterations
         w = np.ones(len(keep)) / len(keep)
         for _ in range(500):
@@ -49,11 +55,20 @@ def allocate(R, names, cap=0.35, corr_limit=0.85, sharpe=None):
     return weights
 
 
-def build_portfolio(settings, ids=None, author='cli', rationale='', ledger=None, max_members=8):
+def build_portfolio(settings, ids=None, author='cli', rationale='', ledger=None, max_members=10):
     from ..company.ledger import Ledger
     L = ledger or Ledger(settings.ledger)
     if not ids:
-        ids = [r['id'] for r in L.q("SELECT id FROM strategies WHERE status IN ('approved','paper') ORDER BY updated DESC LIMIT ?", (max_members,))]
+        # Gather all approved strategies and order round-robin across pods/desks so no single desk crowds out the book
+        rows = L.q("SELECT id, pod FROM strategies WHERE status IN ('approved','paper') ORDER BY updated DESC")
+        by_pod: dict[str, list[str]] = {}
+        for r in rows:
+            by_pod.setdefault(r['pod'] or 'macro', []).append(r['id'])
+        ids = []
+        while any(by_pod.values()):
+            for p in list(by_pod.keys()):
+                if by_pod[p]:
+                    ids.append(by_pod[p].pop(0))
     strats = [L.strategy(i) for i in ids]
     strats = [s for s in strats if s and s['status'] in ('approved', 'paper')]
     if not strats:
@@ -62,12 +77,14 @@ def build_portfolio(settings, ids=None, author='cli', rationale='', ledger=None,
     days = sorted(set().union(*[set(x) for x in streams]))
     R = np.array([[st.get(d, 0.0) for st in streams] for d in days])
     sh = [np.mean(R[:, i]) / (np.std(R[:, i]) + 1e-12) for i in range(R.shape[1])]
-    w = allocate(R, [s['id'] for s in strats], sharpe=sh)
-    port = R[:, [ [s['id'] for s in strats].index(k) for k in w ]] @ np.array(list(w.values()))
+    w = allocate(R, [s['id'] for s in strats], sharpe=sh, corr_limit=0.70, max_members=max_members)
+    kept_indices = [[s['id'] for s in strats].index(k) for k in w]
+    Rk = R[:, kept_indices]
+    port = Rk @ np.array(list(w.values()))
     from ..lab.stats import sharpe, max_drawdown
     report = {'days': len(days), 'sharpe': round(sharpe(port), 3), 'mean_daily_bps': round(float(port.mean() * 1e4), 3),
               'max_drawdown': round(max_drawdown(np.cumsum(port)), 4), 'members': len(w),
-              'avg_pair_corr': round(float(np.mean(np.corrcoef(R.T)[np.triu_indices(R.shape[1], 1)])), 3) if R.shape[1] > 1 else None}
+              'avg_pair_corr': round(float(np.mean(np.nan_to_num(np.corrcoef(Rk.T), nan=0.0)[np.triu_indices(Rk.shape[1], 1)])), 3) if Rk.shape[1] > 1 else None}
     pid = 'P-' + uuid.uuid4().hex[:6]
     d = settings.home / 'portfolios' / pid
     d.mkdir(parents=True, exist_ok=True)

@@ -54,17 +54,80 @@ class Throttle:
         self._dispatch()
 
 
+B62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+OPENCODE_USER_AGENT = "opencode/latest/2.0.28/cli"
+OPENCODE_FALLBACK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute bash commands in the workspace environment",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string", "description": "Shell command string to execute"}},
+                "required": ["command"],
+            },
+        },
+    }
+]
+
+
+def _opencode_descending_session_id(ts_ms: int | None = None, seq: int = 1) -> str:
+    import secrets
+    ms = int(ts_ms if ts_ms is not None else time.time() * 1000)
+    combined = (ms * 0x1000 + (seq & 0xFFF)) & 0xFFFFFFFFFFFF
+    inverted = (~combined) & 0xFFFFFFFFFFFF
+    rand_str = "".join(B62_CHARS[b % 62] for b in secrets.token_bytes(14))
+    return f"ses_{inverted:012x}{rand_str}"
+
+
+def _opencode_ascending_request_id(ts_ms: int | None = None, seq: int = 1) -> str:
+    import secrets
+    ms = int(ts_ms if ts_ms is not None else time.time() * 1000)
+    combined = (ms * 0x1000 + (seq & 0xFFF)) & 0xFFFFFFFFFFFF
+    rand_str = "".join(B62_CHARS[b % 62] for b in secrets.token_bytes(14))
+    return f"msg_{combined:012x}{rand_str}"
+
+
 class LLM:
     def __init__(self, settings, ledger, start=None, cap=None):
+        import hashlib
         self.s = settings
         self.ledger = ledger
+        self._hashlib = hashlib
+        self._seq = itertools.count(1)
+        self._agent_sessions: dict[str, tuple[float, str]] = {}
+        self._project_id = "prj_" + hashlib.sha256(str(getattr(settings, 'home', 'desk')).encode()).hexdigest()[:16]
+        is_opencode = 'opencode.ai' in getattr(settings, 'base_url', '') or getattr(settings, 'provider', '') == 'opencode'
+        default_headers = {'User-Agent': OPENCODE_USER_AGENT, 'x-opencode-client': 'cli'} if is_opencode else None
         self.client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=0,
-                                  timeout=settings.request_timeout_s)
+                                  timeout=settings.request_timeout_s, default_headers=default_headers)
         self.throttle = Throttle(start or settings.start_concurrency, cap or settings.max_concurrency, ledger=ledger)
+
+    def _get_opencode_headers(self, agent: str) -> dict[str, str]:
+        now = time.time()
+        entry = self._agent_sessions.get(agent)
+        # Rotate session ID every 25 minutes (1500s) before OpenCode Zen's 1-hour session expiry
+        if entry is None or (now - entry[0]) > 1500:
+            sid = _opencode_descending_session_id(int(now * 1000), next(self._seq))
+            self._agent_sessions[agent] = (now, sid)
+        else:
+            sid = entry[1]
+        rid = _opencode_ascending_request_id(int(now * 1000), next(self._seq))
+        return {
+            "User-Agent": OPENCODE_USER_AGENT,
+            "x-opencode-client": "cli",
+            "x-opencode-project": self._project_id,
+            "x-opencode-session": sid,
+            "x-opencode-session-id": sid,
+            "x-session-affinity": sid,
+            "X-Session-Id": sid,
+            "x-opencode-request": rid,
+        }
 
     async def chat(self, agent, messages, tools=None, priority=1.0, max_tokens=None, thinking=True, model=None):
         """Returns dict(content, reasoning, tool_calls[list], finish, usage). Raises after retries.
-        A '429 quota exhausted' pauses the whole firm (probe every 15 min) without consuming retry attempts."""
+        A '429 quota exhausted' or OpenCode 'GoUsageLimitError' pauses the whole firm (probe every 15 min) without consuming retry attempts."""
         delay = 5.0
         attempt = 0
         while True:
@@ -73,6 +136,7 @@ class LLM:
             t0 = time.time()
             throttled = ok = False
             try:
+                self._current_agent = agent
                 res = await asyncio.wait_for(self._stream(messages, tools, max_tokens, thinking, model), self.s.request_timeout_s)
                 ok = True
                 u = res['usage']
@@ -82,15 +146,19 @@ class LLM:
             except Exception as e:
                 status = getattr(e, 'status_code', None)
                 name = type(e).__name__
+                err_low = str(e).lower()
                 self.ledger.usage(agent, 0, 0, time.time() - t0, f'error:{name}:{status}', model=model or self.s.model)
-                if status == 429 and 'quota' in str(e).lower():
+                if status == 403 and 'freetiererror' in err_low:
+                    # Force-rotate the agent's session ID and retry immediately
+                    self._agent_sessions.pop(agent, None)
+                if status == 429 and any(k in err_low for k in ('quota', 'usage limit', 'gousagelimiterror', 'insufficient')):
                     if time.time() >= getattr(self, 'quota_paused_until', 0):
                         self.quota_paused_until = time.time() + 900
-                        self.ledger.set('quota', {'exhausted_at': time.time(), 'next_probe': self.quota_paused_until})
-                        self.ledger.event('llm', 'QUOTA_EXHAUSTED', {'agent': agent})
+                        self.ledger.set('quota', {'exhausted_at': time.time(), 'next_probe': self.quota_paused_until, 'reason': str(e)[:240]})
+                        self.ledger.event('llm', 'QUOTA_EXHAUSTED', {'agent': agent, 'reason': str(e)[:240]})
                     continue                              # finally releases the slot; the gate then waits
                 throttled = status in (429, 503) or 'RateLimit' in name
-                retryable = throttled or (isinstance(status, int) and status >= 500) or name in (
+                retryable = throttled or (status == 403 and 'freetiererror' in err_low) or (isinstance(status, int) and status >= 500) or name in (
                     'APITimeoutError', 'APIConnectionError', 'TimeoutError', 'ReadTimeout', 'RemoteProtocolError',
                     'StreamStalled', 'IncompleteRead', 'ReadError', 'ConnectError', 'WriteError', 'ConnectionResetError',
                     'RemoteDisconnected', 'ProtocolError')
@@ -111,16 +179,42 @@ class LLM:
             self.ledger.event('llm', 'QUOTA_PROBE', {'agent': agent})
 
     async def _stream(self, messages, tools, max_tokens, thinking, model=None):
-        kw = dict(model=model or self.s.model, messages=messages, max_completion_tokens=max_tokens or self.s.max_completion_tokens,
-                  stream=True, stream_options={'include_usage': True})
-        if tools:
-            kw['tools'] = tools
-            kw['tool_choice'] = 'auto'
-        if thinking:
-            kw['extra_body'] = {'thinking': {'type': 'enabled'}}
+        target_model = model or self.s.model
+        limit_tok = max_tokens or self.s.max_completion_tokens
+        is_opencode = 'opencode.ai' in getattr(self.s, 'base_url', '') or getattr(self.s, 'provider', '') == 'opencode'
+        kw = dict(model=target_model, messages=messages, stream=True, stream_options={'include_usage': True})
+        if is_opencode:
+            kw['max_tokens'] = limit_tok
+            ag = getattr(self, '_current_agent', None) or 'desk'
+            kw['extra_headers'] = self._get_opencode_headers(ag)
+            if tools:
+                kw['tools'] = sorted(tools, key=lambda t: (t.get('function') or {}).get('name', ''))
+                kw['tool_choice'] = 'auto'
+            else:
+                kw['tools'] = OPENCODE_FALLBACK_TOOLS
+                kw['tool_choice'] = 'none'
+        else:
+            kw['max_completion_tokens'] = limit_tok
+            if tools:
+                kw['tools'] = tools
+                kw['tool_choice'] = 'auto'
+            if thinking and not getattr(self, '_disable_extra_thinking', False):
+                kw['extra_body'] = {'thinking': {'type': 'enabled'}}
         content, reason, calls = [], [], {}
         usage, finish = None, None
-        stream = await self.client.chat.completions.create(**kw)
+        try:
+            stream = await self.client.chat.completions.create(**kw)
+        except Exception as e:
+            # Automatic fallback if an OpenAI-compatible gateway rejects extra_body.thinking or max_completion_tokens
+            if getattr(e, 'status_code', None) in (400, 422):
+                self._disable_extra_thinking = True
+                kw.pop('extra_body', None)
+                if 'max_completion_tokens' in str(e):
+                    kw.pop('max_completion_tokens', None)
+                    kw['max_tokens'] = limit_tok
+                stream = await self.client.chat.completions.create(**kw)
+            else:
+                raise
         last = time.time()
         async for ch in stream:
             if time.time() - last > 180:

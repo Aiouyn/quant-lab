@@ -69,7 +69,7 @@ class Agent:
         L.agent_status(self.name, 'working')
         tools = Toolbox(org, self)
         specs = specs_for(self.role)
-        messages = [{'role': 'system', 'content': charter(self.role, self.pod)},
+        messages = [{'role': 'system', 'content': charter(self.role, self.pod, ledger=L)},
                     {'role': 'user', 'content': org.brief(self)}]
         max_steps = org.settings.max_steps_per_session
         nudged = False

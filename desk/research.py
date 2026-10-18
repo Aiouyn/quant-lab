@@ -186,7 +186,11 @@ def carry_panel(coins=None, warmup_days=0):
     from .lab.carry import CarryStore
     import types
     root = os.environ.get('DESK_CARRY_ROOT')
-    cs = CarryStore(types.SimpleNamespace(store=Path(root).parent) if root else _carry_settings(), allowed=('dev',))
+    s = types.SimpleNamespace(store=Path(root).parent, ensure=lambda: None) if root else _carry_settings()
+    if not (s.store / 'carry' / 'splits.json').exists():
+        from .data.store_builder import build_perps_and_carry_stores
+        build_perps_and_carry_stores(s, try_remote=False)
+    cs = CarryStore(s, allowed=('dev',))
     p, a, b = cs.load('dev', warmup_days=warmup_days, coins=coins)
     return p
 
@@ -213,8 +217,12 @@ def perps_panel(coins=None, warmup_days=0):
     if path and Path(path).exists():
         p = pl.read_parquet(path)
     else:
+        s = _carry_settings()
+        if not (s.store / 'perps' / 'panel.parquet').exists():
+            from .data.store_builder import build_perps_and_carry_stores
+            build_perps_and_carry_stores(s, try_remote=False)
         from .lab.perps import PerpsStore, visible
-        p, a, b = PerpsStore(_carry_settings(), allowed=('dev',)).load('dev', warmup_days=0)
+        p, a, b = PerpsStore(s, allowed=('dev',)).load('dev', warmup_days=0)
         p = visible(p)
     if coins:
         p = p.filter(pl.col('coin').is_in(list(coins)))
@@ -247,8 +255,12 @@ def macro_panel(symbols=None, warmup_days=0):
     if path and Path(path).exists():
         p = pl.read_parquet(path)
     else:
+        s = _carry_settings()
+        if not (s.store / 'macro' / 'panel.parquet').exists():
+            from .data.store_builder import build_macro_store
+            build_macro_store(s, try_remote=False)
         from .lab.macro import MacroStore
-        p, a, b = MacroStore(_carry_settings(), allowed=('dev',)).load('dev', warmup_days=0)
+        p, a, b = MacroStore(s, allowed=('dev',)).load('dev', warmup_days=0)
     if symbols:
         p = p.filter(pl.col('symbol').is_in(list(symbols)))
     return p.sort(['date', 'symbol'])
@@ -274,8 +286,12 @@ def pred_panel(warmup_days=0):
     if path and Path(path).exists():
         # the view is written sorted by (ts, market); re-sorting would double peak memory (~2 GB) for nothing
         return pl.read_parquet(path).with_columns(pl.col('hours_to_end').cast(pl.Float32)).set_sorted('ts')
+    s = _carry_settings()
+    if not (s.store / 'pred' / 'panel.parquet').exists():
+        from .data.store_builder import build_pred_store
+        build_pred_store(s)
     from .lab.pred import PredStore, visible
-    p, a, b = PredStore(_carry_settings(), allowed=('dev',)).load('dev')
+    p, a, b = PredStore(s, allowed=('dev',)).load('dev')
     return visible(p).sort(['ts', 'market'])
 
 
