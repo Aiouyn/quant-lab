@@ -55,12 +55,13 @@ def main(argv=None):
     dr = sub.add_parser('drill', help='build or score drill markets (measure the firm itself)')
     dr.add_argument('kind', choices=['planted', 'null']); dr.add_argument('--report', action='store_true')
     dr.add_argument('--days', type=int, default=90)
-    rsi_p = sub.add_parser('rsi', help='Recursive Self-Improvement (RSI) engine: status, compile-hints, evolve, toolsmith, build-store, validate, bandit, campaign, daemon, benchmark')
+    rsi_p = sub.add_parser('rsi', help='Recursive Self-Improvement (RSI) engine: status, compile-hints, evolve, toolsmith, build-store, validate, bandit, campaign, daemon, funnel, forward, benchmark')
     rsi_p.add_argument('action', nargs='?', default='status',
-                       choices=['status', 'compile-hints', 'evolve', 'toolsmith', 'build-store', 'validate', 'bandit', 'campaign', 'daemon', 'benchmark'])
+                       choices=['status', 'compile-hints', 'evolve', 'toolsmith', 'build-store', 'validate', 'bandit', 'campaign', 'daemon', 'funnel', 'forward', 'benchmark'])
     rsi_p.add_argument('--desk', choices=['macro', 'perps', 'pred', 'carry', 'l2'])
-    rsi_p.add_argument('--desks', default='macro,perps,carry,pred', help='comma-separated desks for campaign')
+    rsi_p.add_argument('--desks', default='macro,perps,carry,pred', help='comma-separated desks for campaign/funnel')
     rsi_p.add_argument('--generations', type=int, default=3, help='number of RSI generations for campaign')
+    rsi_p.add_argument('--agents', type=int, default=50, help='number of agents in 3-tier tournament funnel')
     rsi_p.add_argument('--max-children', type=int, default=3)
     rsi_p.add_argument('--no-llm', action='store_true', help='use deterministic AST operators only')
     a = p.parse_args(argv)
@@ -191,6 +192,7 @@ def main(argv=None):
             ensure_seeded, rsi_snapshot, compile_error_hints, evolve_population,
             evolve_primitives, run_rsi_campaign, propose_charter_patch, evaluate_rsi_drill,
             validate_and_promote_population, operator_bandit_leaderboard,
+            run_tournament_funnel, run_forward_survival_audit,
         )
         L = ensure_seeded(s, Ledger(s.ledger))
         if a.action == 'compile-hints':
@@ -210,6 +212,11 @@ def main(argv=None):
             desks = [d.strip() for d in (a.desks or '').split(',') if d.strip()]
             _print(run_rsi_campaign(L, settings=s, generations=a.generations, desks=desks,
                                     max_children_per_gen=a.max_children, use_llm=not a.no_llm))
+        elif a.action == 'funnel':
+            desks = [d.strip() for d in (a.desks or '').split(',') if d.strip()]
+            _print(run_tournament_funnel(L, settings=s, n_agents=a.agents, desks=desks, use_llm=not a.no_llm))
+        elif a.action == 'forward':
+            _print(run_forward_survival_audit(L, settings=s))
         elif a.action == 'benchmark':
             cand = propose_charter_patch(L)
             _print({'charter': cand, 'drill_gate': evaluate_rsi_drill(L, settings=s, charter_id=cand['id'])})

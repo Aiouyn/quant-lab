@@ -18,7 +18,7 @@ from .roles import PODS
 
 CORE = [('cio', 'cio', 'exec'), ('officer-1', 'officer', 'risk'), ('officer-2', 'officer', 'risk'),
         ('pm', 'pm', 'portfolio'), ('librarian', 'librarian', 'knowledge'), ('execution', 'execution', 'venue'),
-        ('toolsmith', 'toolsmith', 'platform')]
+        ('toolsmith', 'toolsmith', 'platform'), ('auditor-lead', 'auditor', 'audit')]
 
 
 # measured yield first: carry (structural funding edge) > order flow / meta (combination engine) > the rest
@@ -31,9 +31,9 @@ def roster(n_agents):
     enough to feed them."""
     n_agents = max(n_agents, 4)
     if n_agents < 10:
-        core = [CORE[0], CORE[1]]
+        core = [CORE[0], CORE[1], CORE[7]]
     elif n_agents < 24:
-        core = [CORE[0], CORE[1], CORE[3], CORE[4], CORE[6]] + ([CORE[5]] if n_agents >= 18 else [])
+        core = [CORE[0], CORE[1], CORE[3], CORE[4], CORE[6], CORE[7]] + ([CORE[5]] if n_agents >= 18 else [])
     else:
         core = CORE
     out = list(core)

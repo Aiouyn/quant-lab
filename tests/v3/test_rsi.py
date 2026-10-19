@@ -303,3 +303,77 @@ def test_continuous_rsi_daemon_lifecycle(tmp_path):
     assert st_stop['cycles'] >= 1
 
 
+@pytest.mark.parametrize('desk,operator', [
+    ('perps', 'perps_residual_oi_gate'),
+    ('carry', 'carry_funding_hysteresis_v3'),
+    ('pred', 'pred_logodds_shrinkage'),
+])
+def test_desk_native_survival_operators_preserve_causality(desk, operator):
+    col = 'px' if desk == 'perps' else ('hl_funding' if desk == 'carry' else 'p')
+    grp = 'coin' if desk in ('perps', 'carry') else 'market'
+    parent_code = f"""DESK = {desk!r}
+PARAMS = {{'w': 12}}
+def signal(df, params):
+    s = df.select(pl.col({col!r}).cast(pl.Float64).rolling_mean(int(params.get('w', 12)), min_samples=3).over({grp!r}).alias('m'))['m'].to_numpy()
+    return np.clip(np.tanh(np.nan_to_num(s, 0.0)), -0.8, 0.8)
+"""
+    mut = mutate_or_repair_strategy(parent_code, operator=operator, gate_reasons=['top5_days<50%', 'fees_x1.5_profitable'])
+    assert mut['operator'] == operator
+    mod = load_strategy(mut['code'])
+    panel = _synth_panel_for_desk(desk, 360)
+    caus = causality_test(mod, panel)
+    assert caus['ok'], caus
+
+
+def test_50_agent_tournament_funnel_effective_trials_and_multi_desk_survival(tmp_path):
+    import dataclasses
+    from desk.config import SETTINGS
+    from desk.company.rsi import (
+        run_tournament_funnel,
+        compute_effective_trials,
+        run_forward_survival_audit,
+        compute_treasury_state,
+    )
+
+    s = dataclasses.replace(SETTINGS, home=tmp_path)
+    L = ensure_seeded(s, Ledger(tmp_path / 'desk.sqlite3'))
+
+    funnel = run_tournament_funnel(
+        L,
+        settings=s,
+        n_agents=50,
+        desks=['macro', 'perps', 'carry', 'pred'],
+        use_llm=False,
+    )
+    assert funnel['n_agents'] == 50
+    assert funnel['tiers']['tier1_scouts'] == 32
+    assert funnel['tiers']['tier2_clusterers_toolsmiths'] == 10
+    assert funnel['tiers']['tier3_red_team_officers'] == 8
+    assert funnel['clusters_formed'] >= 2
+    assert funnel['total_approved'] >= 3
+
+    # Verify multi-desk survival across at least 3 distinct desks
+    approved_pods = {r['pod'] for r in L.q("SELECT DISTINCT pod FROM strategies WHERE status IN ('approved', 'paper')")}
+    assert len(approved_pods) >= 3, f"Expected >=3 approved desks, got {approved_pods}"
+
+    # Verify Eigenvalue Effective Trials (N_eff <= raw_trials)
+    eff = compute_effective_trials(L)
+    assert eff['raw_trials'] >= 4
+    assert 2 <= eff['effective_trials'] <= eff['raw_trials']
+
+    # Verify Self-Funding Treasury & Capital Scaling ($10k -> $25k -> $100k)
+    treasury = compute_treasury_state(L, settings=s)
+    assert treasury['capital_tier'] in (2, 3)
+    assert treasury['notional_usd'] >= 25_000.0
+    assert treasury['self_funded'] is True
+    assert treasury['cost_coverage_ratio'] >= 1.0
+
+    # Verify Forward Survival Audit & Automatic Drift Demotion + ERC Rebalance
+    victim_id = L.q("SELECT id FROM strategies WHERE status='approved' LIMIT 1")[0]['id']
+    fwd = run_forward_survival_audit(L, settings=s, inject_decay_id=victim_id)
+    assert victim_id in fwd['demoted_ids']
+    assert L.strategy(victim_id)['status'] == 'retired_drift'
+    assert fwd['rebuilt_portfolio'] is not None
+    assert victim_id not in (fwd['rebuilt_portfolio'].get('weights') or {})
+
+

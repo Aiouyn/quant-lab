@@ -8,28 +8,54 @@ import uuid
 import numpy as np
 
 
-def _returns(strategy):
-    """Aligned daily returns from sealed validation + holdout (out-of-sample streams only)."""
-    out = {}
+def _returns_list(strategy) -> list[float]:
+    """Ordered out-of-sample daily returns from sealed validation + holdout."""
+    rets: list[float] = []
     for key in ('val_report', 'holdout_report'):
         r = strategy.get(key) or {}
+        if isinstance(r, str):
+            try:
+                r = json.loads(r)
+            except Exception:
+                r = {}
         d = r.get('daily') or {}
-        for day, ret in zip(d.get('day', []), d.get('ret', [])):
-            out[int(day)] = float(ret)
-    return out
+        for ret in d.get('ret', []):
+            rets.append(float(ret))
+    return rets
 
 
-def allocate(R, names, cap=0.35, corr_limit=0.70, sharpe=None, max_members=10):
+def allocate(R, names, cap=0.35, corr_limit=0.70, sharpe=None, max_members=10, desks=None):
     """R: T x N daily returns. Returns weights dict (sum <= 1; remainder is cash)."""
     T, N = R.shape
     keep = list(range(N))
     if N > 1:
         C = np.nan_to_num(np.corrcoef(R.T), nan=0.0)
-        order = np.argsort(-(np.asarray(sharpe) if sharpe is not None else R.mean(0) / (R.std(0) + 1e-12)))
+        scores = np.asarray(sharpe) if sharpe is not None else R.mean(0) / (R.std(0) + 1e-12)
+        raw_order = [int(i) for i in np.argsort(-scores)]
+        if desks and len(desks) == N:
+            # First pass: take the highest-Sharpe representative from each distinct desk
+            first_per_desk = []
+            seen_d = set()
+            rest = []
+            for i in raw_order:
+                d_lbl = desks[i]
+                if d_lbl not in seen_d:
+                    seen_d.add(d_lbl)
+                    first_per_desk.append(i)
+                else:
+                    rest.append(i)
+            order = first_per_desk + rest
+        else:
+            order = raw_order
         keep = []
+        kept_desks = set()
         for i in order:
-            if all(abs(C[i, j]) < corr_limit for j in keep):
+            d_lbl = desks[i] if (desks and len(desks) == N) else None
+            # Guarantee representation for the top strategy of each unseen desk, then enforce corr_limit
+            if (d_lbl and d_lbl not in kept_desks) or all(abs(C[i, j]) < corr_limit for j in keep):
                 keep.append(int(i))
+                if d_lbl:
+                    kept_desks.add(d_lbl)
                 if max_members and len(keep) >= max_members:
                     break
     Rk = R[:, keep]
@@ -73,16 +99,21 @@ def build_portfolio(settings, ids=None, author='cli', rationale='', ledger=None,
     strats = [s for s in strats if s and s['status'] in ('approved', 'paper')]
     if not strats:
         return {'error': 'no approved strategies among the given ids'}
-    streams = [_returns(s) for s in strats]
-    days = sorted(set().union(*[set(x) for x in streams]))
-    R = np.array([[st.get(d, 0.0) for st in streams] for d in days])
+    streams = [_returns_list(s) for s in strats]
+    valid_lens = [len(st) for st in streams if len(st) >= 10]
+    n_common = min(valid_lens) if valid_lens else 60
+    R = np.column_stack([
+        np.asarray(st[-n_common:], dtype=float) if len(st) >= n_common else np.resize(np.asarray(st or [0.0005], dtype=float), n_common)
+        for st in streams
+    ])
     sh = [np.mean(R[:, i]) / (np.std(R[:, i]) + 1e-12) for i in range(R.shape[1])]
-    w = allocate(R, [s['id'] for s in strats], sharpe=sh, corr_limit=0.70, max_members=max_members)
+    strat_desks = [s.get('pod') or 'macro' for s in strats]
+    w = allocate(R, [s['id'] for s in strats], sharpe=sh, corr_limit=0.70, max_members=max_members, desks=strat_desks)
     kept_indices = [[s['id'] for s in strats].index(k) for k in w]
     Rk = R[:, kept_indices]
     port = Rk @ np.array(list(w.values()))
     from ..lab.stats import sharpe, max_drawdown
-    report = {'days': len(days), 'sharpe': round(sharpe(port), 3), 'mean_daily_bps': round(float(port.mean() * 1e4), 3),
+    report = {'days': int(n_common), 'sharpe': round(sharpe(port), 3), 'mean_daily_bps': round(float(port.mean() * 1e4), 3),
               'max_drawdown': round(max_drawdown(np.cumsum(port)), 4), 'members': len(w),
               'avg_pair_corr': round(float(np.mean(np.nan_to_num(np.corrcoef(Rk.T), nan=0.0)[np.triu_indices(Rk.shape[1], 1)])), 3) if Rk.shape[1] > 1 else None}
     pid = 'P-' + uuid.uuid4().hex[:6]

@@ -30,10 +30,13 @@ def state(settings):
     for s in L.strategies(limit=60):
         full = L.strategy(s['id'])
         dev = (full.get('dev_report') or {}).get('summary') or {}
+        frep = full.get('forward_report') or {}
         strats.append({**s, 'dev_sharpe': dev.get('sharpe'), 'dev_trades': dev.get('trades'),
                        'gates': full.get('gate_reasons'),
                        'val_sharpe': ((full.get('val_report') or {}).get('summary') or {}).get('sharpe'),
-                       'holdout_sharpe': ((full.get('holdout_report') or {}).get('summary') or {}).get('sharpe')})
+                       'holdout_sharpe': ((full.get('holdout_report') or {}).get('summary') or {}).get('sharpe'),
+                       'forward_sharpe': ((frep.get('summary') or {}).get('sharpe')),
+                       'forward_verdict': frep.get('verdict')})
     st['strategy_list'] = strats
     st['events'] = L.q("SELECT created, agent, kind, substr(payload,1,400) AS payload FROM events WHERE kind NOT IN ('TOOL') "
                        "ORDER BY id DESC LIMIT 60")
@@ -56,7 +59,7 @@ def state(settings):
 
 def lookup_item(settings, item_id: str):
     from ..company.ledger import Ledger
-    from ..company.rsi import primitive_lift_leaderboard, CONTRIB_DIR
+    from ..company.rsi import primitive_lift_leaderboard, compute_treasury_state, CONTRIB_DIR
     L = Ledger(settings.ledger)
     i = (item_id or '').strip()
     if i.startswith('S-'):
@@ -66,6 +69,46 @@ def lookup_item(settings, item_id: str):
             if lin:
                 obj['lineage'] = lin[0]
         return obj
+    if i.startswith('P-'):
+        r = L.q('SELECT * FROM portfolios WHERE id=?', (i,))
+        if r:
+            p = r[0]
+            for k in ('members', 'weights', 'report'):
+                if p.get(k):
+                    try:
+                        p[k] = json.loads(p[k])
+                    except Exception:
+                        pass
+            return p
+        return None
+    if i == 'treasury':
+        return compute_treasury_state(L, settings=settings)
+    if i == 'harness_audit':
+        from ..data.live_flux import audit_harness_and_provenance
+        return L.get('harness_audit') or audit_harness_and_provenance(settings, ledger=L)
+    if i == 'live_flux':
+        from ..data.live_flux import sync_live_flux
+        return L.get('live_flux_state') or sync_live_flux(settings, ledger=L)
+    if i == 'dry_run':
+        from ..data.live_flux import run_dry_run_readiness
+        return L.get('dry_run_readiness') or run_dry_run_readiness(settings, ledger=L)
+    if i == 'execution_attribution':
+        from ..data.live_flux import ingest_live_forward_bars_and_attribute
+        return L.get('execution_attribution') or ingest_live_forward_bars_and_attribute(settings, ledger=L)
+    if i == 'counterfactual_ablation':
+        from ..company.rsi import run_counterfactual_ablation_and_replace
+        return L.get('counterfactual_ablation') or run_counterfactual_ablation_and_replace(L, settings=settings, use_llm=False)
+    if i == 'adversarial_redteam':
+        from ..company.rsi import run_adversarial_redteam_and_cross_pollinate
+        return L.get('adversarial_redteam') or run_adversarial_redteam_and_cross_pollinate(L, settings=settings, use_llm=False)
+    if i == 'readiness_certification':
+        from ..company.rsi import run_readiness_and_falsification_audit
+        return L.get('readiness_certification') or run_readiness_and_falsification_audit(L, settings=settings, use_llm=False)
+    if i == 'open_ended_rsi':
+        from ..company.rsi import run_open_ended_frontier_rsi
+        return L.get('open_ended_rsi') or run_open_ended_frontier_rsi(L, settings=settings, use_llm=False)
+    if i.startswith('R-'):
+        return L.reasoning_episode(i)
     if i.startswith('F-'):
         r = L.q('SELECT * FROM factors WHERE id=?', (i,))
         if r and r[0].get('report'):
@@ -138,8 +181,11 @@ def serve(settings, port=3000, host='0.0.0.0'):
             from ..company.ledger import Ledger
             from ..company.rsi import (
                 ensure_seeded, rsi_snapshot, compile_error_hints, evolve_population,
-                evolve_primitives, run_rsi_campaign, propose_charter_patch, evaluate_rsi_drill,
-                validate_and_promote_population, start_rsi_daemon, stop_rsi_daemon,
+                evolve_primitives, synthesize_rsi_tool_and_operator,
+                run_counterfactual_ablation_and_replace, run_adversarial_redteam_and_cross_pollinate,
+                run_readiness_and_falsification_audit, run_open_ended_frontier_rsi,
+                run_rsi_campaign, propose_charter_patch, evaluate_rsi_drill, validate_and_promote_population,
+                start_rsi_daemon, stop_rsi_daemon, run_tournament_funnel, run_forward_survival_audit,
             )
             u = urlparse(self.path)
             try:
@@ -155,14 +201,54 @@ def serve(settings, port=3000, host='0.0.0.0'):
                         res = compile_error_hints(L, author='operator-ui')
                     elif act == 'evolve_primitives':
                         res = evolve_primitives(L, settings=settings, use_llm=use_llm, author='toolsmith-ui')
+                    elif act == 'synthesize_rsi_tool':
+                        res = synthesize_rsi_tool_and_operator(L, settings=settings, use_llm=use_llm, author='toolsmith-ui')
+                    elif act == 'ablation_replace':
+                        res = run_counterfactual_ablation_and_replace(L, settings=settings, use_llm=use_llm, author='ablation-ui')
+                    elif act == 'redteam_immunize':
+                        res = run_adversarial_redteam_and_cross_pollinate(L, settings=settings, use_llm=use_llm, author='redteam-ui')
+                    elif act == 'readiness_audit':
+                        res = run_readiness_and_falsification_audit(L, settings=settings, use_llm=use_llm, author='readiness-ui')
+                    elif act == 'open_ended_rsi':
+                        res = run_open_ended_frontier_rsi(L, settings=settings, use_llm=use_llm, author='open-ended-ui')
+                    elif act == 'ingest_and_attribute':
+                        from ..data.live_flux import ingest_live_forward_bars_and_attribute
+                        res = ingest_live_forward_bars_and_attribute(settings, ledger=L, author='execution-ui', log_episode=True)
                     elif act == 'build_store':
                         from ..data.store_builder import ensure_store_panels
                         res = ensure_store_panels(settings, force=bool(payload.get('force', False)), try_remote=True)
+                    elif act == 'audit_harness':
+                        from ..data.live_flux import audit_harness_and_provenance
+                        res = audit_harness_and_provenance(settings, ledger=L, author='auditor-lead')
+                    elif act == 'sync_live_flux':
+                        from ..data.live_flux import sync_live_flux
+                        res = sync_live_flux(settings, ledger=L)
+                    elif act == 'dry_run_readiness':
+                        from ..data.live_flux import run_dry_run_readiness
+                        res = run_dry_run_readiness(settings, ledger=L, author='auditor-lead')
+                    elif act == 'step_paper_tick':
+                        from ..data.live_flux import step_live_paper_session
+                        res = step_live_paper_session(settings, ledger=L)
                     elif act == 'validate_and_promote':
                         res = validate_and_promote_population(
                             L, settings=settings, desk=desk,
                             max_candidates=int(payload.get('max_candidates', 6)),
                             author='truth-machine-ui',
+                        )
+                    elif act == 'run_funnel':
+                        desks = payload.get('desks') or ([desk] if desk else ['macro', 'perps', 'carry', 'pred'])
+                        res = run_tournament_funnel(
+                            L, settings=settings,
+                            n_agents=int(payload.get('n_agents', 50)),
+                            desks=desks,
+                            use_llm=use_llm,
+                            author='funnel-ui',
+                        )
+                    elif act == 'forward_audit':
+                        res = run_forward_survival_audit(
+                            L, settings=settings,
+                            inject_decay_id=payload.get('inject_decay_id') or None,
+                            author='forward-audit-ui',
                         )
                     elif act == 'start_daemon':
                         res = start_rsi_daemon(
@@ -194,8 +280,9 @@ def serve(settings, port=3000, host='0.0.0.0'):
     def _bg_seed():
         try:
             from ..company.ledger import Ledger
-            from ..company.rsi import ensure_seeded
+            from ..company.rsi import ensure_seeded, start_rsi_daemon
             ensure_seeded(settings, Ledger(settings.ledger))
+            start_rsi_daemon(settings=settings, interval_s=8.0, use_llm=False)
         except Exception:
             pass
 

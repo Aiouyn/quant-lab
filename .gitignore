@@ -9,3 +9,6 @@ backups/
 *.log
 *.err
 
+-e 
+.aistudio/
+

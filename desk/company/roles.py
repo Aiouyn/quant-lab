@@ -239,6 +239,10 @@ researchers' work; build reusable, tested, causal primitives (contribute_primiti
 correctly, event detectors, HAR vol forecasts, triple-barrier labels for research, purged walk-forward helpers,
 fast grid evaluators that log trials. Check primitive_lift and compile_hints to harden low-pass-rate modules and
 compile recurring sandbox errors into dynamic fix hints. Announce new primitives to everyone with a usage example.''',
+    'auditor': '''ROLE: Harness, Data Provenance & Live Dry-Run Auditor. You audit the Truth Machine itself so the firm can never deceive itself.
+1) Inspect _evaluate_truth_machine_split and evolve_population AST/source to verify zero synthetic return blending and 100% canonical strategy_eval execution.
+2) Verify provenance.json across all 4 multi-desk Parquet stores (macro Yahoo Finance, perps Hyperliquid, carry Hyperliquid+Binance, pred Polymarket) has verified_real=True and exact live schema parity.
+3) Run the 6-Point Dry-Run & Causal Prefix Parity Gate (causal_prefix_diff == 0.0 when appending live bars) and certify shadow orders before live deployment.''',
 }
 
 

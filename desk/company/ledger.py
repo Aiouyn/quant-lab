@@ -45,11 +45,15 @@ CREATE TABLE IF NOT EXISTS lineages(child_id TEXT PRIMARY KEY, child_kind TEXT, 
 CREATE TABLE IF NOT EXISTS charter_versions(id TEXT PRIMARY KEY, role TEXT, pod TEXT, patch_text TEXT, rationale TEXT,
   status TEXT DEFAULT 'candidate', drill_planted_score REAL, drill_null_fdr INT DEFAULT 0, error_rate_delta REAL, created REAL);
 CREATE TABLE IF NOT EXISTS rsi_runs(id TEXT PRIMARY KEY, kind TEXT, summary TEXT, metrics TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS rsi_reasoning(id TEXT PRIMARY KEY, created REAL, agent TEXT, desk TEXT, category TEXT,
+  title TEXT, observation TEXT, diagnosis TEXT, hypothesis TEXT, action_taken TEXT, code_snippet TEXT,
+  proof_json TEXT, verdict TEXT);
 CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(kind, ref, title, body, author, tokenize='porter');
 CREATE INDEX IF NOT EXISTS ix_events ON events(created);
 CREATE INDEX IF NOT EXISTS ix_msg ON messages(to_agent, read);
 CREATE INDEX IF NOT EXISTS ix_board ON board(status, pod);
 CREATE INDEX IF NOT EXISTS ix_prim ON primitive_usages(primitive, kind);
+CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 '''
 
 
@@ -358,4 +362,57 @@ class Ledger:
         self.x('INSERT INTO rsi_runs(id,kind,summary,metrics,created) VALUES(?,?,?,?,?)',
                (rid, kind, str(summary)[:2000], json.dumps(metrics or {}, default=str), time.time()))
         return rid
+
+    def log_reasoning(self, agent: str, desk: str, category: str, title: str,
+                      observation: str, diagnosis: str, hypothesis: str,
+                      action_taken: str, code_snippet: str = '', proof: dict | None = None,
+                      verdict: str = 'VERIFIED_LIFT') -> str:
+        rid = _id('R')
+        now = time.time()
+        self.x(
+            'INSERT INTO rsi_reasoning(id,created,agent,desk,category,title,observation,diagnosis,hypothesis,action_taken,code_snippet,proof_json,verdict) '
+            'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                rid, now, str(agent or 'rsi-engine'), str(desk or 'all'), str(category or 'tool_synthesis'),
+                str(title or '')[:300], str(observation or '')[:2000], str(diagnosis or '')[:2000],
+                str(hypothesis or '')[:2000], str(action_taken or '')[:2000], str(code_snippet or '')[:8000],
+                json.dumps(proof or {}, default=str), str(verdict or 'VERIFIED_LIFT'),
+            )
+        )
+        self.index('reasoning', rid, title, f"{observation} {diagnosis} {hypothesis} {action_taken}", agent)
+        return rid
+
+    def reasoning_episodes(self, limit: int = 35, desk: str | None = None) -> list[dict]:
+        sql = 'SELECT * FROM rsi_reasoning'
+        args: list = []
+        if desk and desk != 'all':
+            sql += " WHERE desk IN (?, 'all')"
+            args.append(desk)
+        sql += ' ORDER BY created DESC LIMIT ?'
+        args.append(limit)
+        rows = self.q(sql, tuple(args))
+        for r in rows:
+            if r.get('proof_json'):
+                try:
+                    r['proof'] = json.loads(r['proof_json'])
+                except Exception:
+                    r['proof'] = {}
+            else:
+                r['proof'] = {}
+        return rows
+
+    def reasoning_episode(self, rid: str) -> dict | None:
+        rows = self.q('SELECT * FROM rsi_reasoning WHERE id=?', (rid,))
+        if not rows:
+            return None
+        r = rows[0]
+        if r.get('proof_json'):
+            try:
+                r['proof'] = json.loads(r['proof_json'])
+            except Exception:
+                r['proof'] = {}
+        else:
+            r['proof'] = {}
+        return r
+
 
