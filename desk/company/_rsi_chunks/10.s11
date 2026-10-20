@@ -1,7 +1,0 @@
-"
-            f"{residual_diagnosis['bottleneck_regime']}."
-        ),
-        diagnosis=(
-            "A bounded catalog of 6 fixed primitives eventually saturates. To achieve unbounded SOTA RSI (FunSearch / AlphaEvolve class), "
-            "the engine must sample from a Self-Rewriting Compositional Meta-Grammar (Signal Kernel ∘ Regime Gate ∘ Execution Stabilizer) "
-            "and preserve
