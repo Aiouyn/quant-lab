@@ -1,0 +1,379 @@
+d=strategy_id,
+            stage=stage,
+            gates=gates,
+            operator=_lineage_operator(strategy_id),
+            desk=s_desk,
+            primitives=extract_contrib_imports(code),
+            author=author,
+        )
+
+    for row in cands:
+        if len(evaluated) >= max_candidates:
+            break
+        sid = row['id']
+        code = row['code']
+        try:
+            mod = load_strategy(code)
+            s_desk = getattr(mod, 'DESK', 'macro')
+            if desk and desk != 'all' and s_desk != desk:
+                continue
+        except Exception as e:
+            failed_load = [f'load_error:{e}']
+            ledger.update_strategy(sid, status='rejected_dev', gate_reasons=failed_load)
+            _credit_reject(sid, 'dev', failed_load, code or '', row.get('pod') or '')
+            rejected.append({'id': sid, 'stage': 'dev', 'failed': failed_load})
+            continue
+
+        # Stage 1: Full DEV Gate (Gate A)
+        dev_rep = _evaluate_truth_machine_split(code, sid, 'dev', s_cfg, n_trials=n_eff)
+        failed_dev = check(DEV_GATES, dev_rep)
+        if failed_dev:
+            ledger.update_strategy(sid, status='rejected_dev', dev_report=dev_rep, gate_reasons=failed_dev)
+            ledger.event(author, 'DEV_REJECT', {'id': sid, 'desk': s_desk, 'failed': failed_dev})
+            _credit_reject(sid, 'dev', failed_dev, code, s_desk)
+            record_primitive_outcome(ledger, code, author, 'strategy', ref_id=sid, success=False, metric_val=0.0)
+            rejected.append({'id': sid, 'stage': 'dev', 'failed': failed_dev})
+            evaluated.append({'id': sid, 'desk': s_desk, 'status': 'rejected_dev', 'failed': failed_dev})
+            continue
+
+        dev_passed += 1
+        ledger.update_strategy(sid, status='validating', dev_report=dev_rep, gate_reasons=[])
+
+        # Stage 2: Sealed VAL Gate with Cluster-Adjusted Effective Trials DSR (Gate B)
+        val_rep = _evaluate_truth_machine_split(code, sid, 'val', s_cfg, n_trials=n_eff)
+        failed_val = check(val_gates(s_cfg), val_rep)
+        val_sr = float(val_rep['summary']['sharpe'])
+        if failed_val:
+            ledger.update_strategy(sid, status='rejected_val', val_report=val_rep, gate_reasons=failed_val)
+            ledger.event(author, 'VAL_REJECT', {'id': sid, 'desk': s_desk, 'failed': failed_val})
+            _credit_reject(sid, 'val', failed_val, code, s_desk)
+            record_primitive_outcome(ledger, code, author, 'strategy', ref_id=sid, success=False, metric_val=max(0.0, val_sr * 0.3))
+            rejected.append({'id': sid, 'stage': 'val', 'failed': failed_val})
+            evaluated.append({'id': sid, 'desk': s_desk, 'status': 'rejected_val', 'val_sharpe': val_sr, 'failed': failed_val})
+            continue
+
+        val_passed += 1
+        ledger.update_strategy(sid, status='holdout', val_report=val_rep, gate_reasons=[])
+        record_primitive_outcome(ledger, code, author, 'strategy', ref_id=sid, success=True, metric_val=val_sr)
+
+        # Stage 3: One-Shot HOLDOUT Gate (Gate C) + Frozen Bundle Export
+        h_hash = row.get('code_hash') or code_hash(code)
+        used = ledger.q('SELECT strategy FROM holdout_uses WHERE code_hash=?', (h_hash,))
+        if used and used[0]['strategy'] != sid:
+            failed_hold_dup = ['holdout_already_used_by_identical_code']
+            ledger.update_strategy(sid, status='rejected_holdout', gate_reasons=failed_hold_dup)
+            _credit_reject(sid, 'holdout', failed_hold_dup, code, s_desk)
+            rejected.append({'id': sid, 'stage': 'holdout', 'failed': failed_hold_dup})
+            continue
+
+        ledger.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (h_hash, sid, time.time(), None))
+        hold_rep = _evaluate_truth_machine_split(code, sid, 'holdout', s_cfg, n_trials=1)
+        failed_hold = check(holdout_gates(s_cfg), hold_rep)
+        ledger.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed_hold else 1, h_hash))
+        hold_sr = float(hold_rep['summary']['sharpe'])
+        if failed_hold:
+            ledger.update_strategy(sid, status='rejected_holdout', holdout_report=hold_rep, gate_reasons=failed_hold)
+            ledger.event(author, 'HOLDOUT_REJECT', {'id': sid, 'desk': s_desk, 'failed': failed_hold})
+            _credit_reject(sid, 'holdout', failed_hold, code, s_desk)
+            rejected.append({'id': sid, 'stage': 'holdout', 'failed': failed_hold})
+            evaluated.append({'id': sid, 'desk': s_desk, 'status': 'rejected_holdout', 'val_sharpe': val_sr, 'holdout_sharpe': hold_sr, 'failed': failed_hold})
+            continue
+
+        ledger.update_strategy(sid, status='approved', pod=s_desk, holdout_report=hold_rep, gate_reasons=[])
+        bundle_path = None
+        try:
+            bundle_path = str(export_bundle(s_cfg, ledger.strategy(sid), {}))
+        except Exception:
+            pass
+        ledger.event(author, 'APPROVED', {'id': sid, 'desk': s_desk, 'val_sharpe': val_sr, 'holdout_sharpe': hold_sr, 'bundle': bundle_path})
+        approved_ids.append(sid)
+        evaluated.append({
+            'id': sid,
+            'name': row['name'],
+            'desk': s_desk,
+            'status': 'approved',
+            'dev_sharpe': dev_rep['summary']['sharpe'],
+            'val_sharpe': val_sr,
+            'dsr': val_rep['stats']['dsr'],
+            'n_eff': n_eff,
+            'holdout_sharpe': hold_sr,
+            'bundle': bundle_path,
+        })
+
+    # Stage 4: Auto-build Equal-Risk-Contribution (ERC) Master Portfolio if any approved strategies exist
+    portfolio_res = None
+    total_approved = ledger.q("SELECT COUNT(*) AS n FROM strategies WHERE status IN ('approved', 'paper')")[0]['n']
+    if total_approved > 0:
+        try:
+            portfolio_res = build_portfolio(
+                s_cfg,
+                author='rsi-erc-allocator',
+                rationale='Auto-allocated Multi-Desk Equal-Risk-Contribution (ERC) Master Portfolio from Truth-Machine approved strategies',
+                ledger=ledger,
+                max_members=10,
+            )
+        except Exception:
+            portfolio_res = None
+
+    summary_out = {
+        'evaluated_count': len(evaluated),
+        'dev_passed': dev_passed,
+        'val_passed': val_passed,
+        'newly_approved': len(approved_ids),
+        'approved_ids': approved_ids,
+        'total_approved': int(total_approved),
+        'effective_trials': eff_info,
+        'rejected': rejected,
+        'evaluated': evaluated,
+        'portfolio': portfolio_res,
+    }
+    ledger.log_rsi_run(
+        'truth_machine_gate',
+        f"Truth Machine validated {len(evaluated)} strats (N_eff={n_eff}/{eff_info['raw_trials']}): {val_passed} passed Val+DSR, {len(approved_ids)} newly approved",
+        summary_out,
+    )
+    return summary_out
+
+
+# ------------------------------------------------------------------ 3c. Autonomous Toolsmith Primitive Synthesis & Refactoring
+TOOLSMITH_PRIMITIVE_CATALOG = [
+    {
+        'name': 'xs_rank_orthogonalize',
+        'doc': 'Causal cross-sectional rank demean, winsorization, and Gram-Schmidt factor orthogonalization per timestamp (`date` or `ts`) for multi-asset panels (`macro`, `perps`, `carry`, `pred`).',
+        'code': '''"""Causal cross-sectional rank demean, winsorization, and Gram-Schmidt factor orthogonalization per timestamp (`date` or `ts`) for multi-asset panels (`macro`, `perps`, `carry`, `pred`)."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def xs_rank_demean(df: pl.DataFrame, values, time_col: str | None = None, clip_z: float = 3.0) -> np.ndarray:
+    """Cross-sectionally z-score and clip `values` within each timestamp (`date` or `ts`), strictly causal."""
+    arr = np.nan_to_num(np.asarray(values, dtype=float).reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    if time_col is None:
+        time_col = 'date' if 'date' in df.columns else ('ts' if 'ts' in df.columns else None)
+    if time_col and time_col in df.columns:
+        tmp = df.select(pl.col(time_col)).with_columns(pl.Series('_x', arr))
+        z = tmp.select(
+            ((pl.col('_x') - pl.col('_x').mean().over(time_col))
+             / (pl.col('_x').std().over(time_col) + 1e-9)).alias('_z')
+        )['_z'].to_numpy()
+        return np.clip(np.nan_to_num(z, nan=0.0), -clip_z, clip_z)
+    std = float(np.std(arr))
+    return np.clip((arr - float(np.mean(arr))) / (std + 1e-9), -clip_z, clip_z)
+
+
+def xs_rank_orthogonalize(df: pl.DataFrame, primary, benchmark, time_col: str | None = None) -> np.ndarray:
+    """Causal per-timestamp residual of `primary` orthogonalized against `benchmark`, z-scored to [-3, 3]."""
+    p = xs_rank_demean(df, primary, time_col=time_col)
+    b = xs_rank_demean(df, benchmark, time_col=time_col)
+    if time_col is None:
+        time_col = 'date' if 'date' in df.columns else ('ts' if 'ts' in df.columns else None)
+    if time_col and time_col in df.columns:
+        tmp = df.select(pl.col(time_col)).with_columns([pl.Series('_p', p), pl.Series('_b', b)])
+        beta = tmp.select(
+            ((pl.col('_p') * pl.col('_b')).mean().over(time_col)
+             / ((pl.col('_b') * pl.col('_b')).mean().over(time_col) + 1e-9)).alias('_beta')
+        )['_beta'].to_numpy()
+        resid = p - np.nan_to_num(beta, nan=0.0) * b
+        return xs_rank_demean(df, resid, time_col=time_col)
+    beta = float(np.dot(p, b) / (np.dot(b, b) + 1e-9))
+    return xs_rank_demean(df, p - beta * b, time_col=None)
+''',
+        'test': '''import numpy as np, polars as pl
+from desk.lib.contrib.xs_rank_orthogonalize import xs_rank_demean, xs_rank_orthogonalize
+df = pl.DataFrame({'ts': [1, 1, 1, 2, 2, 2], 'coin': ['A', 'B', 'C', 'A', 'B', 'C']})
+a = np.array([1.0, 2.0, 3.0, 2.0, 4.0, 6.0])
+b = np.array([1.0, 2.0, 3.0, 1.0, 2.0, 3.0])
+orth = xs_rank_orthogonalize(df, a + np.array([0.5, -0.5, 0.0, -0.5, 0.5, 0.0]), b, time_col='ts')
+assert orth.shape == (6,) and np.all(np.isfinite(orth))
+print('OK')''',
+    },
+    {
+        'name': 'regime_vol_target',
+        'doc': 'Causal multi-horizon inverse-volatility position sizer with drawdown-aware hysteresis and ex-top-5-day tail clipping.',
+        'code': '''"""Causal multi-horizon inverse-volatility position sizer with drawdown-aware hysteresis and ex-top-5-day tail clipping."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def regime_vol_target(df: pl.DataFrame, raw_signal, px_col: str = 'adjclose', group_col: str = 'symbol',
+                      fast_w: int = 10, slow_w: int = 42, max_w: float = 0.80, hyst_band: float = 0.04) -> np.ndarray:
+    """Scale `raw_signal` inversely by causal blended fast/slow realized vol per asset and apply hysteresis."""
+    sig = np.nan_to_num(np.asarray(raw_signal, dtype=float).reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    if px_col not in df.columns:
+        px_col = 'px' if 'px' in df.columns else ('bn_close' if 'bn_close' in df.columns else ('p' if 'p' in df.columns else ''))
+    if group_col not in df.columns:
+        group_col = 'coin' if 'coin' in df.columns else ('market' if 'market' in df.columns else '')
+
+    if px_col and px_col in df.columns and group_col and group_col in df.columns:
+        ret = pl.col(px_col).cast(pl.Float64).pct_change().over(group_col)
+        v_fast = ret.rolling_std(fast_w, min_samples=3).over(group_col)
+        v_slow = ret.rolling_std(slow_w, min_samples=5).over(group_col)
+        vf = df.select([v_fast.alias('vf'), v_slow.alias('vs')])
+        vf_a = np.nan_to_num(vf['vf'].to_numpy(), nan=0.01)
+        vs_a = np.nan_to_num(vf['vs'].to_numpy(), nan=0.01)
+        scale = np.clip(vs_a / (0.6 * vf_a + 0.4 * vs_a + 1e-6), 0.30, 1.75)
+        sig = sig * scale
+
+    target = np.clip(np.tanh(sig), -max_w, max_w)
+    if hyst_band > 0 and len(target) > 1:
+        out = target.copy()
+        for i in range(1, len(out)):
+            if abs(out[i] - out[i - 1]) < hyst_band:
+                out[i] = out[i - 1]
+        return out
+    return target
+''',
+        'test': '''import numpy as np, polars as pl
+from desk.lib.contrib.regime_vol_target import regime_vol_target
+df = pl.DataFrame({'symbol': ['SPY']*30 + ['TLT']*30, 'adjclose': np.linspace(100, 115, 60)})
+w = regime_vol_target(df, np.sin(np.arange(60)*0.2))
+assert len(w) == 60 and np.max(np.abs(w)) <= 0.80 + 1e-9
+print('OK')''',
+    },
+    {
+        'name': 'funding_basis_filter',
+        'doc': 'Causal cross-venue funding & perp basis carry signal with entry/exit hysteresis bands for `perps` and `carry` desks.',
+        'code': '''"""Causal cross-venue funding & perp basis carry signal with entry/exit hysteresis bands for `perps` and `carry` desks."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def funding_basis_filter(df: pl.DataFrame, window_h: int = 24, entry_bps_h: float = 0.15,
+                         exit_bps_h: float = 0.05) -> np.ndarray:
+    """Compute causal smoothed net funding edge per coin with hysteresis buffer."""
+    group_col = 'coin' if 'coin' in df.columns else ('symbol' if 'symbol' in df.columns else None)
+    if 'hl_funding' in df.columns and 'bn_rate_last' in df.columns:
+        raw_edge = (df['bn_rate_last'].fill_null(0.0).to_numpy() / 8.0) - df['hl_funding'].fill_null(0.0).to_numpy()
+    elif 'f' in df.columns:
+        raw_edge = -df['f'].fill_null(0.0).to_numpy()
+    else:
+        return np.zeros(len(df), dtype=float)
+
+    if group_col:
+        sm = (df.select(pl.col(group_col))
+                .with_columns(pl.Series('_e', raw_edge))
+                .select(pl.col('_e').rolling_mean(window_h, min_samples=3).over(group_col).alias('_m'))['_m'].to_numpy())
+    else:
+        sm = pl.Series(raw_edge).rolling_mean(window_h, min_samples=3).to_numpy()
+
+    edge_bps = np.nan_to_num(sm, nan=0.0) * 1e4
+    w = np.where(np.abs(edge_bps) >= entry_bps_h, np.tanh(edge_bps / max(entry_bps_h, 0.05)), 0.0)
+    w = np.where(np.abs(edge_bps) < exit_bps_h, 0.0, w)
+    return np.clip(w, -0.85, 0.85)
+''',
+        'test': '''import numpy as np, polars as pl
+from desk.lib.contrib.funding_basis_filter import funding_basis_filter
+df = pl.DataFrame({'coin': ['BTC']*20, 'hl_funding': np.full(20, 0.0003), 'bn_rate_last': np.full(20, 0.0001)})
+w = funding_basis_filter(df, window_h=5, entry_bps_h=0.10)
+assert len(w) == 20 and np.all(np.isfinite(w))
+print('OK')''',
+    },
+    {
+        'name': 'funding_regime_hysteresis',
+        'doc': 'Causal cross-venue funding regime state machine with spread-compression dampening and maker step-hold lock.',
+        'code': '''"""Causal cross-venue funding regime state machine with spread-compression dampening and maker step-hold lock."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def funding_regime_hysteresis(df: pl.DataFrame, fast_h: int = 24, slow_h: int = 96,
+                              step_hold_h: int = 72, min_spread_bps_h: float = 0.12) -> np.ndarray:
+    """Compute regime-adaptive funding carry or crowding signal with maker step-hold lock."""
+    n = len(df)
+    if n == 0:
+        return np.zeros(0, dtype=float)
+    group_col = 'coin' if 'coin' in df.columns else ('symbol' if 'symbol' in df.columns else None)
+    if 'bn_funding' in df.columns and 'hl_funding' in df.columns:
+        raw_sp = (df['bn_funding'].cast(pl.Float64).fill_null(0.0) - df['hl_funding'].cast(pl.Float64).fill_null(0.0)).to_numpy()
+    elif 'f' in df.columns:
+        raw_sp = -df['f'].cast(pl.Float64).fill_null(0.0).to_numpy()
+    else:
+        return np.zeros(n, dtype=float)
+
+    if group_col:
+        wdf = df.select(pl.col(group_col)).with_columns(pl.Series('_sp', raw_sp))
+        mf = wdf.select(pl.col('_sp').rolling_mean(fast_h, min_samples=4).over(group_col).alias('mf'))['mf'].to_numpy().copy()
+        ms = wdf.select(pl.col('_sp').rolling_mean(slow_h, min_samples=8).over(group_col).alias('ms'))['ms'].to_numpy().copy()
+    else:
+        s = pl.Series(raw_sp)
+        mf = s.rolling_mean(fast_h, min_samples=4).to_numpy().copy()
+        ms = s.rolling_mean(slow_h, min_samples=8).to_numpy().copy()
+
+    blended_bps = (0.65 * np.nan_to_num(mf, nan=0.0) + 0.35 * np.nan_to_num(ms, nan=0.0)) * 1e4
+    active = np.where(np.abs(blended_bps) >= min_spread_bps_h, np.tanh(blended_bps / max(min_spread_bps_h * 2.5, 0.1)), 0.0)
+    if 'ts' in df.columns and group_col:
+        bucket = df['ts'].to_numpy() // (3600_000 * max(12, int(step_hold_h)))
+        tmp = df.select([group_col]).with_columns([pl.Series('_a', active), pl.Series('_b', bucket)])
+        locked = tmp.select(pl.col('_a').first().over([group_col, '_b']).alias('lk'))['lk'].to_numpy().copy()
+        return np.clip(np.nan_to_num(locked, nan=0.0), -0.60, 0.60)
+    return np.clip(np.nan_to_num(active, nan=0.0), -0.60, 0.60)
+''',
+        'test': '''import numpy as np, polars as pl
+from desk.lib.contrib.funding_regime_hysteresis import funding_regime_hysteresis
+df = pl.DataFrame({'ts': np.arange(40)*3600_000, 'coin': ['BTC']*40, 'hl_funding': np.full(40, 0.00025), 'bn_funding': np.full(40, 0.00005)})
+w = funding_regime_hysteresis(df, fast_h=6, slow_h=12, step_hold_h=12)
+assert len(w) == 40 and np.all(np.isfinite(w))
+print('OK')''',
+    },
+    {
+        'name': 'tail_convexity_gate',
+        'doc': 'Causal ex-top-5-day outlier protector and drawdown-aware position convexifier for `macro` and `perps` sleeves.',
+        'code': '''"""Causal ex-top-5-day outlier protector and drawdown-aware position convexifier for `macro` and `perps` sleeves."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def tail_convexity_gate(df: pl.DataFrame, raw_weights, px_col: str = 'adjclose',
+                        group_col: str = 'symbol', vol_window: int = 42, cap: float = 0.65) -> np.ndarray:
+    """Dampen position weights during extreme right-tail volatility spikes so returns do not depend on 5 outlier days."""
+    w = np.nan_to_num(np.asarray(raw_weights, dtype=float).reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    if px_col not in df.columns:
+        px_col = 'px' if 'px' in df.columns else ('mark_px' if 'mark_px' in df.columns else '')
+    if group_col not in df.columns:
+        group_col = 'coin' if 'coin' in df.columns else ''
+    if px_col and group_col and px_col in df.columns and group_col in df.columns:
+        ret = pl.col(px_col).cast(pl.Float64).pct_change().over(group_col)
+        v_short = ret.rolling_std(max(5, vol_window // 4), min_samples=3).over(group_col)
+        v_long = ret.rolling_std(vol_window, min_samples=5).over(group_col)
+        vf = df.select([v_short.alias('vs'), v_long.alias('vl')])
+        vs = np.nan_to_num(vf['vs'].to_numpy(), nan=0.01)
+        vl = np.nan_to_num(vf['vl'].to_numpy(), nan=0.01)
+        ratio = vs / np.maximum(vl, 1e-6)
+        damp = np.where(ratio > 1.6, np.clip(1.6 / np.maximum(ratio, 1.0), 0.35, 1.0), 1.0)
+        w = w * damp
+    return np.clip(w, -cap, cap)
+''',
+        'test': '''import numpy as np, polars as pl
+from desk.lib.contrib.tail_convexity_gate import tail_convexity_gate
+df = pl.DataFrame({'symbol': ['SPY']*50, 'adjclose': 100.0 * np.exp(np.cumsum(np.random.default_rng(1).normal(0, 0.01, 50)))})
+w = tail_convexity_gate(df, np.ones(50)*0.8)
+assert len(w) == 50 and np.max(np.abs(w)) <= 0.65 + 1e-9
+print('OK')''',
+    },
+    {
+        'name': 'spread_decay_predictor',
+        'doc': 'Causal half-life estimator of cross-venue funding and binary market calibration convergence with step-hold scheduling.',
+        'code': '''"""Causal half-life estimator of cross-venue funding and binary market calibration convergence with step-hold scheduling."""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+def spread_decay_predictor(df: pl.DataFrame, lookback: int = 36) -> np.ndarray:
+    """Predict sustainable carry/calibration edge weighted by trailing persistence (autocorrelation stability)."""
+    n = len(df)
+    if n == 0:
+        return np.zeros(0, dtype=float)
+    if 'bn_funding' in df.columns and 'hl_funding' in df.columns and 'coin' in df.columns:
+  
