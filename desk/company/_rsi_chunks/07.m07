@@ -1,0 +1,31 @@
+('pod') or 'macro')
+        for r in active_rows
+        if ('cross_desk_tail_immunizer_v1' in (r.get('code') or '')) or ('tail_convexity_gate' in (r.get('code') or ''))
+    }
+    superseded_ids = []
+    seen_desk_sigs: dict[str, set[tuple]] = {}
+    desk_counts: dict[str, int] = {}
+
+    for r in list(active_rows):
+        sid = r['id']
+        dk = r.get('pod') or 'macro'
+        code = r.get('code') or ''
+        vrep = json.loads(r['val_report']) if isinstance(r.get('val_report'), str) and r.get('val_report') else (r.get('val_report') or {})
+        frep = json.loads(r['forward_report']) if isinstance(r.get('forward_report'), str) and r.get('forward_report') else (r.get('forward_report') or {})
+
+        if not frep or not (frep.get('summary') or {}).get('sharpe'):
+            frep = _evaluate_truth_machine_split(code, sid, 'forward', s_cfg, n_trials=4)
+            ledger.update_strategy(sid, forward_report=frep)
+            r['forward_report'] = frep
+
+        val_sr = round(float((vrep.get('summary') or {}).get('sharpe') or 1.20), 2)
+        fwd_sr = round(float((frep.get('summary') or {}).get('sharpe') or val_sr), 2)
+        sig = (dk, val_sr, fwd_sr)
+
+        if dk == 'macro' and dk in immunized_desks and ('tail_convexity_gate' not in code) and ('cross_desk_tail_immunizer_v1' not in code):
+            ledger.update_strategy(sid, status='superseded_immunized', gate_reasons=['superseded_by_cross_desk_immunized_child'])
+            superseded_ids.append(sid)
+            continue
+
+        if sig in seen_desk_sigs.get(dk, set()) or desk_counts.get(dk, 0) >= 2:
+            ledger.update_strategy(sid, status='superseded_duplicate', gate_reasons=['deduplicated_collinear_clon
