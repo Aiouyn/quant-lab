@@ -1,0 +1,43 @@
+on',
+        f"4-Gate Readiness Certification: {passed_cells}/{total_cells} cells passed ({readiness_score_pct:.1f}%) | {verdict_str}",
+        out,
+    )
+    return out
+
+
+# ------------------------------------------------------------------ Phase 9: Open-Ended Unbounded Frontier SOTA RSI Engine
+OPEN_ENDED_GRAMMAR_SPEC = {
+    'signal_kernels': [
+        {
+            'id': 'kalman_velocity_diff',
+            'label': 'Causal Multi-Horizon EWMA Velocity & Acceleration Kernel',
+            'formula': 'K(x) = tanh((ewm_fast(x) - ewm_slow(x) + α·Δewm_fast(x)) / (σ_ewm + ε))',
+            'prior_weight': 0.28,
+        },
+        {
+            'id': 'hyperbolic_crowding_decay',
+            'label': 'Asymmetric Hyperbolic Crowding & Funding Decay Kernel',
+            'formula': 'K(x) = tanh(z / τ) · exp(-λ · max(0, |z| - z_crit))',
+            'prior_weight': 0.26,
+        },
+        {
+            'id': 'dispersion_rank_ortho',
+            'label': 'Cross-Sectional Dispersion Rank Orthogonalizer',
+            'formula': 'K(x) = (x - median_t(x)) / (mad_t(x) + ε) - β · mean_t(x)',
+            'prior_weight': 0.24,
+        },
+        {
+            'id': 'vol_of_vol_convexity',
+            'label': 'Realized Vol-of-Vol Convexity Regime Amplifier',
+            'formula': 'K(x) = x / (1 + γ · std_w(std_s(r_t)) / mean_w(std_s(r_t)))',
+            'prior_weight': 0.22,
+        },
+    ],
+    'regime_gates': [
+        {
+            'id': 'drawdown_entropy_shield',
+            'label': 'Causal Local Drawdown & Sign-Entropy Shield',
+            'formula': 'G(w) = w · clip(1 - dd_local / dd_cap, 0.35, 1.0) · (1 - 0.25·H_sign)',
+            'prior_weight': 0.36,
+        },
+ 

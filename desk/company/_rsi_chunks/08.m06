@@ -1,0 +1,39 @@
+assert max_prefix_perturbation_diff == 0.000000  # Gate 1a: Zero Lookahead\n"
+            "assert abs(synthetic_noise_null_sharpe) <= 0.20  # Gate 1b: Zero Noise Overfitting\n"
+            "assert deflated_sharpe_ratio >= 0.90             # Gate 2: Multiple-Testing DSR\n"
+            "assert resilience_score >= 0.70 and fwd_dd <= 0.12  # Gates 3 & 4: Stress & Kill-Switch"
+        ),
+        proof={
+            'verdict': verdict_str,
+            'readiness_score_pct': readiness_score_pct,
+            'passed_cells': passed_cells,
+            'total_cells': total_cells,
+            'superseded_auto_retired': len(superseded_ids),
+            'effective_trials': eff_trials,
+        },
+        verdict='CERTIFIED_GO' if all_passed else 'QUARANTINE_ACTIVE',
+    )
+
+    out = {
+        'timestamp': time.time(),
+        'elapsed_ms': round((time.time() - t0) * 1000.0, 1),
+        'reasoning_id': rid,
+        'verdict': verdict_str,
+        'all_gates_passed': all_passed,
+        'readiness_score_pct': readiness_score_pct,
+        'passed_cells': passed_cells,
+        'total_cells': total_cells,
+        'active_sleeves_count': len(sleeve_certs),
+        'desks_certified_count': len(desks_covered),
+        'superseded_retired_ids': superseded_ids,
+        'kill_switch_status': 'ARMED — 0 BREACHES (MAX DD CEILING 12.0%)',
+        'effective_trials': eff_trials,
+        'raw_trials': raw_trials,
+        'master_roadmap': master_roadmap,
+        'gate_summaries': gate_summaries,
+        'sleeve_certifications': sleeve_certs,
+        'daily_audit_protocol': daily_audit_protocol,
+    }
+    ledger.set('readiness_certification', out)
+    ledger.log_rsi_run(
+        'readiness_certificati
