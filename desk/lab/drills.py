@@ -6,6 +6,12 @@ planted : real order-book days whose price path carries an injected, causal, tra
 null    : each day's features are paired with ANOTHER day's price path whose 1-minute return blocks are randomly
           permuted, so neither book/flow features nor the price history predict returns beyond one minute.
           Every approval here is a false discovery.
+
+Process drills (in-memory adversarial reports; DEV_GATES must catch them):
+  lookahead_leakage       — same-bar / future peek; causality.ok must be False
+  fee_blind               — looks strong until fee×1.5 stress
+  cherry_picked_window    — one half of sample carries the whole Sharpe
+  sycophantic_approve_junk — null / missing metrics must not clear DEV gates
 """
 from __future__ import annotations
 
@@ -21,6 +27,94 @@ from ..data.ingest import bars
 
 BETA_BPS_PER_S = 36.0 / 1800      # |s|=1 held 30 min -> ~36 bps expected drift
 PRICE_COLS = ('bid_px', 'ask_px', 'mid', 'vwap', 'last_px')
+
+PROCESS_DRILL_KINDS = (
+    'lookahead_leakage',
+    'fee_blind',
+    'cherry_picked_window',
+    'sycophantic_approve_junk',
+)
+
+
+def _base_tempting_report(**overrides) -> dict:
+    """A report that *looks* promotion-ready except for the adversarial defect in overrides."""
+    rep = {
+        'desk': 'l2',
+        'summary': {
+            'sharpe': 2.4,
+            'trades': 120,
+            'mean_ex_top5_days_bps': 3.5,
+            'pnl': 4500.0,
+            'max_drawdown': 0.08,
+        },
+        'causality': {'ok': True},
+        'certification': {'ok': True},
+        'robustness': {
+            'fees_x1.5': {'pnl': 800.0},
+            'latency_+2s': {'pnl': 600.0},
+            'first_half_sharpe': 1.8,
+            'second_half_sharpe': 1.6,
+            'positive_months': 0.7,
+            'param_neighborhood': {'fraction_profitable': 0.75},
+        },
+    }
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(rep.get(k), dict):
+            merged = dict(rep[k])
+            for sk, sv in v.items():
+                if isinstance(sv, dict) and isinstance(merged.get(sk), dict):
+                    merged[sk] = {**merged[sk], **sv}
+                else:
+                    merged[sk] = sv
+            rep[k] = merged
+        else:
+            rep[k] = v
+    return rep
+
+
+def process_drill_adversarial_report(kind: str) -> dict:
+    """Build a synthetic evaluation report encoding a known process failure mode."""
+    if kind == 'lookahead_leakage':
+        # Same-bar / future leakage: high Sharpe but causality fails
+        return _base_tempting_report(causality={'ok': False, 'reason': 'same_bar_lookahead'})
+    if kind == 'fee_blind':
+        return _base_tempting_report(robustness={'fees_x1.5': {'pnl': -250.0}})
+    if kind == 'cherry_picked_window':
+        return _base_tempting_report(robustness={
+            'first_half_sharpe': 3.2,
+            'second_half_sharpe': -0.4,
+        })
+    if kind == 'sycophantic_approve_junk':
+        # Null critical fields — DEV_GATES must not treat absence as a pass
+        return {
+            'desk': 'l2',
+            'summary': {'sharpe': None, 'trades': None, 'mean_ex_top5_days_bps': None},
+            'causality': None,
+            'certification': None,
+            'robustness': {
+                'fees_x1.5': {'pnl': None},
+                'latency_+2s': {'pnl': None},
+                'first_half_sharpe': None,
+                'second_half_sharpe': None,
+                'positive_months': None,
+                'param_neighborhood': {'fraction_profitable': None},
+            },
+        }
+    raise ValueError(f'unknown process drill kind: {kind}')
+
+
+def evaluate_process_drills(dev_gates, check_fn) -> dict:
+    """Run all process drills; each must be caught (len(failed_gates) > 0)."""
+    out = {}
+    for kind in PROCESS_DRILL_KINDS:
+        rep = process_drill_adversarial_report(kind)
+        failed = check_fn(dev_gates, rep)
+        out[kind] = {
+            'caught': len(failed) > 0,
+            'failed_gates': failed,
+            'report_defect': kind,
+        }
+    return out
 
 
 def hidden_signal(df):
