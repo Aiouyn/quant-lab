@@ -1,0 +1,29 @@
+/logging.",
+    ),
+    (
+        r"ShapeError:.*unable to broadcast|lengths don't match|shape mismatch",
+        r"ShapeError:.*(broadcast|length|shape)",
+        "Polars ShapeError: never mix filtered Series with the full panel; compute window/group expressions inside `panel.with_columns(<expr>.over('symbol'))` so row count stays identical.",
+    ),
+    (
+        r"TypeError:.*unsupported operand type.*'Expr'",
+        r"TypeError:.*'Expr'",
+        "Cannot mix Polars `pl.Expr` (`pl.col(...)`) with NumPy/Python functions directly: evaluate expressions via `df.select(<expr>).to_series().to_numpy()` first, or keep all ops as Polars expressions.",
+    ),
+    (
+        r"KeyError:.*['\"](w|lookback|horizon|entry|exit|threshold|vol_window)['\"]",
+        r"KeyError:.*['\"](w|lookback|horizon|entry|exit|threshold|vol_window)['\"]",
+        "Strategy/factor `params` missing key: always read parameters with defaults via `params.get('w', 20)` and declare all defaults in module-level `PARAMS = {...}`.",
+    ),
+    (
+        r"ValueError:.*Input X contains (NaN|infinity)|LightGBMError.*(NaN|inf)",
+        r"(ValueError:.*Input X contains|LightGBMError)",
+        "ML fit() received NaN or Inf features/labels: wrap feature matrices in `np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)` and filter `ok = np.isfinite(y)` before fitting.",
+    ),
+    (
+        r"ZeroDivisionError",
+        r"ZeroDivisionError",
+        "ZeroDivisionError in signal/factor calculation: add `+ 1e-9` to all rolling standard deviations, volume sums, and depth denominators.",
+    ),
+    (
+        r"IndexError:.*
