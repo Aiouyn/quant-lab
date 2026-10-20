@@ -1,6 +1,0 @@
-'portfolio_sharpe': round(portfolio_sharpe, 2) if portfolio_sharpe is not None else None,
-        'valid_discoveries': approved_count,
-        'val_passed': tm_res.get('val_passed'),
-        'newly_approved': newly_approved,
-        'newly_approved_val_sharpe_mean': round(float(np.mean(new_val)), 2) if new_val else None,
-        'newly_approved_holdout_sharpe_mean': round(float(np.mean(new_hold)),
