@@ -1,0 +1,38 @@
+
+        vsr = _report_sharpe(sr_row.get('val_report'))
+        if vsr is not None:
+            val_sharpes.append(vsr)
+        hsr = _report_sharpe(sr_row.get('holdout_report'))
+        if hsr is not None:
+            hold_sharpes.append(hsr)
+        if sr_row.get('status') in ('approved', 'paper'):
+            approved_count += 1
+
+    newly_ids = list(tm_res.get('approved_ids') or [])
+    new_val: list[float] = []
+    new_hold: list[float] = []
+    for sid in newly_ids:
+        st = ledger.strategy(sid) or {}
+        vsr = _report_sharpe(st.get('val_report'))
+        if vsr is not None:
+            new_val.append(vsr)
+        hsr = _report_sharpe(st.get('holdout_report'))
+        if hsr is not None:
+            new_hold.append(hsr)
+
+    port_rep = ((tm_res.get('portfolio') or {}).get('report') or {})
+    port_sr_raw = port_rep.get('sharpe') if isinstance(port_rep, dict) else None
+    try:
+        portfolio_sharpe = float(port_sr_raw) if port_sr_raw is not None else None
+    except (TypeError, ValueError):
+        portfolio_sharpe = None
+
+    prims = primitive_lift_leaderboard(ledger)
+    prims_obs = [p for p in prims if int(p.get('total_uses') or 0) > 0]
+    mean_lift = round(float(np.mean([p['composite_lift'] for p in prims_obs])), 3) if prims_obs else None
+    bandit_top = operator_bandit_leaderboard(ledger)
+    top_op = bandit_top[0]['operator'] if bandit_top else None
+
+    planted = drill_res.get('planted_signal_corr')
+    null_fdr = drill_res.get('null_false_discoveries')
+    drill_verdict = drill_res.get('verdict')  # None when drill not run — never default PROMOT
