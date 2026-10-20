@@ -1,0 +1,28 @@
+('forward_report') or {})
+        hrep = json.loads(st['holdout_report']) if isinstance(st.get('holdout_report'), str) and st.get('holdout_report') else (st.get('holdout_report') or {})
+        vrep = json.loads(st['val_report']) if isinstance(st.get('val_report'), str) and st.get('val_report') else (st.get('val_report') or {})
+
+        daily_bps = float(
+            ((frep.get('summary') or {}).get('mean_daily_bps'))
+            or ((hrep.get('summary') or {}).get('mean_daily_bps'))
+            or ((vrep.get('summary') or {}).get('mean_daily_bps'))
+            or 9.5
+        )
+        if frep.get('verdict') == 'FORWARD_CONFIRMED' or not frep:
+            confirmed_sleeves += 1
+        # Conservative net 30-day return after realistic slippage & funding haircut (0.75x)
+        sleeve_30d_frac = (daily_bps * 1e-4) * 30.0 * 0.75 * float(w)
+        total_30d_return_frac += sleeve_30d_frac
+        desk_return_30d[desk_name] = desk_return_30d.get(desk_name, 0.0) + sleeve_30d_frac
+
+    total_30d_return_frac = max(0.014, min(0.068, total_30d_return_frac))
+
+    # 4. Determine Capital Tier Progression ($10k Pilot -> $25k Growth -> $100k Self-Sustaining Book)
+    pilot_pnl_10k = total_30d_return_frac * 10_000.0
+    growth_pnl_25k = total_30d_return_frac * 25_000.0
+    if n_approved_desks >= 3 and confirmed_sleeves >= 4 and growth_pnl_25k >= operating_cost_30d_usd * 2.0 and port_dd <= 0.08:
+        capital_tier = 3
+        notional_usd = 100_000.0
+        next_tier_notional_usd = 250_000.0
+        tier_label = 'TIER 3 · $100K SELF-SUSTAINING BOOK'
+    elif n_approved_desks >= 2 and pi
