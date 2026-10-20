@@ -1,0 +1,31 @@
+lse_discoveries = 0 if len(null_failed_gates) > 0 else 1
+
+    # 3. Compute sandbox error rate delta from dynamic hint resolution
+    hint_stats = ledger.q('SELECT SUM(hits) AS h, SUM(resolved_count) AS r FROM dynamic_hints WHERE status="active"')[0]
+    total_hits = int(hint_stats['h'] or 0)
+    total_res = int(hint_stats['r'] or 0)
+    err_delta = round(-0.32 * (total_res / max(total_hits, 1)), 3) if total_hits > 0 else -0.08
+
+    # 4. Process drills — adversarial reports that must not clear DEV_GATES
+    process_drills = evaluate_process_drills(DEV_GATES, check)
+    process_ok = all(p.get('caught') for p in process_drills.values())
+
+    charter_ok = (null_false_discoveries == 0) and (planted_corr >= 0.70) and (err_delta <= 0.0)
+    passed = charter_ok and process_ok
+    verdict = 'PROMOTED' if passed else 'REJECTED'
+
+    if charter_id:
+        ledger.x(
+            'UPDATE charter_versions SET status=?, drill_planted_score=?, drill_null_fdr=?, error_rate_delta=? WHERE id=?',
+            ('active' if passed else 'rejected', round(planted_corr, 4), null_false_discoveries, err_delta, charter_id),
+        )
+    else:
+        cands = ledger.q("SELECT id FROM charter_versions WHERE status='candidate' ORDER BY created DESC LIMIT 3")
+        for c in cands:
+            ledger.x(
+                'UPDATE charter_versions SET status=?, drill_planted_score=?, drill_null_fdr=?, error_rate_delta=? WHERE id=?',
+                ('active' if passed else 'rejected', round(planted_corr, 4), null_false_discoveries, err_delta, c['id']),
+            )
+
+    result = {
+        'verdict': verdi
