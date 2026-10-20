@@ -67,6 +67,7 @@ class PerpsStore:
     def splits(self):
         f = self.root / 'splits.json'
         if not f.exists():
+            self.root.mkdir(parents=True, exist_ok=True)
             f.write_text(json.dumps(SPLITS, indent=1))
         return json.loads(f.read_text())
 
