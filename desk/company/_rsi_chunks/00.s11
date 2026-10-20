@@ -1,0 +1,27 @@
+'portfolio_sharpe': round(portfolio_sharpe, 2) if portfolio_sharpe is not None else None,
+        'valid_discoveries': approved_count,
+        'val_passed': tm_res.get('val_passed'),
+        'newly_approved': newly_approved,
+        'newly_approved_val_sharpe_mean': round(float(np.mean(new_val)), 2) if new_val else None,
+        'newly_approved_holdout_sharpe_mean': round(float(np.mean(new_hold)), 2) if new_hold else None,
+        'total_approved': tm_res.get('total_approved', approved_count),
+        'top_operator': top_op,
+        'children_bred': len(bred_children or []),  # telemetry only — not a success metric
+        'primitives_evolved': prim_res.get('primitives_evolved'),
+        'mean_primitive_lift': mean_lift,
+        'active_hints': hint_res.get('active_dynamic_hints'),
+        'hint_resolution_rate': round(float(res_rate), 3) if res_rate is not None else None,
+        'planted_signal_corr': planted if planted is not None else None,
+        'null_false_discoveries': null_fdr if null_fdr is not None else None,
+        'drill_verdict': drill_verdict,
+        'generation_fitness': generation_fitness,
+        'llm_mode': 'deepseek-v4.1-flash-free' if use_llm else 'ast_deterministic',
+    }
+
+
+# ------------------------------------------------------------------ 2. Automated Error-to-Hint Compiler
+ERROR_SYNTHESIS_TEMPLATES = [
+    (
+        r"InvalidOperationError:.*rolling_.*window|rolling_mean.*min_samples|rolling_std.*min_samples",
+        r"InvalidOperationError:.*rolling_",
+        "Polars rolling functions require integer row counts (not time strings on numeric
