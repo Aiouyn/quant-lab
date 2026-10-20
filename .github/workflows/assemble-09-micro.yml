@@ -1,0 +1,34 @@
+name: assemble-09-micro
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/assemble-09-micro.yml'
+      - 'desk/company/_rsi_chunks/09.m11'
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/honest-rsi-scoreboard
+      - name: Concat micro parts into 09.part
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path('desk/company/_rsi_chunks')
+          parts = [(root / f'09.m{i:02d}').read_bytes() for i in range(12)]
+          data = b''.join(parts)
+          assert len(data) == 20022, len(data)
+          assert hashlib.sha256(data).hexdigest() == '5d88881ee2feb3d395021622cdbaddb7da128c81505e4faa1f4e945458f39733'
+          (root / '09.part').write_bytes(data)
+          print('WROTE', len(data), hashlib.sha256(data).hexdigest())
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desk/company/_rsi_chunks/09.part
+          git commit -m "fix: restore 09.part from verified micro parts" || echo "no change"
+          git push origin HEAD:feat/honest-rsi-scoreboard
