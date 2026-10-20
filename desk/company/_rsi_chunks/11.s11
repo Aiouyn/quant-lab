@@ -1,7 +1,0 @@
- = settings or SETTINGS
-    n_agents = max(12, int(n_agents or 50))
-    n_scouts = max(8, int(round(n_agents * 0.64)))      # 32 at 50 agents
-    n_clusterers = max(2, int(round(n_agents * 0.20)))  # 10 at 50 agents
-    n_officers = max(2, n_agents - n_scouts - n_clusterers)  # 8 at 50 agents
-
-    target_desks = [d for d in (desks or ['macro', 'perps', 'carry', 'pred']) if d in ('macro', 'perps', 
