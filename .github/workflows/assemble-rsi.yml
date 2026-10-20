@@ -1,0 +1,36 @@
+name: assemble-rsi
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'desk/company/_rsi_chunks/**'
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/honest-rsi-scoreboard
+      - name: Concatenate chunks into rsi.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          parts = sorted(Path('desk/company/_rsi_chunks').glob('*.part'))
+          assert parts, 'no chunks'
+          data = ''.join(p.read_text(encoding='utf-8') for p in parts)
+          assert len(data.encode()) == 279783, len(data.encode())
+          assert 'compute_generation_scoreboard' in data
+          assert data.startswith('"""Closed-loop')
+          Path('desk/company/rsi.py').write_text(data, encoding='utf-8')
+          print('wrote', len(data.encode()))
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name "rsi-assembler"
+          git config user.email "rsi-assembler@users.noreply.github.com"
+          git add desk/company/rsi.py
+          git diff --cached --quiet && echo 'no change' && exit 0
+          git commit -m "fix: restore full honest RSI engine (scoreboard)"
+          git push
