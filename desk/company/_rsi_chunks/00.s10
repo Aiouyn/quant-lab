@@ -1,0 +1,35 @@
+ED
+
+    newly_approved = int(tm_res.get('newly_approved') or 0)
+    # Fitness: observed learning signals only (children_bred excluded)
+    fit_new = min(1.0, newly_approved / 3.0)
+    fit_val = float(np.tanh(max(0.0, float(np.mean(new_val))) / 2.0)) if new_val else 0.0
+    fit_hold = float(np.tanh(max(0.0, float(np.mean(new_hold))) / 2.0)) if new_hold else 0.0
+    fit_drill = 1.0 if drill_verdict == 'PROMOTED' else (0.0 if drill_verdict else 0.0)
+    # Prefer explicit resolution stats when present
+    res_rate = hint_res.get('resolution_rate')
+    if res_rate is None:
+        hstat = ledger.q('SELECT SUM(hits) AS h, SUM(resolved_count) AS r FROM dynamic_hints')[0]
+        th, tr = int(hstat['h'] or 0), int(hstat['r'] or 0)
+        res_rate = (tr / th) if th > 0 else None
+    fit_hints = float(res_rate) if res_rate is not None else 0.0
+    fit_lift = float(np.tanh(max(0.0, mean_lift or 0.0))) if mean_lift is not None else 0.0
+    generation_fitness = round(
+        0.30 * fit_new
+        + 0.20 * fit_val
+        + 0.15 * fit_hold
+        + 0.15 * fit_drill
+        + 0.10 * fit_hints
+        + 0.10 * fit_lift,
+        4,
+    )
+
+    return {
+        'campaign_id': campaign_id,
+        'generation': generation,
+        'desks': list(desks or []),
+        'best_sharpe': round(max(dev_sharpes), 2) if dev_sharpes else None,
+        'mean_sharpe': round(float(np.mean(dev_sharpes)), 2) if dev_sharpes else None,
+        'best_val_sharpe': round(max(val_sharpes), 2) if val_sharpes else None,
+        'best_holdout_sharpe': round(max(hold_sharpes), 2) if hold_sharpes else None,
+        
