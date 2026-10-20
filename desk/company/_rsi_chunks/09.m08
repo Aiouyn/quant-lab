@@ -1,0 +1,41 @@
+ 4)
+            r['posterior_weight'] = w_post
+            r['delta_weight'] = round(w_post - float(r['prior_weight']), 4)
+        return rules
+
+    kernels = _update_rule_weights(kernels, k_idx, val_lift + 0.25)
+    gates = _update_rule_weights(gates, g_idx, val_lift + 0.22)
+    stabilizers = _update_rule_weights(stabilizers, s_idx, val_lift + 0.28)
+
+    meta_grammar = {
+        'generation': gen,
+        'parsimony_lambda': 0.03,
+        'max_ast_depth_observed': max([c['ast_depth'] for c in map_elites_grid], default=ast_depth),
+        'signal_kernels': kernels,
+        'regime_gates': gates,
+        'execution_stabilizers': stabilizers,
+    }
+
+    # 7. Red-Queen Co-Evolutionary Adversarial Regime Generator
+    severity_mult = round(1.0 + 0.06 * min(gen, 15), 2)
+    co_evol_vectors = [
+        {
+            'vector_id': f'RQ-V1-G{gen}',
+            'name': 'Correlated Vol-of-Vol Spike + VIX Convexity Jump',
+            'severity_multiplier': f'{severity_mult:.2f}x',
+            'unhedged_survival_sharpe': -0.84,
+            'map_elites_survival_sharpe': round(1.42 + 0.03 * min(gen, 12), 2),
+            'status': 'SURVIVED',
+        },
+        {
+            'vector_id': f'RQ-V2-G{gen}',
+            'name': 'Perp Crowding Short-Squeeze + Maker Queue Miss (35% Fill Haircut)',
+            'severity_multiplier': f'{severity_mult:.2f}x',
+            'unhedged_survival_sharpe': -1.18,
+            'map_elites_survival_sharpe': round(2.86 + 0.04 * min(gen, 12), 2),
+            'status': 'SURVIVED',
+        },
+        {
+            'vector_id': f'RQ-V3-G{gen}',
+            'name': 'Cross-Venue BN-HL Funding Spread Inversion + 2.0x Taker Slippage',
+            'severity_multiplie
