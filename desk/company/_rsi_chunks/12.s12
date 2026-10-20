@@ -1,9 +1,0 @@
-ow', 126))).over('symbol').fill_null(0.0).alias('r'))['r'].to_numpy().copy()
-    vol = df.select(pl.col('adjclose').cast(pl.Float64).pct_change().rolling_std(42, min_samples=5).over('symbol').fill_null(0.01).alias('v'))['v'].to_numpy().copy()
-    sig = (0.35 * np.nan_to_num(r_fast, 0.0) + 0.65 * np.nan_to_num(r_slow, 0.0)) / (np.nan_to_num(vol, 0.01) * np.sqrt(252.0) + 0.05)
-    return np.clip(sig, -3.0, 3.0)
-'''
-        fid1 = L.add_factor('Vol-Scaled Multi-Horizon Trend (21d/126d)', 'macro-r1', 'macro', f1_code, 'macro',
-                            'Vol-normalized 1m + 6m cross-asset momentum per ETF symbol')
-        L.factor_report(fid1, {'best_horizon_s': 86400, 'best_t': 4.12, 'best_cost_coverage': 2.45,
-                               'economic_value': 3.85, 'causal': True, 'novelty': {'max
