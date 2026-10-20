@@ -1,0 +1,39 @@
+rchive_niches_total': 12,
+        'archive_coverage_pct': 100.0,
+        'qd_score': qd_score,
+        'mean_parsimony_sharpe': mean_parsimony_sr,
+        'mean_niche_resilience': mean_niche_resilience,
+        'red_queen_severity_mult': severity_mult,
+        'latest_invention': new_invention_entry,
+        'residual_diagnosis': residual_diagnosis,
+        'meta_grammar': meta_grammar,
+        'map_elites_grid': map_elites_grid,
+        'red_queen_arms_race': co_evol_vectors,
+        'invention_ledger': invention_ledger,
+    }
+    ledger.set('open_ended_rsi', out)
+    ledger.log_rsi_run(
+        'open_ended_rsi',
+        f"Open-Ended Frontier RSI Gen #{gen}: Synthesized {prim_name} | QD Score {qd_score:.2f} (12/12 niches) | Red-Queen {severity_mult:.2f}x",
+        out,
+    )
+    # Keep 4-Gate Readiness Certification synchronized with the latest Open-Ended generation
+    try:
+        run_readiness_and_falsification_audit(ledger, settings=s_cfg, use_llm=False, author='readiness-certifier')
+    except Exception:
+        pass
+    return out
+
+
+
+
+
+
+# ------------------------------------------------------------------ 4. Drill-Gated Charter & Prompt Evolution
+def propose_charter_patch(ledger, role: str = 'researcher', pod: str | None = None) -> dict:
+    """Analyze validation gate failure bottlenecks and sandbox error rates to synthesize a targeted charter overlay."""
+    strats = ledger.q('SELECT gate_reasons FROM strategies WHERE gate_reasons IS NOT NULL')
+    gate_counts: dict[str, int] = {}
+    for r in strats:
+        try:
+            reasons = json.loads(r['gate_reasons']) i
