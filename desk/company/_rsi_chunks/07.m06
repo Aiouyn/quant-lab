@@ -1,0 +1,25 @@
+akage & Synthetic Noise Falsification Gate
+          * Empirical Future-Perturbation Probe: perturbs tail rows of desk store and verifies prefix weights change by 0.000000.
+          * Synthetic Martingale Noise Null-Test: evaluates strategy weights against 25 sign-randomized / block-shuffled return paths
+            to prove mean null Sharpe stays near 0.00 and real OOS Sharpe is statistically significant (p < 0.01).
+      - Gate 2: Deflated Sharpe & Overfitting Probability Gate
+          * Enforces Bailey & Lopez de Prado Trial-Adjusted Deflated Sharpe Ratio (DSR >= 0.90) using effective_trials.
+          * Verifies out-of-sample Forward & Holdout Sharpe retention across unseen splits.
+      - Gate 3: Multi-Regime Stress & Execution Slippage Gate
+          * Verifies positive Sharpe survival under 1.5x Fees + 2.0x Impact, +1 Bar Latency, and 5-Vector Adversarial Shocks.
+      - Gate 4: Live Paper-Trade Tracking & Kill-Switch Gate
+          * Verifies live forward bar attribution net edge, MaxDD <= 12.0% ceiling, automatic retirement of superseded/fragile sleeves,
+            and Portfolio Hard Kill-Switch readiness.
+    Also builds the 5-Stage Master Project Roadmap with live empirical proof metrics."""
+    from ..config import SETTINGS
+    from ..pipeline.portfolio import build_portfolio
+    s_cfg = settings or SETTINGS
+    t0 = time.time()
+
+    # Step 0: Autonomous Book Hygiene & Deduplication
+    active_rows = ledger.q(
+        "SELECT id, name, author, pod, code, code_hash, status, dev_report, val_report, holdout_report, forward_report "
+        "FROM strategies WHERE status IN ('approved', 'paper') ORDER BY updated DESC"
+    )
+    immunized_desks = {
+        (r.get
