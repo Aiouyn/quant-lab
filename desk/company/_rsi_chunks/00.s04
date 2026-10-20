@@ -1,0 +1,33 @@
+'kind'] == 'strategy':
+            entry['strategy_uses'] += int(r['n'] or 0)
+            entry['mean_strategy_sharpe'] = round(float(r['mean_val']), 2) if r['mean_val'] is not None else None
+
+    leaderboard = []
+    for p, d in by_prim.items():
+        total_uses = d['sandbox_runs'] + d['factor_uses'] + d['strategy_uses']
+        pass_rate = (d['sandbox_ok'] + 2) / (d['sandbox_runs'] + 2.5) if d['sandbox_runs'] > 0 else 0.85
+        # Empirical Bayesian shrinkage (prior weight k=2)
+        sr_raw = d['mean_strategy_sharpe'] if d['mean_strategy_sharpe'] is not None else base_sr
+        n_s = d['strategy_uses']
+        shrunk_sr = (n_s * sr_raw + 2.0 * base_sr) / (n_s + 2.0)
+        sr_lift = round(shrunk_sr - base_sr, 2)
+
+        f_raw = d['mean_factor_score'] if d['mean_factor_score'] is not None else base_fscore
+        n_f = d['factor_uses']
+        shrunk_f = (n_f * f_raw + 2.0 * base_fscore) / (n_f + 2.0)
+        f_lift = round(shrunk_f - base_fscore, 2)
+
+        composite_lift = round(0.6 * sr_lift + 0.25 * f_lift + 0.5 * (pass_rate - 0.75), 3)
+        status = ('HIGH_LIFT' if composite_lift >= 0.15 and pass_rate >= 0.75 else
+                  'NEEDS_REFACTOR' if (d['sandbox_runs'] >= 4 and pass_rate < 0.60) or composite_lift < -0.15 else
+                  'ACTIVE')
+        leaderboard.append({
+            **d,
+            'total_uses': total_uses,
+            'pass_rate': round(pass_rate, 3),
+            'sharpe_lift': sr_lift,
+            'factor_lift': f_lift,
+            'composite_lift': composite_lift,
+            'status': status,
+        })
+    leaderboard.so
