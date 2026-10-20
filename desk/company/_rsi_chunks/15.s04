@@ -1,0 +1,30 @@
+io without subtracting the rolling trend level.'
+                ),
+                'code_snippet': (
+                    "from desk.lib.contrib.tail_convexity_gate import tail_convexity_gate\n"
+                    "scaled = raw_trend * np.clip(0.012 / np.maximum(vol_42d, 0.004), 0.35, 1.50)\n"
+                    "w = tail_convexity_gate(df, scaled, px_col='adjclose', group_col='symbol', cap=0.65)"
+                ),
+                'proof': {
+                    'operator': 'vol_scale_tail_clip',
+                    'val_sharpe_before': -0.17,
+                    'val_sharpe_after': 1.14,
+                    'holdout_sharpe': 0.96,
+                    'forward_sharpe': 1.29,
+                },
+                'verdict': 'VERIFIED_LIFT',
+            },
+            {
+                'agent': 'forward-audit',
+                'desk': 'perps',
+                'category': 'drift_demotion',
+                'title': 'Forward Drift Surveillance & Automatic ERC Portfolio Re-Weighting',
+                'observation': (
+                    'Continuous Forward Survival Audit monitored all approved sleeves on the unseen `forward` split '
+                    'and detected decay on high-frequency unbuffered perp sleeve (`drift_z = -2.45 < -2.0`).'
+                ),
+                'diagnosis': (
+                    ' Sleeves without >=72h step-hold hysteresis suffer alpha decay when perp funding dispersion narrows, '
+                    'whereas 72h step-hold crowding reversion sleeves (`perps_residual_oi_gate`) maintain Forward Sharpe > 2.30.'
+                ),
+                'hypoth

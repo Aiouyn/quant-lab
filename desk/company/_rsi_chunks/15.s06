@@ -1,0 +1,9 @@
+ion_taken=ep['action_taken'],
+                code_snippet=ep['code_snippet'],
+                proof=ep['proof'],
+                verdict=ep['verdict'],
+            )
+
+    return L
+
+

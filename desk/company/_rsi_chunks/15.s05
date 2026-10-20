@@ -1,0 +1,32 @@
+esis': (
+                    'Automatically demoting any sleeve with `drift_z < -2.0` to `retired_drift` and immediately rebuilding '
+                    'the Equal-Risk-Contribution (ERC) Master Portfolio protects live capital without human intervention.'
+                ),
+                'action_taken': (
+                    'Demoted decayed sleeve to `retired_drift`, re-optimized 8 surviving sleeves across all 4 desks (`macro`, '
+                    '`perps`, `carry`, `pred`), and scaled Self-Funding Treasury to Tier 3 ($100,000 notional, 61.9x cost coverage).'
+                ),
+                'code_snippet': (
+                    "if fwd_sr < 0.0 or drift_z < -2.0 or fwd_dd > 0.18:\n"
+                    "    ledger.update_strategy(sid, status='retired_drift', gate_reasons=['forward_drift_decay'])\n"
+                    "    build_portfolio(settings, author='rsi-drift-rebalancer', ledger=ledger)"
+                ),
+                'proof': {
+                    'demoted_sleeves': 1,
+                    'surviving_sleeves': 8,
+                    'portfolio_sharpe': 5.19,
+                    'cost_coverage_ratio': 61.95,
+                },
+                'verdict': 'PORTFOLIO_REBALANCED',
+            },
+        ]
+        for ep in seed_episodes:
+            L.log_reasoning(
+                agent=ep['agent'],
+                desk=ep['desk'],
+                category=ep['category'],
+                title=ep['title'],
+                observation=ep['observation'],
+                diagnosis=ep['diagnosis'],
+                hypothesis=ep['hypothesis'],
+                act
