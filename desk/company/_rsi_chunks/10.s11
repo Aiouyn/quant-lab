@@ -1,0 +1,34 @@
+rr = np.nan_to_num(np.corrcoef(mat), nan=0.0)
+        # Prioritize ensuring at least one winner per desk first, then rank by dev Sharpe
+        order = sorted(
+            range(len(cand_rows)),
+            key=lambda i: (1 if cand_rows[i][1] in ('perps', 'carry', 'pred') else 0, cand_sharpes[i]),
+            reverse=True,
+        )
+        kept_idx = []
+        seen_desks = set()
+        for i in order:
+            d_name = cand_rows[i][1]
+            # Always keep the best candidate from an unseen desk, otherwise enforce |corr| < 0.50
+            if d_name not in seen_desks or all(abs(corr[i, j]) < 0.50 for j in kept_idx):
+                kept_idx.append(i)
+                seen_desks.add(d_name)
+            else:
+                suppressed_collinear_ids.append(cand_rows[i][0]['id'])
+        for i in kept_idx:
+            cluster_winner_ids.append(cand_rows[i][0]['id'])
+    else:
+        cluster_winner_ids = [r[0]['id'] for r in cand_rows]
+
+    # Mark collinear duplicates so they do not consume sealed `val` trials
+    for sup_id in suppressed_collinear_ids:
+        ledger.update_strategy(sup_id, status='clustered_dev', gate_reasons=['collinear_dev_cluster_filtered'])
+
+    # Tier 3: Adversarial Red-Team Risk Officer Pre-Audit & Desk-Native Hardening (before touching `val`)
+    red_team_repairs = []
+    for (r, d_name, d_rep) in cand_rows:
+        sid = r['id']
+        if sid not in cluster_winner_ids:
+            continue
+        top5_sh = float((d_rep.get('stats') or {}).get('top5_day_share') or 0.0)
+        ex_top5 = float((d_rep.get('summary') or {}).get('mean_ex_top5_da

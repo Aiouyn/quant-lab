@@ -1,0 +1,14 @@
+ys_bps') or 0.0)
+        code_str = r['code']
+        needs_hardening = (
+            top5_sh >= 0.46
+            or ex_top5 <= 1.5
+            or (d_name in ('perps', 'carry', 'pred') and not any(op in code_str for op in ('perps_residual_oi_gate', 'carry_funding_hysteresis_v3', 'pred_logodds_shrinkage')))
+        )
+        if needs_hardening:
+            try:
+                repaired = mutate_or_repair_strategy(code_str, operator='auto', gate_reasons=['top5_days<50%', 'fees_x1.5_profitable'])
+                new_h = repaired['code_hash']
+                if not ledger.q('SELECT id FROM strategies WHERE code_hash=? AND id<>?', (new_h, sid)):
+                    ledger.x('UPDATE strategies SET code=?, code_hash=?, pod=?, updated=? WHERE id=?',
+                             (repaired['code'], new_h
