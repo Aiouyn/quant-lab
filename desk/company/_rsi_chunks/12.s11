@@ -1,7 +1,0 @@
-         confirmed_sleeves += 1
-        # Conservative net 30-day return after realistic slippage & funding haircut (0.75x)
-        sleeve_30d_frac = (daily_bps * 1e-4) * 30.0 * 0.75 * float(w)
-        total_30d_return_frac += sleeve_30d_frac
-        desk_return_30d[desk_name] = desk_return_30d.get(desk_name, 0.0) + sleeve_30d_frac
-
-    total_30d_return_frac = max(0.014, min(0.068, total_30d_retur
