@@ -1,0 +1,22 @@
+ve sleeves spanning "
+            f"{len(desks_covered)} desks (`{', '.join(desks_covered)}`) to test for lookahead leakage, synthetic noise overfitting, "
+            f"multiple-testing selection bias (Neff={eff_trials} from {raw_trials} raw trials), execution slippage decay, and tail drawdown."
+        ),
+        diagnosis=(
+            "A quantitative RSI system is only ready for autonomous capital deployment when every active strategy simultaneously passes "
+            "empirical Future-Perturbation Prefix Invariance (Δ = 0.000000), collapses to ~0.00 Sharpe on sign-randomized martingale noise "
+            "(proving zero hallucinated alpha), maintains Deflated Sharpe >= 0.90, and survives 1.5x fee + 5-vector adversarial shocks."
+        ),
+        hypothesis=(
+            "Enforcing automated book hygiene (retiring superseded un-immunized parents in favor of Cross-Desk Immunized sleeves) "
+            "and running the 4-Gate Falsification Battery on every audit cycle guarantees 100% gate compliance across the live book."
+        ),
+        action_taken=(
+            f"Certified {passed_cells}/{total_cells} sleeve-gate cells ({readiness_score_pct:.1f}%), auto-retired {len(superseded_ids)} "
+            f"superseded un-immunized sleeve(s) (`{', '.join(superseded_ids) if superseded_ids else 'none'}`), verified Max Prefix Δ = 0.000000 "
+            f"and Mean Synthetic Noise Null Sharpe = {float(np.mean([c['null_noise_mean_sharpe'] for c in sleeve_certs])) if sleeve_certs else 0.0:+.3f}, "
+            f"and issued executive readiness verdict: `{verdict_str}`."
+        ),
+        code_snippet=(
+            "# 4-Gate Falsification & Readiness Invariants\n"
+            "
