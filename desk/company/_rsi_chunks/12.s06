@@ -1,0 +1,25 @@
+one,
+            ),
+            'generation_fitness': (latest_scoreboard or {}).get('generation_fitness'),
+            'approved_strategies': int(approved_count),
+            'approved_desks_count': treasury.get('approved_desks_count'),
+            'portfolio_sharpe': (
+                float(((latest_portfolio or {}).get('report') or {}).get('sharpe'))
+                if ((latest_portfolio or {}).get('report') or {}).get('sharpe') is not None else None
+            ),
+            'top_operator': operator_bandit[0]['operator'] if operator_bandit else None,
+            'daemon_running': daemon_st['running'],
+            'effective_trials': eff_trials['effective_trials'],
+            'raw_trials': eff_trials['raw_trials'],
+            'capital_tier': treasury['capital_tier'],
+            'notional_usd': treasury['notional_usd'],
+            'cost_coverage_ratio': treasury['cost_coverage_ratio'],
+            'self_funded': treasury['self_funded'],
+            'harness_verdict': (harness_audit or {}).get('verdict'),
+            'live_ready_strategies': (dry_run_readiness or {}).get('ready_strategies'),
+            'reasoning_episodes_count': len(reasoning_episodes),
+            'portfolio_net_bps': (execution_attribution or {}).get('portfolio_net_bps'),
+            'portfolio_signal_alpha_bps': (execution_attribution or {}).get('portfolio_signal_alpha_bps'),
+            'portfolio_funding_carry_bps': (execution_attribution or {}).get('portfolio_funding_carry_bps'),
+            'portfolio_slippage_bps': (execution_attribution or {}).get('portfolio_slippage_bps'),
+            'live
