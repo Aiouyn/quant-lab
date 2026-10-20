@@ -1,0 +1,19 @@
+AEMON_STATE['last_run'],
+                            'last_campaign_id': _DAEMON_STATE['last_campaign_id'],
+                        }
+                    L.set('rsi_daemon', snap)
+                except Exception:
+                    pass
+                if max_cycles > 0 and cycles_done >= max_cycles:
+                    with _DAEMON_LOCK:
+                        _DAEMON_STATE['running'] = False
+                    break
+                # Sleep in small increments so stop_rsi_daemon responds immediately
+                steps = max(1, int(interval_s * 4))
+                for _ in range(steps):
+                    with _DAEMON_LOCK:
+                        if not _DAEMON_STATE['running']:
+                            break
+                    time.sleep(0.25)
+
+        t = threading.Thread(targe
