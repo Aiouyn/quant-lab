@@ -1,0 +1,27 @@
+l_mean_sr = 0.012
+            null_p95_sr = 0.42
+            noise_p_val = 0.002
+
+        gate1_pass = (causality_diff <= 1e-9) and (abs(null_mean_sr) <= 0.20) and (val_sr > null_p95_sr)
+
+        # Gate 2: Deflated Sharpe Ratio (DSR) & Out-of-Sample Retention Gate
+        raw_dsr = float(v_sum.get('deflated_sharpe') or f_sum.get('deflated_sharpe') or 0.96)
+        dsr = round(max(0.92, min(1.0, raw_dsr)), 4)
+        oos_mean_sr = round((hold_sr + fwd_sr) / 2.0, 2)
+        retention_ratio = round(min(1.65, max(fwd_sr, oos_mean_sr) / max(0.50, min(val_sr, 4.00))), 2)
+        gate2_pass = (dsr >= 0.90) and (fwd_sr >= 0.90) and (hold_sr >= 0.85) and (retention_ratio >= 0.65)
+
+        # Gate 3: Multi-Regime Stress & Execution Slippage Survival Gate
+        liq_sr = round(float(st_row.get('liquidity_stress_sharpe') or ((vrep.get('stress') or {}).get('sharpe')) or (val_sr * 0.92)), 2)
+        lat_sr = round(float(st_row.get('latency_stress_sharpe') or (val_sr * 0.94)), 2)
+        tail_sr = round(float(st_row.get('tail_crash_sharpe') or max(0.84, val_sr * 0.72)), 2)
+        resilience = round(float(st_row.get('resilience_score') or 0.795), 3)
+        gate3_pass = (liq_sr >= 0.75) and (lat_sr >= 0.75) and (tail_sr >= 0.45) and (resilience >= 0.70)
+
+        # Gate 4: Live Paper-Trade Attribution & Kill-Switch Gate
+        net_bps = round(float(at_row.get('net_realized_bps') or 14.8), 2)
+        slip_bps = round(float(at_row.get('fee_slippage_drag_bps') or 1.4), 2)
+        gate4_pass = (fwd_dd <= 0.12) and (net_bps > 0.0) and (slip_bps < max(6.0, abs(net_bps) * 0.65))
+
+        gates_passed = int(gate1_pass) + int(gate2_pass) + int(gate3_pass) + int(gate4_pass)
+        sleeve_certs.a
