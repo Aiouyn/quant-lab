@@ -1,0 +1,35 @@
+`desk/lib/contrib/` and extract metadata."""
+    out = []
+    if not CONTRIB_DIR.exists():
+        return out
+    for p in sorted(CONTRIB_DIR.glob('*.py')):
+        if p.stem.startswith('_'):
+            continue
+        try:
+            src = p.read_text(encoding='utf-8')
+            tree = ast.parse(src)
+            doc = (ast.get_docstring(tree) or '').strip().splitlines()[0] if ast.get_docstring(tree) else ''
+            funcs = [n.name for n in tree.body if isinstance(n, ast.FunctionDef) and not n.name.startswith('_')]
+        except Exception:
+            doc, funcs = '', []
+        out.append({'name': p.stem, 'functions': funcs, 'doc': doc[:220]})
+    return out
+
+
+def record_primitive_outcome(ledger, code: str, agent: str, kind: str, ref_id: str = '',
+                             success: bool = True, metric_val: float | None = None) -> list[str]:
+    """Parse `desk.lib.contrib` imports in `code` and log outcome metrics to `primitive_usages`."""
+    prims = extract_contrib_imports(code)
+    for p in prims:
+        ledger.log_primitive_usage(p, agent, kind, ref_id=ref_id, success=success, metric_val=metric_val)
+    return prims
+
+
+def primitive_lift_leaderboard(ledger) -> list[dict]:
+    """Compute empirical Bayesian lift per `desk.lib.contrib` primitive across sandbox, factor, and strategy runs."""
+    modules = {m['name']: m for m in discover_contrib_modules()}
+    rows = ledger.q(
+        'SELECT primitive, kind, COUNT(*) AS n, SUM(success) AS ok_n, AVG(metric_val) AS mean_val '
+        'FROM primitive_usages GROUP BY primitive, kind'
+    )
+    # Global baselines fo
