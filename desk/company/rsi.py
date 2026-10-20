@@ -1,1 +1,1 @@
-"""Closed-loop Recursive Self-Improvement (RSI) engine for Desk OS v3."""
+{{FILE:/tmp/rsi_exact_content.py}}
