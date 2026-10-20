@@ -1,0 +1,28 @@
+        s_desk = getattr(mod, 'DESK', r.get('pod') or 'macro')
+        except Exception:
+            s_desk = r.get('pod') or 'macro'
+
+        val_rep = json.loads(r['val_report']) if isinstance(r['val_report'], str) and r['val_report'] else (r.get('val_report') or {})
+        hold_rep = json.loads(r['holdout_report']) if isinstance(r['holdout_report'], str) and r['holdout_report'] else (r.get('holdout_report') or {})
+        val_sr = float((val_rep.get('summary') or {}).get('sharpe') or 1.5)
+        val_mean_bps = float((val_rep.get('summary') or {}).get('mean_daily_bps') or 8.0)
+        hold_sr = float((hold_rep.get('summary') or {}).get('sharpe') or 1.2)
+
+        fwd_rep = _evaluate_truth_machine_split(code, sid, 'forward', s_cfg, n_trials=1)
+        fwd_sr = float(fwd_rep['summary']['sharpe'])
+        fwd_mean_bps = float(fwd_rep['summary']['mean_daily_bps'])
+        fwd_dd = float(fwd_rep['summary']['max_drawdown'])
+        fwd_days = int(fwd_rep['summary']['days'])
+        fwd_pnl_100k = float(fwd_rep['summary']['pnl'])
+
+        # Support deterministic decay stress test or natural drift detection
+        if inject_decay_id and sid == inject_decay_id:
+            fwd_sr = -0.45
+            fwd_mean_bps = -4.2
+            fwd_dd = 0.21
+            fwd_pnl_100k = -1850.0
+
+        # Compute standardized drift z-score comparing forward daily mean against validation expectation
+        daily_std_bps = max(15.0, abs(val_mean_bps) / max(val_sr / np.sqrt(252.0), 0.25))
+        se_bps = daily_std_bps / np.sqrt(max(fwd_days, 10))
+        drift_z = round((fwd_mean_bps - val_mean_

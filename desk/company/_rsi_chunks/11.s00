@@ -1,0 +1,38 @@
+, d_name, time.time(), sid))
+                    red_team_repairs.append({'id': sid, 'desk': d_name, 'operator': repaired['operator']})
+            except Exception:
+                pass
+        ledger.update_strategy(sid, status='review', pod=d_name)
+
+    # Stage 4: Promote cluster winners through the Truth Machine with N_eff
+    tm_res = validate_and_promote_population(
+        ledger,
+        settings=s_cfg,
+        desk=None,
+        max_candidates=max(6, len(cluster_winner_ids) + 2),
+        author=f'{author}-truth-machine',
+    )
+    eff_info = compute_effective_trials(ledger)
+
+    # Stage 5: Run Forward Survival & Self-Funding Treasury Audit
+    fwd_res = run_forward_survival_audit(ledger, settings=s_cfg, author=f'{author}-forward-monitor')
+
+    funnel_out = {
+        'n_agents': n_agents,
+        'tiers': {
+            'tier1_scouts': n_scouts,
+            'tier2_clusterers_toolsmiths': n_clusterers,
+            'tier3_red_team_officers': n_officers,
+        },
+        'scouts_bred': len(scout_children),
+        'candidates_scanned': len(cand_rows),
+        'clusters_formed': len(cluster_winner_ids),
+        'collinear_suppressed': len(suppressed_collinear_ids),
+        'red_team_repairs': len(red_team_repairs),
+        'repairs_detail': red_team_repairs,
+        'primitives_evolved': prim_res.get('primitives_evolved', 0),
+        'val_passed': tm_res.get('val_passed', 0),
+        'newly_approved': tm_res.get('newly_approved', 0),
+        'total_approved': tm_res.get('total_approved', 0),
+        'effective_trials': eff_info,
+        'forward_confirmed': fwd_res.get
