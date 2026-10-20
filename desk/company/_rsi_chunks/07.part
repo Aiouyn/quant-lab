@@ -171,7 +171,7 @@ def run_readiness_and_falsification_audit(ledger, settings=None, use_llm: bool =
     Executes an institutional-grade falsification battery across all approved strategy sleeves and desks:
       - Gate 1: Zero-Leakage & Synthetic Noise Falsification Gate
           * Empirical Future-Perturbation Probe: perturbs tail rows of desk store and verifies prefix weights change by 0.000000.
-          * Synthetic Martingale Noise Null-Test: evaluates strategy weights against 25 sign-randomized / time-shuffled return paths
+          * Synthetic Martingale Noise Null-Test: evaluates strategy weights against 25 sign-randomized / block-shuffled return paths
             to prove mean null Sharpe stays near 0.00 and real OOS Sharpe is statistically significant (p < 0.01).
       - Gate 2: Deflated Sharpe & Overfitting Probability Gate
           * Enforces Bailey & Lopez de Prado Trial-Adjusted Deflated Sharpe Ratio (DSR >= 0.90) using effective_trials.
