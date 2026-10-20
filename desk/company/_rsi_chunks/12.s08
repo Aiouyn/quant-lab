@@ -1,0 +1,39 @@
+ adversarial_redteam,
+        'readiness_certification': readiness_certification,
+        'open_ended_rsi': open_ended_rsi,
+        'reasoning_episodes': reasoning_episodes,
+        'dynamic_hints': hints_rows,
+        'primitive_leaderboard': prims,
+        'operator_bandit': operator_bandit,
+        'latest_portfolio': latest_portfolio,
+        'latest_scoreboard': latest_scoreboard,
+        'gate_failure_leaderboard': gate_failure_leaderboard(ledger),
+        'daemon': daemon_st,
+        'lineages': lineages,
+        'charter_versions': charters,
+        'rsi_runs': runs,
+        'campaign_history': campaign_gens,
+        'store_panels': store_panels,
+    }
+
+
+def ensure_seeded(settings, ledger=None):
+    """Ensure the SQLite ledger has baseline organizational state, lessons, factors, strategies, store panels, Truth Machine promotions, and ERC portfolio."""
+    from .ledger import Ledger
+    from .roles import PODS
+    from .runtime import roster
+
+    L = ledger or Ledger(settings.ledger)
+    try:
+        from ..data.store_builder import ensure_store_panels
+        ensure_store_panels(settings, force=False, try_remote=True)
+    except Exception:
+        pass
+
+    if L.q('SELECT COUNT(*) AS n FROM agents')[0]['n'] == 0:
+        for name, role, pod in roster(16):
+            L.upsert_agent(name, role, pod)
+            L.x('UPDATE agents SET model=?, sessions=?, steps=?, prompt_tokens=?, completion_tokens=? WHERE name=?',
+                (settings.flash_model, 4, 38, 92_000, 14_500, name))
+        for p, mandate in PODS.items():
+            w = {'macro': 2.1, 'xsec': 1.6, 'e

@@ -1,0 +1,20 @@
+orite_longshot', 'zero_retrade']),
+            ('toolsmith', 'Harness & Provenance Auditor enforces 100% canonical strategy_eval execution on verified_real Parquet stores with zero synthetic return blending.', 'AST harness & provenance audit', 0.99, 'platform', ['rsi', 'audit', 'parity']),
+        ]
+        for auth, claim, ev, conf, scope, tags in seed_lessons:
+            L.add_lesson(auth, claim, ev, conf, scope, tags)
+
+    if not L.latest_memo('desk'):
+        L.memo('cio', 'desk', (
+            "DESK MEMO — Pure Backtest Truth Machine & Live Dry-Run Mandate:\n"
+            "1. Priority allocation: macro (2.1x), carry (1.8x), xsec/perps (1.6x), pred (1.4x).\n"
+            "2. Zero Synthetic Blending: Every candidate is evaluated 100% by canonical `strategy_eval` on verified real public market stores (Yahoo Finance, Hyperliquid, Polymarket).\n"
+            "3. Every approved sleeve must pass the 6-Point Live Dry-Run & Causal Prefix Parity Gate (`causality_prefix_diff == 0.0`) before entering shadow execution."
+        ))
+
+    if not L.latest_memo('digest'):
+        L.memo('librarian', 'digest', (
+            "KNOWLEDGE DIGEST (v3 + Pure Backtest & Live Parity):\n"
+            "• What Works: Core Risk-Parity Trend + VIX Regime Conditioner (`macro`), 72h step-hold funding-crowding reversion (`perps`), "
+            "96h step-hold BN-HL funding spread (`carry`), and zero-retrade favorite-longshot calibration (`pred`).\n"
+            "• What Fails: Unbuffered hourly re-trading (killed by 6.5 bps/hr perp fees or 1c binary half-spread) and destructive 30-bar rolling-mean

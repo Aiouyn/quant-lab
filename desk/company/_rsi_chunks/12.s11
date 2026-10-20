@@ -1,0 +1,20 @@
+ subtraction on trend levels."
+        ))
+
+    if L.q('SELECT COUNT(*) AS n FROM board')[0]['n'] == 0:
+        L.post('thesis', 'Macro Cross-Asset Trend + VIX Regime Ensemble', 'Combine 1m/6m vol-scaled momentum with VIX spike equity de-grossing across 13 ETFs.', 'macro-lead', pod='macro', assignee='macro-r1')
+        L.post('thesis', 'Step-Hold Perps Funding Crowding Reversion', 'Harvest 24h Hyperliquid funding crowding extremes using 72h step-hold maker execution.', 'xsec-lead', pod='xsec', assignee='xsec-r1')
+        L.post('thesis', 'Cross-Venue BN-HL Carry Maker Hysteresis v3', 'Collect HL vs Binance funding differential (`bn_funding - hl_funding`) with 96h step-hold buffer.', 'carry-lead', pod='carry', assignee='carry-r1')
+        L.post('task', 'Harness & Live Flux Parity Audit', 'Verify zero synthetic return blending in _evaluate_truth_machine_split and 100% causal prefix parity on live bars.', 'toolsmith', pod='platform', assignee='toolsmith')
+
+    desk_factor_counts = {
+        r['resolution']: r['n']
+        for r in L.q("SELECT resolution, COUNT(*) AS n FROM factors WHERE status='active' GROUP BY resolution")
+    }
+    if desk_factor_counts.get('macro', 0) < 2:
+        f1_code = '''DESK = 'macro'
+PARAMS = {'w_fast': 21, 'w_slow': 126}
+def factor(df, params):
+    from desk.lib.contrib.har_sigma import har_sigma
+    r_fast = df.select(pl.col('adjclose').cast(pl.Float64).pct_change(int(params.get('w_fast', 21))).over('symbol').fill_null(0.0).alias('r'))['r'].to_numpy().copy()
+    r_slow = df.select(pl.col('adjclose').cast(pl.Float64).pct_change(int(params.get('w_sl
