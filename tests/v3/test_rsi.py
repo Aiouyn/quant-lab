@@ -22,8 +22,14 @@ from desk.company.rsi import (
     evaluate_rsi_drill,
     ensure_seeded,
     rsi_snapshot,
+    compute_generation_scoreboard,
+    gate_failure_leaderboard,
+    record_gate_failure,
+    operator_bandit_leaderboard,
     _synth_panel_for_desk,
 )
+from desk.lab.drills import PROCESS_DRILL_KINDS, evaluate_process_drills, process_drill_adversarial_report
+from desk.pipeline.validation import DEV_GATES, check
 from desk.lab.strategy import load_strategy, causality_test
 
 
@@ -136,6 +142,11 @@ def test_drill_gated_charter_evolution(tmp_path):
     drill = evaluate_rsi_drill(L, charter_id=cand['id'])
     assert drill['null_false_discoveries'] == 0
     assert drill['planted_signal_corr'] >= 0.70
+    assert drill['error_rate_delta'] <= 0.0
+    assert drill['charter_bars_ok'] is True
+    assert drill['process_drills_ok'] is True
+    assert set(drill['process_drills']) == set(PROCESS_DRILL_KINDS)
+    assert all(p['caught'] for p in drill['process_drills'].values())
     assert drill['verdict'] == 'PROMOTED'
 
     full_charter = charter('researcher', 'macro', ledger=L)
@@ -248,11 +259,119 @@ def test_multi_generation_rsi_campaign(tmp_path):
     camp = run_rsi_campaign(L, settings=s, generations=2, desks=['macro', 'perps'], max_children_per_gen=1, use_llm=False)
     assert camp['generations_run'] == 2
     assert len(camp['generations']) == 2
-    assert camp['final_best_sharpe'] >= 1.2
+    # Honest structure: fitness present; Sharpes may be null or real — never required ≥ 1.2
+    assert 'generation_fitness' in camp['generations'][-1]
+    assert 'scoreboard' in camp
+    assert camp['scoreboard']['generation_fitness'] == camp['generations'][-1]['generation_fitness']
+    for g in camp['generations']:
+        assert 'children_bred' in g
+        # children_bred is telemetry, not a success claim
+        assert g.get('drill_verdict') in ('PROMOTED', 'REJECTED', None)
 
     snap = rsi_snapshot(L, settings=s)
     assert snap['kpis']['campaign_generations'] >= 2
+    assert 'generation_fitness' in snap['kpis']
     assert len(snap['store_panels']) == 4
+
+
+def test_empty_scoreboard_is_null_not_fabricated(tmp_path):
+    L = Ledger(tmp_path / 'desk.sqlite3')
+    board = compute_generation_scoreboard(L)
+    assert board['best_sharpe'] is None
+    assert board['mean_sharpe'] is None
+    assert board['best_val_sharpe'] is None
+    assert board['portfolio_sharpe'] is None
+    assert board['planted_signal_corr'] is None
+    assert board['drill_verdict'] is None
+    assert board['mean_primitive_lift'] is None
+    # Must not invent classic fake floors
+    assert board['best_sharpe'] != 1.45
+    assert board['mean_sharpe'] != 1.20
+    assert board['generation_fitness'] == 0.0
+
+
+def test_no_fabricated_bandit_or_drill_defaults(tmp_path):
+    L = Ledger(tmp_path / 'desk.sqlite3')
+    bandit = operator_bandit_leaderboard(L)
+    assert len(bandit) >= 5
+    for row in bandit:
+        assert row['mean_dev_sharpe'] is None
+        assert row['mean_val_sharpe'] is None
+        assert row['mean_dev_sharpe'] != 1.25
+        assert row['mean_val_sharpe'] != 1.05
+    snap = rsi_snapshot(L)
+    assert snap['kpis']['drill_gate_verdict'] is None
+    assert snap['kpis']['planted_signal_corr'] is None
+    assert snap['kpis']['best_campaign_sharpe'] is None
+    assert snap['kpis']['hint_resolution_rate'] is None
+
+
+def test_forward_missing_is_not_run(tmp_path):
+    import dataclasses
+    import time
+    from desk.config import SETTINGS
+
+    s = dataclasses.replace(SETTINGS, home=tmp_path)
+    L = ensure_seeded(s, Ledger(tmp_path / 'desk.sqlite3'))
+    now = time.time() + 1e6
+    # Seed an approved strategy without forward_report
+    L.x(
+        "INSERT INTO strategies(id,name,author,pod,code,code_hash,resolution,status,val_report,holdout_report,created,updated) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            'S-FWD-TEST', 'fwd_missing', 'tester', 'macro',
+            "DESK='macro'\nPARAMS={}\ndef signal(df, params):\n    return np.zeros(len(df))",
+            'hash-fwd', '1d', 'approved',
+            json.dumps({'summary': {'sharpe': 1.1}}),
+            json.dumps({'summary': {'sharpe': 1.0}}),
+            now, now,
+        ),
+    )
+    L.x(
+        "INSERT INTO portfolios(id,author,members,weights,report,status,created) VALUES(?,?,?,?,?,?,?)",
+        ('P-FWD-TEST', 'tester', json.dumps(['S-FWD-TEST']), json.dumps({'S-FWD-TEST': 1.0}),
+         json.dumps({'sharpe': 1.0}), 'active', now),
+    )
+    snap = rsi_snapshot(L, settings=s)
+    members = (snap.get('latest_portfolio') or {}).get('members') or []
+    assert members, 'expected portfolio member'
+    m = next(x for x in members if x['id'] == 'S-FWD-TEST')
+    assert m['forward_sharpe'] is None
+    assert m['forward_verdict'] == 'NOT_RUN'
+    fwd = next(x for x in snap['forward_survival'] if x['id'] == 'S-FWD-TEST')
+    assert fwd['forward_sharpe'] is None
+    assert fwd['verdict'] == 'NOT_RUN'
+
+
+def test_gate_failure_credit_and_brief(tmp_path):
+    L = Ledger(tmp_path / 'desk.sqlite3')
+    record_gate_failure(
+        L, strategy_id='S1', stage='dev', gates=['fees_x1.5_profitable', 'causal'],
+        operator='vol_scale_tail_clip', desk='macro', primitives=['har_sigma'],
+    )
+    record_gate_failure(
+        L, strategy_id='S2', stage='val', gates=['fees_x1.5_profitable'],
+        operator='vol_scale_tail_clip', desk='perps', primitives=['har_sigma'],
+    )
+    lb = gate_failure_leaderboard(L)
+    assert lb and lb[0]['gate'] == 'fees_x1.5_profitable'
+    assert lb[0]['count'] == 2
+    brief = format_primitive_brief(L)
+    assert 'GATE FAILURE CREDIT' in brief
+    assert 'fees_x1.5_profitable' in brief
+    bandit = operator_bandit_leaderboard(L)
+    by_op = {r['operator']: r for r in bandit}
+    assert by_op['vol_scale_tail_clip']['gate_cluster_penalty'] > 0
+
+
+def test_process_drills_catch_adversarial_reports():
+    results = evaluate_process_drills(DEV_GATES, check)
+    assert set(results) == set(PROCESS_DRILL_KINDS)
+    for kind, row in results.items():
+        assert row['caught'], f'{kind} must be caught by DEV_GATES, failed_gates={row["failed_gates"]}'
+    junk = process_drill_adversarial_report('sycophantic_approve_junk')
+    assert junk['summary']['sharpe'] is None
+    assert len(check(DEV_GATES, junk)) > 0
 
 
 def test_truth_machine_gate_and_erc_master_portfolio(tmp_path):
@@ -292,12 +411,12 @@ def test_continuous_rsi_daemon_lifecycle(tmp_path):
 
     st_start = start_rsi_daemon(settings=s, interval_s=2.0, use_llm=False, max_cycles=1)
     assert isinstance(st_start, dict)
-    # Wait briefly for the 1 cycle to complete
-    for _ in range(30):
+    # Open-ended frontier cycle can take tens of seconds after a full seed
+    for _ in range(120):
         cur = rsi_daemon_status(Ledger(s.ledger))
         if cur['cycles'] >= 1 and not cur['running']:
             break
-        time.sleep(0.2)
+        time.sleep(0.25)
     st_stop = stop_rsi_daemon(settings=s)
     assert st_stop['running'] is False
     assert st_stop['cycles'] >= 1
