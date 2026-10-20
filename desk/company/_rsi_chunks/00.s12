@@ -1,0 +1,14 @@
+/panel columns) and `min_samples=` (not `min_periods=`): e.g. `pl.col('x').rolling_mean(20, min_samples=5).over('symbol')`.",
+    ),
+    (
+        r"ComputeError:.*(division by zero|log|sqrt|domain)",
+        r"ComputeError:.*(division by zero|log|sqrt|domain)",
+        "Polars ComputeError on math domain: guard denominators and log inputs with `.clip(lower_bound=1e-9)` or `+ 1e-9` before dividing/logging.",
+    ),
+    (
+        r"ShapeError:.*unable to broadcast|lengths don't match|shape mismatch",
+        r"ShapeError:.*(broadcast|length|shape)",
+        "Polars ShapeError: never mix filtered Series with the full panel; compute window/group expressions inside `panel.with_columns(<expr>.over('symbol'))` so row count stays identical.",
+    ),
+    (
+        r"TypeError:.*unsupported operand type.*'Expr'",
