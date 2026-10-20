@@ -17,8 +17,8 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          parts = sorted(Path('desk/company/_rsi_chunks').glob('*.part'))
-          assert parts, 'no chunks'
+          parts = sorted(Path('desk/company/_rsi_chunks').glob('[0-9][0-9].part'))
+          assert len(parts) == 14, (len(parts), [p.name for p in parts])
           data = ''.join(p.read_text(encoding='utf-8') for p in parts)
           assert len(data.encode()) == 279783, len(data.encode())
           assert 'compute_generation_scoreboard' in data
