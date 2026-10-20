@@ -1,0 +1,26 @@
+t[str] | None = None, max_children_per_gen: int = 2,
+                     use_llm: bool = True, llm_fn=None) -> dict:
+    """Execute a closed-loop multi-generation Recursive Self-Improvement campaign across desks:
+    For each generation g = 1 .. generations:
+      1. Ensure multi-desk store panels (`macro`, `perps`, `carry`, `pred`) are built.
+      2. Compile sandbox error tracebacks into dynamic hints (`compile_error_hints`).
+      3. Run autonomous Toolsmith primitive evolution (`evolve_primitives`).
+      4. Breed and repair strategies across target desks using Meta-Bandit operator weights (`evolve_population`).
+      5. Validate candidates through the strict Truth Machine (`dev` -> `val` + DSR -> one-shot `holdout` -> `approved`)
+         and auto-allocate the Equal-Risk-Contribution (ERC) Master Portfolio (`validate_and_promote_population`).
+      6. Audit charter patches against `evaluate_rsi_drill` and record generation fitness telemetry."""
+    generations = max(1, min(int(generations or 1), 10))
+    target_desks = [d for d in (desks or ['macro', 'perps', 'carry', 'pred']) if d in ('macro', 'perps', 'carry', 'pred', 'l2')]
+    if not target_desks:
+        target_desks = ['macro', 'perps', 'carry', 'pred']
+
+    store_info = {}
+    if settings is not None:
+        try:
+            from ..data.store_builder import ensure_store_panels
+            store_info = ensure_store_panels(settings, force=False, try_remote=False)
+        except Exception:
+            pass
+
+    campaign_id = f'CAMP-{int(time.time() * 1000) % 1000000:06d}'
+    existing_gens = ledger.q("SELECT COUN

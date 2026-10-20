@@ -1,0 +1,39 @@
+opose_charter_patch(ledger, role='researcher', pod=target_desks[0] if len(target_desks) == 1 else 'all')
+        drill_res = evaluate_rsi_drill(ledger, settings=settings, charter_id=cand_charter['id'])
+
+        gen_metrics = compute_generation_scoreboard(
+            ledger,
+            tm_res=tm_res,
+            drill_res=drill_res,
+            hint_res=hint_res,
+            prim_res=prim_res,
+            bred_children=bred_children,
+            campaign_id=campaign_id,
+            generation=gen_num,
+            desks=target_desks,
+            use_llm=use_llm,
+        )
+        best_sr = gen_metrics.get('best_sharpe')
+        best_val_sr = gen_metrics.get('best_val_sharpe')
+        port_sr = gen_metrics.get('portfolio_sharpe')
+        ledger.log_rsi_run(
+            'campaign_gen',
+            (
+                f"Gen {gen_num} ({campaign_id}): Dev SR={best_sr}, Val SR={best_val_sr}, Port SR={port_sr}, "
+                f"Approved={gen_metrics.get('valid_discoveries')}, fitness={gen_metrics.get('generation_fitness')}, "
+                f"top_op={gen_metrics.get('top_operator')}"
+            ),
+            gen_metrics,
+        )
+        gen_records.append(gen_metrics)
+
+    last = gen_records[-1] if gen_records else {}
+    return {
+        'campaign_id': campaign_id,
+        'generations_run': len(gen_records),
+        'desks': target_desks,
+        'store_panels': store_info,
+        'generations': gen_records,
+        'final_best_sharpe': last.get('best_sharpe'),
+        'final_portfolio_sharpe': last.get('portfolio_sharpe'),
+        'final_generation_fitness': last.get('g
