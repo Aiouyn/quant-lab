@@ -55,11 +55,11 @@ def main(argv=None):
     dr = sub.add_parser('drill', help='build or score drill markets (measure the firm itself)')
     dr.add_argument('kind', choices=['planted', 'null']); dr.add_argument('--report', action='store_true')
     dr.add_argument('--days', type=int, default=90)
-    rsi_p = sub.add_parser('rsi', help='Recursive Self-Improvement (RSI) engine: status, compile-hints, evolve, toolsmith, build-store, validate, bandit, campaign, daemon, funnel, forward, benchmark')
+    rsi_p = sub.add_parser('rsi', help='Recursive Self-Improvement (RSI) engine: status, scoreboard, compile-hints, evolve, toolsmith, build-store, validate, bandit, campaign, daemon, funnel, forward, benchmark')
     rsi_p.add_argument('action', nargs='?', default='status',
-                       choices=['status', 'compile-hints', 'evolve', 'toolsmith', 'build-store', 'validate', 'bandit', 'campaign', 'daemon', 'funnel', 'forward', 'benchmark'])
+                       choices=['status', 'scoreboard', 'compile-hints', 'evolve', 'toolsmith', 'build-store', 'validate', 'bandit', 'campaign', 'daemon', 'funnel', 'forward', 'benchmark'])
     rsi_p.add_argument('--desk', choices=['macro', 'perps', 'pred', 'carry', 'l2'])
-    rsi_p.add_argument('--desks', default='macro,perps,carry,pred', help='comma-separated desks for campaign/funnel')
+    rsi_p.add_argument('--desks', default='macro,pred,carry,perps', help='comma-separated desks for campaign/funnel')
     rsi_p.add_argument('--generations', type=int, default=3, help='number of RSI generations for campaign')
     rsi_p.add_argument('--agents', type=int, default=50, help='number of agents in 3-tier tournament funnel')
     rsi_p.add_argument('--max-children', type=int, default=3)
@@ -192,11 +192,14 @@ def main(argv=None):
             ensure_seeded, rsi_snapshot, compile_error_hints, evolve_population,
             evolve_primitives, run_rsi_campaign, propose_charter_patch, evaluate_rsi_drill,
             validate_and_promote_population, operator_bandit_leaderboard,
-            run_tournament_funnel, run_forward_survival_audit,
+            run_tournament_funnel, run_forward_survival_audit, compute_generation_scoreboard,
         )
         L = ensure_seeded(s, Ledger(s.ledger))
         if a.action == 'compile-hints':
             _print(compile_error_hints(L))
+        elif a.action == 'scoreboard':
+            snap = rsi_snapshot(L, settings=s)
+            _print(snap.get('latest_scoreboard') or compute_generation_scoreboard(L))
         elif a.action == 'evolve':
             _print(evolve_population(L, settings=s, desk=a.desk, max_children=a.max_children, use_llm=not a.no_llm))
         elif a.action == 'toolsmith':
