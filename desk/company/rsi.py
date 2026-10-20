@@ -1,1 +1,1 @@
-{"__cursor_large_args":"/tmp/FULL_CALL_ARGS.json"}
+{{FILE:/tmp/rsi_content_only.py}}
