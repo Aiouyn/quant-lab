@@ -1,1 +1,1 @@
-{{FILE:/tmp/rsi_exact_content.py}}
+{"__cursor_large_args": "/tmp/cursor-mcp-large-args/Github.push_files.json"}
