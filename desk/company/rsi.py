@@ -1,1 +1,1 @@
-{{FILE:/tmp/quant-lab-ship/repo/desk/company/rsi.py}}
+PLACEHOLDER_LOAD_FROM_/tmp/rsi_real_content.txt
