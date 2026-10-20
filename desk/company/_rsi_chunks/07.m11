@@ -1,0 +1,32 @@
+ppend({
+            'strategy_id': sid,
+            'name': r['name'],
+            'desk': dk,
+            'causality_diff': causality_diff,
+            'null_noise_mean_sharpe': null_mean_sr,
+            'noise_p_val': noise_p_val,
+            'deflated_sharpe': dsr,
+            'val_sharpe': val_sr,
+            'holdout_sharpe': hold_sr,
+            'forward_sharpe': fwd_sr,
+            'oos_retention_ratio': retention_ratio,
+            'liquidity_stress_sharpe': liq_sr,
+            'latency_stress_sharpe': lat_sr,
+            'tail_crash_sharpe': tail_sr,
+            'resilience_score': resilience,
+            'forward_max_dd': fwd_dd,
+            'net_edge_bps': net_bps,
+            'slippage_drag_bps': slip_bps,
+            'gate_1_leakage_noise': gate1_pass,
+            'gate_2_deflated_sharpe': gate2_pass,
+            'gate_3_stress_slippage': gate3_pass,
+            'gate_4_paper_killswitch': gate4_pass,
+            'gates_passed': gates_passed,
+            'gates_total': 4,
+            'verdict': 'CERTIFIED_READY' if gates_passed == 4 else 'QUARANTINE_REVIEW',
+        })
+
+    total_cells = max(1, len(sleeve_certs) * 4)
+    passed_cells = sum(c['gates_passed'] for c in sleeve_certs)
+    readiness_score_pct = round(100.0 * passed_cells / total_cells, 1)
+    desks_covered =
