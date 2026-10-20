@@ -1,1 +1,1 @@
-PLACEHOLDER_LOAD_FROM_/tmp/rsi_real_content.txt
+x
