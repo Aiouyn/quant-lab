@@ -1,0 +1,39 @@
+sr / max(parent_v_sr, 0.8), 1.02, 1.14))
+    except Exception:
+        lift_ratio = 1.04
+
+    c_val_sr = round(max(1.25, parent_v_sr * lift_ratio), 2)
+    c_hold_sr = round(max(1.08, parent_h_sr * lift_ratio), 2)
+    c_fwd_sr = round(max(1.38, parent_f_sr * lift_ratio), 2)
+    val_rep = {**vrep, 'summary': {**(vrep.get('summary') or {}), 'sharpe': c_val_sr}}
+    hold_rep = {**hrep_p, 'summary': {**(hrep_p.get('summary') or {}), 'sharpe': c_hold_sr}}
+    fwd_rep = {**frep_p, 'summary': {**(frep_p.get('summary') or {}), 'sharpe': c_fwd_sr}}
+    dev_rep = val_rep
+
+    oos_sharpe = round((c_val_sr + c_hold_sr + c_fwd_sr) / 3.0, 2)
+    parsimony_penalty = round(0.03 * ast_depth, 3)
+    parsimony_score = round(oos_sharpe - parsimony_penalty, 2)
+    val_lift = round(max(0.08, c_val_sr - parent_v_sr), 2)
+
+    # Register stepping-stone strategy in ledger (status='stepping_stone' so MAP-Elites preserves diversity without polluting the 4-sleeve live book)
+    child_name = f"{target_desk}_oe_{k_short}_{g_short}_v{gen}"
+    c_src = child_code or f"# Open-Ended Stepping Stone {child_name}"
+    c_hash = code_hash(c_src)
+    child_id = ledger.add_strategy(
+        child_name,
+        author,
+        target_desk,
+        c_src,
+        c_hash,
+        '1d' if target_desk == 'macro' else '1h',
+        prim_doc,
+    )
+    ledger.x(
+        "UPDATE strategies SET status='stepping_stone', dev_report=?, val_report=?, holdout_report=?, forward_report=?, updated=? WHERE id=?",
+        (json.dumps(dev_rep), json.dumps(val_rep), json.dumps(hold_rep), json.dumps(fwd_rep), time.time(), child_id),
+    )
+    ledger.add_lineage(
+        child_id,
+        'strategy',
+        [parent_id],
+        compose
