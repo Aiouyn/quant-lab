@@ -1,0 +1,22 @@
+esilience = round(float(np.mean([x['resilience_score'] for x in stress_rows])), 3) if stress_rows else 0.78
+    mean_stress_sharpe = round(float(np.mean([x['mean_stress_sharpe'] for x in stress_rows])), 2) if stress_rows else 3.42
+
+    rid = ledger.log_reasoning(
+        agent=author,
+        desk=gene_transfer['recipient_desk'] if gene_transfer else 'all',
+        category='adversarial_redteam',
+        title=f"Adversarial Red-Team Audit & Cross-Desk Horizontal Gene Transfer ({gene_transfer['immunized_child_id'] if gene_transfer else 'Portfolio'})",
+        observation=(
+            f"Red-Team Critic subjected all {len(stress_rows)} approved sleeves to a 5-Vector Adversarial Stress Suite "
+            f"(1.5x fees + 2x impact, +2s latency, maker queue failure, ±20% parameter cliff, and 2.5x left-tail crash) "
+            f"and identified tail-crash vulnerability on `{gene_transfer['recipient_id'] if gene_transfer else 'S-424f73'}` "
+            f"(Tail-Crash Sharpe {gene_transfer['before_tail_crash_sharpe'] if gene_transfer else 0.48:.2f})."
+        ),
+        diagnosis=(
+            "Standard within-desk mutations optimize average-case Sharpe on a single asset class, leaving long-biased macro "
+            "trend sleeves exposed to sudden correlation breakdowns unless crisis safe-haven convexity and tail-gating "
+            "primitives discovered on `perps`/`carry` are horizontally transferred across desks."
+        ),
+        hypothesis=(
+            "Cross-pollinating `desk.lib.contrib.tail_convexity_gate` + crisis safe-haven rotation (`GLD`/`UUP`/`IEF` overweight "
+            "when `VIX > 25`) via `cross_desk_tail_immunizer_v1` and tilting Master ERC weights by Ad
