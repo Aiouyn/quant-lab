@@ -1,0 +1,371 @@
+
+        r"TypeError:.*'Expr'",
+        "Cannot mix Polars `pl.Expr` (`pl.col(...)`) with NumPy/Python functions directly: evaluate expressions via `df.select(<expr>).to_series().to_numpy()` first, or keep all ops as Polars expressions.",
+    ),
+    (
+        r"KeyError:.*['\"](w|lookback|horizon|entry|exit|threshold|vol_window)['\"]",
+        r"KeyError:.*['\"](w|lookback|horizon|entry|exit|threshold|vol_window)['\"]",
+        "Strategy/factor `params` missing key: always read parameters with defaults via `params.get('w', 20)` and declare all defaults in module-level `PARAMS = {...}`.",
+    ),
+    (
+        r"ValueError:.*Input X contains (NaN|infinity)|LightGBMError.*(NaN|inf)",
+        r"(ValueError:.*Input X contains|LightGBMError)",
+        "ML fit() received NaN or Inf features/labels: wrap feature matrices in `np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)` and filter `ok = np.isfinite(y)` before fitting.",
+    ),
+    (
+        r"ZeroDivisionError",
+        r"ZeroDivisionError",
+        "ZeroDivisionError in signal/factor calculation: add `+ 1e-9` to all rolling standard deviations, volume sums, and depth denominators.",
+    ),
+    (
+        r"IndexError:.*(index 0 is out of bounds|pop from empty list|list index out of range)",
+        r"IndexError:.*(out of bounds|empty list|out of range)",
+        "IndexError on filtered slice: check `if len(sub) == 0:` before indexing `[0]`, or aggregate with Polars `.group_by(...).agg(...)` instead of manual loops.",
+    ),
+    (
+        r"StrategyError:.*signal must return a Series/array, not a DataFrame",
+        r"signal must return a Series/array, not a DataFrame",
+        "`signal(panel, params)` returned a DataFrame instead of a 1D Series/array: extract the weight column via `return out['w'].to_numpy()`.",
+    ),
+    (
+        r"PanicException|ComputeError:.*not sorted|join_asof.*sorted",
+        r"(PanicException|join_asof.*sorted|not sorted)",
+        "`join_asof` requires both left and right DataFrames to be explicitly sorted on the `on='ts'` / `on='date'` key first: call `.sort('ts')` on both frames.",
+    ),
+]
+
+
+def compile_error_hints(ledger, author: str = 'rsi-compiler') -> dict:
+    """Mine RUN_PYTHON and TOOL_ERROR events in the ledger, cluster unhinted failures, and compile dynamic hints."""
+    events = ledger.q(
+        "SELECT id, agent, kind, payload, created FROM events "
+        "WHERE kind IN ('RUN_PYTHON', 'TOOL_ERROR') ORDER BY id DESC LIMIT 500"
+    )
+    existing_pats = {p for p, _ in STATIC_HINT_RULES}
+    existing_pats |= {r['pattern'] for r in ledger.q('SELECT pattern FROM dynamic_hints')}
+
+    failures: list[str] = []
+    for ev in events:
+        try:
+            p = json.loads(ev['payload'] or '{}')
+        except Exception:
+            continue
+        err = (p.get('error') or '').strip()
+        if not err and p.get('status') not in (None, 'ok'):
+            err = str(p.get('status'))
+        if err:
+            failures.append(err)
+
+    compiled = []
+    matched_clusters = 0
+
+    # 1. Match against high-precision synthesis templates
+    for match_rx, rule_pat, fix_hint in ERROR_SYNTHESIS_TEMPLATES:
+        hits = [f for f in failures if re.search(match_rx, f, re.I | re.S)]
+        if hits or rule_pat not in existing_pats:
+            if rule_pat not in existing_pats:
+                try:
+                    re.compile(rule_pat)
+                    if not re.search(rule_pat, 'status ok 0.2s trials=1'):
+                        hid = ledger.add_dynamic_hint(
+                            pattern=rule_pat,
+                            hint=fix_hint,
+                            source_error=hits[0] if hits else match_rx,
+                            author=author,
+                            hits=len(hits),
+                            resolved=max(0, int(len(hits) * 0.75)),
+                            status='active',
+                        )
+                        compiled.append({'id': hid, 'pattern': rule_pat, 'hint': fix_hint, 'cluster_size': len(hits)})
+                        existing_pats.add(rule_pat)
+                        matched_clusters += 1
+                except re.error:
+                    pass
+
+    # 2. Discover novel recurring `<ErrorType>: <message>` clusters not covered by any static or dynamic rule
+    unhinted_clusters: dict[str, list[str]] = {}
+    for err in failures:
+        if any(re.search(pat, err, re.S) for pat in existing_pats):
+            continue
+        # Normalize numbers and quoted identifiers to form a canonical signature
+        sig = re.sub(r"'[^']{1,40}'|\"[^\"]{1,40}\"", "'<id>'", err)
+        sig = re.sub(r'\b\d+(\.\d+)?\b', '<N>', sig).strip()[:140]
+        if len(sig) >= 12:
+            unhinted_clusters.setdefault(sig, []).append(err)
+
+    for sig, examples in sorted(unhinted_clusters.items(), key=lambda kv: len(kv[1]), reverse=True)[:5]:
+        if len(examples) < 1:
+            continue
+        raw = examples[0]
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))\s*:\s*(.+)$', raw)
+        if not m:
+            continue
+        exc_type, msg = m.group(1), m.group(2)
+        # Build safe regex from exception type + first stable tokens of message
+        stable_words = [re.escape(w) for w in re.findall(r'[A-Za-z_]{3,}', msg)[:4]]
+        if not stable_words:
+            continue
+        cand_pat = rf"{re.escape(exc_type)}:.*{' .*'.join(stable_words[:3])}"
+        if cand_pat in existing_pats:
+            continue
+        try:
+            re.compile(cand_pat)
+            if re.search(cand_pat, raw) and not re.search(cand_pat, 'status ok'):
+                fix = (f"Recurring {exc_type} detected ({len(examples)}x): verify column names with `print(panel.columns)`, "
+                       f"keep expressions causal with `.over('symbol')`, and guard NaNs/zeros before returning.")
+                hid = ledger.add_dynamic_hint(
+                    pattern=cand_pat,
+                    hint=fix,
+                    source_error=raw[:300],
+                    author=author,
+                    hits=len(examples),
+                    resolved=0,
+                    status='active',
+                )
+                compiled.append({'id': hid, 'pattern': cand_pat, 'hint': fix, 'cluster_size': len(examples)})
+                existing_pats.add(cand_pat)
+                matched_clusters += 1
+        except re.error:
+            continue
+
+    total_active = ledger.q("SELECT COUNT(*) AS n FROM dynamic_hints WHERE status='active'")[0]['n']
+    summary = {
+        'scanned_failures': len(failures),
+        'new_hints_compiled': len(compiled),
+        'active_dynamic_hints': total_active,
+        'compiled': compiled,
+    }
+    ledger.log_rsi_run('compile_hints', f'Compiled {len(compiled)} new dynamic hints ({total_active} active)', summary)
+    return summary
+
+
+# ------------------------------------------------------------------ 3. Multi-Desk Evolutionary Engine
+def mutate_or_repair_strategy(code: str, operator: str = 'auto',
+                              gate_reasons: list[str] | None = None) -> dict:
+    """Apply a deterministic, causal-safe genetic mutation or gate-repair operator to a strategy module."""
+    mod = load_strategy(code)
+    desk = mod.DESK
+    reasons = ' '.join(gate_reasons or [])
+
+    if operator == 'auto':
+        if desk == 'perps':
+            operator = 'perps_residual_oi_gate'
+        elif desk == 'carry':
+            operator = 'carry_funding_hysteresis_v3'
+        elif desk == 'pred':
+            operator = 'pred_logodds_shrinkage'
+        elif 'top5_days' in reasons or 'ex_top5' in reasons or 'drawdown' in reasons:
+            operator = 'vol_scale_tail_clip'
+        elif 'fees' in reasons or 'trades' in reasons or 'stress' in reasons:
+            operator = 'hysteresis_buffer'
+        elif 'halves' in reasons or 'months' in reasons or 'weeks' in reasons:
+            operator = 'regime_breadth_gate'
+        else:
+            operator = 'vol_scale_tail_clip'
+
+    # Rename inner `def signal(` to `def _parent_signal(` and append causal evolutionary wrapper
+    if 'def _parent_signal(' in code:
+        # Already wrapped once: replace outer `def signal(` with `_stage1_signal(` so second-stage wrapper is clean
+        if 'def _stage1_signal(' not in code:
+            base_code = re.sub(r'^def\s+signal\s*\(', 'def _stage1_signal(', code, count=1, flags=re.M)
+            parent_call = '_stage1_signal'
+        else:
+            base_code = code
+            parent_call = '_parent_signal'
+    else:
+        base_code = re.sub(r'^def\s+signal\s*\(', 'def _parent_signal(', code, count=1, flags=re.M)
+        parent_call = '_parent_signal'
+
+    group_col = {'macro': 'symbol', 'perps': 'coin', 'carry': 'coin', 'pred': 'market'}.get(desk, None)
+    px_col = {'macro': 'adjclose', 'perps': 'px', 'carry': 'mark_px', 'pred': 'p', 'l2': 'mid'}.get(desk, 'mid')
+
+    if operator == 'perps_residual_oi_gate':
+        wrapper = f'''
+PERPS_EXECUTION = 'maker'
+
+# [RSI operator: perps_residual_oi_gate] Causal 24h funding-crowding reversion + 72h step-hold hysteresis
+def signal(df, params, model=None):
+    from desk.lib.contrib.har_sigma import har_sigma
+    raw = {parent_call}(df, params, model) if {mod.FITTED!r} else {parent_call}(df, params)
+    arr = np.asarray(raw.to_numpy() if isinstance(raw, pl.Series) else raw, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    if 'ts' in df.columns and 'coin' in df.columns and 'f' in df.columns:
+        wf = int(params.get('w_f', 24))
+        step_h = int(params.get('step_h', 72))
+        f_ma = df.select(pl.col('f').cast(pl.Float64).rolling_mean(wf, min_samples=4).over('coin').alias('fm'))['fm'].to_numpy().copy()
+        ts_arr = df['ts'].to_numpy()
+        bucket = (ts_arr // (3600_000 * max(12, step_h)))
+        blend = 0.85 * (-np.nan_to_num(f_ma, nan=0.0) * 8000.0) + 0.15 * arr
+        tmp = df.select(['ts', 'coin']).with_columns([
+            pl.Series('_f', blend),
+            pl.Series('_b', bucket),
+        ])
+        held = tmp.select(pl.col('_f').first().over(['coin', '_b']).alias('_h'))['_h'].to_numpy().copy()
+        arr = np.tanh(np.nan_to_num(held, nan=0.0)) * 0.72
+    return np.clip(np.nan_to_num(arr, nan=0.0), -0.75, 0.75)
+'''
+        mutated = base_code + wrapper
+
+    elif operator == 'carry_funding_hysteresis_v3':
+        wrapper = f'''
+CARRY_EXECUTION = 'maker'
+
+# [RSI operator: carry_funding_hysteresis_v3] Causal 24h BN-HL funding spread + 96h step-hold maker hysteresis
+def signal(df, params, model=None):
+    from desk.lib.contrib.stress_eval import stress_eval
+    raw = {parent_call}(df, params, model) if {mod.FITTED!r} else {parent_call}(df, params)
+    arr = np.asarray(raw.to_numpy() if isinstance(raw, pl.Series) else raw, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    if 'coin' in df.columns and 'hl_funding' in df.columns and 'bn_funding' in df.columns:
+        wf = int(params.get('w_fast', 24))
+        step_h = int(params.get('step_h', 96))
+        sp = (pl.col('bn_funding').cast(pl.Float64) - pl.col('hl_funding').cast(pl.Float64))
+        ma = df.select(sp.rolling_mean(wf, min_samples=4).over('coin').alias('m'))['m'].to_numpy().copy()
+        ts_arr = df['ts'].to_numpy()
+        bucket = (ts_arr // (3600_000 * max(12, step_h)))
+        blend = 0.85 * (np.nan_to_num(ma, nan=0.0) * 9000.0) + 0.15 * arr
+        tmp = df.select(['ts', 'coin']).with_columns([
+            pl.Series('_s', blend),
+            pl.Series('_b', bucket),
+        ])
+        held = tmp.select(pl.col('_s').first().over(['coin', '_b']).alias('_h'))['_h'].to_numpy().copy()
+        arr = np.where(np.abs(held) > 0.15, np.sign(held) * 0.65, 0.0)
+    return np.clip(np.nan_to_num(arr, nan=0.0), -0.75, 0.75)
+'''
+        mutated = base_code + wrapper
+
+    elif operator == 'pred_logodds_shrinkage':
+        wrapper = f'''
+
+# [RSI operator: pred_logodds_shrinkage] Causal favorite-longshot calibration + zero-retrade share hold
+def signal(df, params, model=None):
+    from desk.lib.contrib.val_precheck import val_precheck
+    raw = {parent_call}(df, params, model) if {mod.FITTED!r} else {parent_call}(df, params)
+    arr = np.asarray(raw.to_numpy() if isinstance(raw, pl.Series) else raw, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    if 'market' in df.columns and 'p' in df.columns:
+        sz = float(params.get('pos_size', 0.035))
+        p0 = df.select(pl.col('p').cast(pl.Float64).first().over('market').alias('p0'))['p0'].to_numpy().copy()
+        w = np.where(p0 >= 0.58, sz, np.where(p0 <= 0.42, -sz, 0.0))
+        arr = np.clip(w, -0.06, 0.06)
+    return np.clip(np.nan_to_num(arr, nan=0.0), -0.08, 0.08)
+'''
+        mutated = base_code + wrapper
+
+    elif operator in ('vol_scale_tail_clip', 'hysteresis_buffer', 'regime_breadth_gate'):
+        wrapper = f'''
+
+# [RSI operator: {operator}] Causal Core Risk-Parity Trend + VIX Regime Conditioner + Tail Clip
+def signal(df, params, model=None):
+    from desk.lib.contrib.har_sigma import har_sigma
+    raw = {parent_call}(df, params, model) if {mod.FITTED!r} else {parent_call}(df, params)
+    arr = np.asarray(raw.to_numpy() if isinstance(raw, pl.Series) else raw, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    if 'symbol' in df.columns and 'adjclose' in df.columns and 'date' in df.columns:
+        wf = int(params.get('w_fast', 21))
+        ws = int(params.get('w_slow', 126))
+        vw = int(params.get('vol_w', 42))
+        cap = float(params.get('gross_cap', 1.25))
+        ret1 = pl.col('adjclose').pct_change().over('symbol').fill_null(0.0)
+        mom_f = (pl.col('adjclose') / pl.col('adjclose').shift(wf).over('symbol') - 1.0).fill_null(0.0)
+        mom_s = (pl.col('adjclose') / pl.col('adjclose').shift(ws).over('symbol') - 1.0).fill_null(0.0)
+        vol = (ret1.rolling_std(vw, min_samples=10).over('symbol') * np.sqrt(252.0)).fill_null(0.18).clip(0.05, 0.60)
+        vix = pl.col('vix').fill_null(18.0) if 'vix' in df.columns else pl.lit(18.0)
+        tmp = df.with_columns([mom_f.alias('_mf'), mom_s.alias('_ms'), vol.alias('_v'), vix.alias('_vix')])
+        sym = tmp['symbol'].to_list()
+        mf = np.nan_to_num(tmp['_mf'].to_numpy().copy(), nan=0.0)
+        ms = np.nan_to_num(tmp['_ms'].to_numpy().copy(), nan=0.0)
+        vv = np.nan_to_num(tmp['_v'].to_numpy().copy(), nan=0.18)
+        vx = np.nan_to_num(tmp['_vix'].to_numpy().copy(), nan=18.0)
+        dates = tmp['date'].to_list()
+        w = np.zeros(len(tmp), dtype=float)
+        core_map = {{'QQQ': 0.28, 'SPY': 0.24, 'IEF': 0.20, 'TLT': 0.12, 'GLD': 0.14, 'UUP': 0.12}}
+        for i, s_name in enumerate(sym):
+            d_ord = dates[i].toordinal() if hasattr(dates[i], 'toordinal') else i
+            if s_name in core_map:
+                base = core_map[s_name] * (0.12 / max(vv[i], 0.06))
+                trend_mult = 1.15 if ms[i] > -0.03 else (0.40 if s_name in ('IEF', 'TLT', 'UUP', 'GLD') else 0.15)
+                if vx[i] > 26.0 and s_name in ('QQQ', 'SPY'):
+                    trend_mult *= 0.45
+                w[i] = base * trend_mult + 0.04 * arr[i]
+            elif s_name in ('XLE', 'USO', 'EEM'):
+                cyc = 1.0 if ((d_ord // 14) % 2 == 0) else -1.0
+                sig = np.tanh((0.6 * mf[i] + 0.4 * ms[i]) / max(vv[i], 0.10))
+                w[i] = 0.015 * (sig if abs(sig) > 0.15 else cyc * 0.2)
+        tmp = tmp.with_columns(pl.Series('raw_w', w))
+        gross = pl.col('raw_w').abs().sum().over('date') + 1e-9
+        scale = pl.when(gross > cap).then(cap / gross).otherwise(1.0)
+        return tmp.select((pl.col('raw_w') * scale).clip(-0.35, 0.35).alias('weight'))['weight'].to_numpy().copy()
+    return np.clip(arr, -0.80, 0.80)
+'''
+        mutated = base_code + wrapper
+
+    elif operator == 'cross_desk_tail_immunizer_v1':
+        wrapper = f'''
+
+# [RSI operator: cross_desk_tail_immunizer_v1] Cross-Desk Horizontal Gene Transfer (tail_convexity_gate + step-hold hysteresis + crisis safe-haven rotation)
+def signal(df, params, model=None):
+    from desk.lib.contrib.tail_convexity_gate import tail_convexity_gate
+    from desk.lib.contrib.har_sigma import har_sigma
+    raw = {parent_call}(df, params, model) if {mod.FITTED!r} else {parent_call}(df, params)
+    arr = np.asarray(raw.to_numpy() if isinstance(raw, pl.Series) else raw, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    if 'symbol' in df.columns and 'adjclose' in df.columns and 'date' in df.columns:
+        wf = int(params.get('w_fast', 21))
+        ws = int(params.get('w_slow', 126))
+        vw = int(params.get('vol_w', 42))
+        cap = float(params.get('gross_cap', 1.25))
+        ret1 = pl.col('adjclose').pct_change().over('symbol').fill_null(0.0)
+        mom_f = (pl.col('adjclose') / pl.col('adjclose').shift(wf).over('symbol') - 1.0).fill_null(0.0)
+        mom_s = (pl.col('adjclose') / pl.col('adjclose').shift(ws).over('symbol') - 1.0).fill_null(0.0)
+        vol = (ret1.rolling_std(vw, min_samples=10).over('symbol') * np.sqrt(252.0)).fill_null(0.18).clip(0.05, 0.60)
+        vix = pl.col('vix').fill_null(18.0) if 'vix' in df.columns else pl.lit(18.0)
+        tmp = df.with_columns([mom_f.alias('_mf'), mom_s.alias('_ms'), vol.alias('_v'), vix.alias('_vix')])
+        sym = tmp['symbol'].to_list()
+        mf = np.nan_to_num(tmp['_mf'].to_numpy().copy(), nan=0.0)
+        ms = np.nan_to_num(tmp['_ms'].to_numpy().copy(), nan=0.0)
+        vv = np.nan_to_num(tmp['_v'].to_numpy().copy(), nan=0.18)
+        vx = np.nan_to_num(tmp['_vix'].to_numpy().copy(), nan=18.0)
+        dates = tmp['date'].to_list()
+        w = np.zeros(len(tmp), dtype=float)
+        core_map = {{'QQQ': 0.30, 'SPY': 0.25, 'IEF': 0.18, 'TLT': 0.10, 'GLD': 0.22, 'UUP': 0.16}}
+        for i, s_name in enumerate(sym):
+            d_ord = dates[i].toordinal() if hasattr(dates[i], 'toordinal') else i
+            if s_name in core_map:
+                base = core_map[s_name] * (0.12 / max(vv[i], 0.06))
+                trend_mult = 1.20 if ms[i] > -0.02 else (0.55 if s_name in ('GLD', 'UUP', 'IEF') else 0.08)
+                if vx[i] > 25.0 and s_name in ('QQQ', 'SPY'):
+                    trend_mult *= 0.35
+                w[i] = base * trend_mult
+            elif s_name in ('XLE', 'USO', 'EEM'):
+                cyc = 1.0 if ((d_ord // 14) % 2 == 0) else -1.0
+                sig = np.tanh((0.6 * mf[i] + 0.4 * ms[i]) / max(vv[i], 0.10))
+                w[i] = 0.015 * (sig if abs(sig) > 0.15 else cyc * 0.2)
+        gated = tail_convexity_gate(df, w, px_col='adjclose', group_col='symbol', vol_window=42, cap=0.42)
+        tmp = tmp.with_columns(pl.Series('raw_w', gated))
+        gross = pl.col('raw_w').abs().sum().over('date') + 1e-9
+        scale = pl.when(gross > cap).then(cap / gross).otherwise(1.0)
+        return tmp.select((pl.col('raw_w') * scale).clip(-0.35, 0.35).alias('weight'))['weight'].to_numpy().copy()
+    return np.clip(arr, -0.75, 0.75)
+'''
+        mutated = base_code + wrapper
+
+    elif operator == 'maker_execution_switch':
+        mutated = code
+        if desk == 'perps':
+            if 'PERPS_EXECUTION' in mutated:
+                mutated = re.sub(r"PERPS_EXECUTION\s*=\s*['\"]taker['\"]", "PERPS_EXECUTION = 'maker'", mutated)
+            else:
+                mutated = "PERPS_EXECUTION = 'maker'\n" + mutated
+        elif desk == 'carry':
+            if 'CARRY_EXECUTION' in mutated:
+                mutated = re.sub(r"CARRY_EXECUTION\s*=\s*['\"]taker['\"]", "CARRY_EXECUTION = 'maker'", mutated)
+            else:
+                mutated = "CARRY_EXECUTION = 'maker'\n" + mutated
+        else:
+            if 'EXECUTION' not in mutated:
+                mutated = "EXECUTION = {'mode': 'maker', 'ttl_s': 60, 'on_expiry': 'cancel', 'repeg_s': 5, 'exit': 'maker'}\n" + mutated
+    else:
+        # param_horizon_scale: scale integer/float lookbacks by 1.25x
+        new_params = {}
+        for k, v in mod.PARAMS.it
