@@ -1,1 +1,1 @@
-@file:///tmp/quant-lab-ship/repo/desk/company/rsi.py
+{{FILE:/tmp/quant-lab-ship/repo/desk/company/rsi.py}}
