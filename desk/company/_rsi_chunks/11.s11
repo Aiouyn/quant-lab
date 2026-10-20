@@ -1,34 +1,7 @@
-['running'] = True
-        _DAEMON_STATE['interval_s'] = interval_s
-        _DAEMON_STATE['use_llm'] = bool(use_llm)
+ = settings or SETTINGS
+    n_agents = max(12, int(n_agents or 50))
+    n_scouts = max(8, int(round(n_agents * 0.64)))      # 32 at 50 agents
+    n_clusterers = max(2, int(round(n_agents * 0.20)))  # 10 at 50 agents
+    n_officers = max(2, n_agents - n_scouts - n_clusterers)  # 8 at 50 agents
 
-        def _loop():
-            time.sleep(1.5)
-            L = Ledger(s_cfg.ledger)
-            L.set('stop', False)
-            cycles_done = 0
-            while True:
-                with _DAEMON_LOCK:
-                    if not _DAEMON_STATE['running']:
-                        break
-                if L.stop_requested():
-                    with _DAEMON_LOCK:
-                        _DAEMON_STATE['running'] = False
-                    break
-                try:
-                    oe_res = run_open_ended_frontier_rsi(L, settings=s_cfg, use_llm=False, author='daemon-open-ended-rsi')
-                    try:
-                        from ..data.live_flux import ingest_live_forward_bars_and_attribute
-                        ingest_live_forward_bars_and_attribute(s_cfg, ledger=L, author='daemon-live-appender', log_episode=False)
-                    except Exception:
-                        pass
-                    cycles_done += 1
-                    with _DAEMON_LOCK:
-                        _DAEMON_STATE['cycles'] += 1
-                        _DAEMON_STATE['last_run'] = time.time()
-                        _DAEMON_STATE['last_campaign_id'] = f"OE-G{oe_res.get('generation', cycles_done)}"
-                        snap = {
-                            'running': _DAEMON_STATE['running'],
-                            'cycles': _DAEMON_STATE['cycles'],
-                            'interval_s': _DAEMON_STATE['interval_s'],
-                            'last_run': _D
+    target_desks = [d for d in (desks or ['macro', 'perps', 'carry', 'pred']) if d in ('macro', 'perps', 
