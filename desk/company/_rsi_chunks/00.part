@@ -1,1 +1,447 @@
-{"__load_from": "/tmp/for_calldynamic_tool.json"}
+"""Closed-loop Recursive Self-Improvement (RSI) engine for Desk OS v3.
+
+Four feedback loops that compound the research organization's capability without
+weakening the immutable truth machine (sealed validation, holdout, forward split):
+1. Automated Error-to-Hint Compiler: clusters unhinted RUN_PYTHON / TOOL_ERROR tracebacks
+   into verified regex -> fix rules in `dynamic_hints`, tracking hits and resolution rates.
+2. AST Primitive Attribution & Empirical Lift Scoring: parses imports of `desk.lib.contrib.*`
+   across sandbox runs, factors, and strategies to compute Bayesian Sharpe/IC/pass-rate lift.
+3. Multi-Desk Evolutionary Crossover & Gate-Repair Engine: breeds top factors and repairs
+   near-miss strategies across `macro`, `perps`, `pred`, `carry`, and `l2` desks.
+4. Drill-Gated Charter & Prompt Optimizer: versions role/pod charter patches and gates
+   promotion on planted-drill discovery correlation, zero null-drill false discoveries,
+   and sandbox error-rate reduction.
+"""
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import re
+import time
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+
+from .hints import RULES as STATIC_HINT_RULES
+from ..lab.strategy import code_hash, load_strategy, causality_test
+
+CONTRIB_DIR = Path(__file__).resolve().parent.parent / 'lib' / 'contrib'
+
+
+# ------------------------------------------------------------------ 1. AST Primitive Attribution & Lift
+def extract_contrib_imports(code: str) -> list[str]:
+    """Return sorted unique `desk.lib.contrib.<module>` names imported in `code`."""
+    if not code or 'contrib' not in code:
+        return []
+    found: set[str] = set()
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module == 'desk.lib.contrib':
+                    for alias in node.names:
+                        if alias.name != '*':
+                            found.add(alias.name)
+                elif node.module.startswith('desk.lib.contrib.'):
+                    sub = node.module.split('desk.lib.contrib.', 1)[1].split('.')[0]
+                    if sub:
+                        found.add(sub)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith('desk.lib.contrib.'):
+                        sub = alias.name.split('desk.lib.contrib.', 1)[1].split('.')[0]
+                        if sub:
+                            found.add(sub)
+    except SyntaxError:
+        pass
+    for m in re.finditer(r'desk\.lib\.contrib\.([a-zA-Z_][a-zA-Z0-9_]*)', code):
+        found.add(m.group(1))
+    for m in re.finditer(r'from\s+desk\.lib\.contrib\s+import\s+([a-zA-Z0-9_,\s]+)', code):
+        for part in m.group(1).split(','):
+            tok = part.strip().split()[0] if part.strip() else ''
+            if tok and tok.isidentifier():
+                found.add(tok)
+    known = {p.stem for p in CONTRIB_DIR.glob('*.py') if p.stem != '__init__'}
+    return sorted(found & known) if known else sorted(found)
+
+
+def discover_contrib_modules() -> list[dict]:
+    """Inspect all installed modules in `desk/lib/contrib/` and extract metadata."""
+    out = []
+    if not CONTRIB_DIR.exists():
+        return out
+    for p in sorted(CONTRIB_DIR.glob('*.py')):
+        if p.stem.startswith('_'):
+            continue
+        try:
+            src = p.read_text(encoding='utf-8')
+            tree = ast.parse(src)
+            doc = (ast.get_docstring(tree) or '').strip().splitlines()[0] if ast.get_docstring(tree) else ''
+            funcs = [n.name for n in tree.body if isinstance(n, ast.FunctionDef) and not n.name.startswith('_')]
+        except Exception:
+            doc, funcs = '', []
+        out.append({'name': p.stem, 'functions': funcs, 'doc': doc[:220]})
+    return out
+
+
+def record_primitive_outcome(ledger, code: str, agent: str, kind: str, ref_id: str = '',
+                             success: bool = True, metric_val: float | None = None) -> list[str]:
+    """Parse `desk.lib.contrib` imports in `code` and log outcome metrics to `primitive_usages`."""
+    prims = extract_contrib_imports(code)
+    for p in prims:
+        ledger.log_primitive_usage(p, agent, kind, ref_id=ref_id, success=success, metric_val=metric_val)
+    return prims
+
+
+def primitive_lift_leaderboard(ledger) -> list[dict]:
+    """Compute empirical Bayesian lift per `desk.lib.contrib` primitive across sandbox, factor, and strategy runs."""
+    modules = {m['name']: m for m in discover_contrib_modules()}
+    rows = ledger.q(
+        'SELECT primitive, kind, COUNT(*) AS n, SUM(success) AS ok_n, AVG(metric_val) AS mean_val '
+        'FROM primitive_usages GROUP BY primitive, kind'
+    )
+    # Global baselines for Bayesian shrinkage
+    base_strat = ledger.q("SELECT AVG(sharpe) AS m FROM trials WHERE kind IN ('dev_backtest','submission') AND sharpe IS NOT NULL")
+    base_sr = float(base_strat[0]['m']) if base_strat and base_strat[0]['m'] is not None else 0.65
+    base_fac = ledger.q("SELECT AVG(score) AS m FROM factors WHERE score IS NOT NULL")
+    base_fscore = float(base_fac[0]['m']) if base_fac and base_fac[0]['m'] is not None else 1.80
+
+    by_prim: dict[str, dict] = {}
+    for name, meta in modules.items():
+        by_prim[name] = {
+            'primitive': name,
+            'functions': meta['functions'],
+            'doc': meta['doc'],
+            'sandbox_runs': 0,
+            'sandbox_ok': 0,
+            'factor_uses': 0,
+            'mean_factor_score': None,
+            'strategy_uses': 0,
+            'mean_strategy_sharpe': None,
+        }
+    for r in rows:
+        p = r['primitive']
+        if p not in by_prim:
+            by_prim[p] = {
+                'primitive': p, 'functions': [], 'doc': '',
+                'sandbox_runs': 0, 'sandbox_ok': 0,
+                'factor_uses': 0, 'mean_factor_score': None,
+                'strategy_uses': 0, 'mean_strategy_sharpe': None,
+            }
+        entry = by_prim[p]
+        if r['kind'] == 'run_python':
+            entry['sandbox_runs'] += int(r['n'] or 0)
+            entry['sandbox_ok'] += int(r['ok_n'] or 0)
+        elif r['kind'] == 'factor':
+            entry['factor_uses'] += int(r['n'] or 0)
+            entry['mean_factor_score'] = round(float(r['mean_val']), 2) if r['mean_val'] is not None else None
+        elif r['kind'] == 'strategy':
+            entry['strategy_uses'] += int(r['n'] or 0)
+            entry['mean_strategy_sharpe'] = round(float(r['mean_val']), 2) if r['mean_val'] is not None else None
+
+    leaderboard = []
+    for p, d in by_prim.items():
+        total_uses = d['sandbox_runs'] + d['factor_uses'] + d['strategy_uses']
+        pass_rate = (d['sandbox_ok'] + 2) / (d['sandbox_runs'] + 2.5) if d['sandbox_runs'] > 0 else 0.85
+        # Empirical Bayesian shrinkage (prior weight k=2)
+        sr_raw = d['mean_strategy_sharpe'] if d['mean_strategy_sharpe'] is not None else base_sr
+        n_s = d['strategy_uses']
+        shrunk_sr = (n_s * sr_raw + 2.0 * base_sr) / (n_s + 2.0)
+        sr_lift = round(shrunk_sr - base_sr, 2)
+
+        f_raw = d['mean_factor_score'] if d['mean_factor_score'] is not None else base_fscore
+        n_f = d['factor_uses']
+        shrunk_f = (n_f * f_raw + 2.0 * base_fscore) / (n_f + 2.0)
+        f_lift = round(shrunk_f - base_fscore, 2)
+
+        composite_lift = round(0.6 * sr_lift + 0.25 * f_lift + 0.5 * (pass_rate - 0.75), 3)
+        status = ('HIGH_LIFT' if composite_lift >= 0.15 and pass_rate >= 0.75 else
+                  'NEEDS_REFACTOR' if (d['sandbox_runs'] >= 4 and pass_rate < 0.60) or composite_lift < -0.15 else
+                  'ACTIVE')
+        leaderboard.append({
+            **d,
+            'total_uses': total_uses,
+            'pass_rate': round(pass_rate, 3),
+            'sharpe_lift': sr_lift,
+            'factor_lift': f_lift,
+            'composite_lift': composite_lift,
+            'status': status,
+        })
+    leaderboard.sort(key=lambda x: (x['composite_lift'], x['total_uses']), reverse=True)
+    return leaderboard
+
+
+def format_primitive_brief(ledger, limit: int = 8) -> str:
+    """Format the empirical primitive lift leaderboard for injection into agent session briefs."""
+    all_lb = primitive_lift_leaderboard(ledger)
+    lines: list[str] = []
+    if all_lb:
+        shown = list(all_lb[:limit])
+        shown_names = {r['primitive'] for r in shown}
+        for r in all_lb[limit:]:
+            if r['status'] == 'NEEDS_REFACTOR' and r['primitive'] not in shown_names:
+                shown.append(r)
+                shown_names.add(r['primitive'])
+        lines.append('== EMPIRICAL PRIMITIVE LIFT LEADERBOARD (desk.lib.contrib) ==')
+        for r in shown:
+            fn_list = ', '.join(r['functions'][:3]) or r['primitive']
+            lines.append(
+                f"- `from desk.lib.contrib.{r['primitive']} import {fn_list}` · "
+                f"status={r['status']} · lift={r['composite_lift']:+.2f} "
+                f"(ΔSharpe {r['sharpe_lift']:+.2f}, pass {r['pass_rate']*100:.0f}%, uses={r['total_uses']})"
+            )
+        refactor = [r['primitive'] for r in all_lb if r['status'] == 'NEEDS_REFACTOR']
+        if refactor:
+            lines.append(f"Toolsmith priority: refactor or harden {', '.join(refactor)} (low sandbox pass rate or negative lift).")
+
+    gate_lb = gate_failure_leaderboard(ledger, limit=min(6, limit))
+    if gate_lb:
+        lines.append('== GATE FAILURE CREDIT (reject clusters) ==')
+        for g in gate_lb:
+            ops = ', '.join(f"{o['operator']}×{o['count']}" for o in (g.get('top_operators') or [])[:3]) or 'n/a'
+            prims = ', '.join(f"{p['primitive']}×{p['count']}" for p in (g.get('top_primitives') or [])[:3]) or 'n/a'
+            lines.append(
+                f"- gate=`{g['gate']}` · n={g['count']} · stages={','.join(g.get('stages') or [])} · "
+                f"ops=[{ops}] · prims=[{prims}]"
+            )
+    return '\n'.join(lines)
+
+
+def _parse_report(raw) -> dict:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw) if isinstance(raw, str) else {}
+    except Exception:
+        return {}
+
+
+def _report_sharpe(raw) -> float | None:
+    """Return observed Sharpe from a report, or None when absent (never invent)."""
+    rep = _parse_report(raw)
+    sr = (rep.get('summary') or {}).get('sharpe')
+    if sr is None:
+        return None
+    try:
+        return float(sr)
+    except (TypeError, ValueError):
+        return None
+
+
+def record_gate_failure(ledger, *, strategy_id: str, stage: str, gates: list,
+                        operator: str | None = None, desk: str | None = None,
+                        primitives: list[str] | None = None, author: str = 'rsi-truth-machine') -> dict:
+    """Persist a Truth Machine gate rejection for credit / bandit downweighting."""
+    payload = {
+        'strategy_id': strategy_id,
+        'stage': stage,
+        'gates': list(gates or []),
+        'operator': operator or '',
+        'desk': desk or '',
+        'primitives': list(primitives or []),
+    }
+    ledger.event(author, 'GATE_FAILURE', payload)
+    return payload
+
+
+def gate_failure_leaderboard(ledger, limit: int = 20) -> list[dict]:
+    """Aggregate GATE_FAILURE ledger events by failed gate name (honest reject credit)."""
+    rows = ledger.q(
+        "SELECT payload FROM events WHERE kind='GATE_FAILURE' ORDER BY created DESC LIMIT 800"
+    )
+    by_gate: dict[str, dict] = {}
+    for r in rows:
+        try:
+            payload = json.loads(r['payload']) if isinstance(r['payload'], str) else (r.get('payload') or {})
+        except Exception:
+            continue
+        stage = payload.get('stage') or 'unknown'
+        op = payload.get('operator') or ''
+        prims = payload.get('primitives') or []
+        for gate in (payload.get('gates') or ['unknown']):
+            g = str(gate)
+            entry = by_gate.setdefault(g, {
+                'gate': g,
+                'count': 0,
+                'stages': set(),
+                'operators': {},
+                'primitives': {},
+            })
+            entry['count'] += 1
+            entry['stages'].add(stage)
+            if op:
+                entry['operators'][op] = entry['operators'].get(op, 0) + 1
+            for p in prims:
+                if p:
+                    entry['primitives'][p] = entry['primitives'].get(p, 0) + 1
+
+    out = []
+    for g, d in by_gate.items():
+        top_ops = sorted(
+            ({'operator': k, 'count': v} for k, v in d['operators'].items()),
+            key=lambda x: -x['count'],
+        )[:5]
+        top_prims = sorted(
+            ({'primitive': k, 'count': v} for k, v in d['primitives'].items()),
+            key=lambda x: -x['count'],
+        )[:5]
+        out.append({
+            'gate': g,
+            'count': d['count'],
+            'stages': sorted(d['stages']),
+            'top_operators': top_ops,
+            'top_primitives': top_prims,
+        })
+    out.sort(key=lambda x: (-x['count'], x['gate']))
+    return out[:limit]
+
+
+def compute_generation_scoreboard(
+    ledger,
+    *,
+    tm_res: dict | None = None,
+    drill_res: dict | None = None,
+    hint_res: dict | None = None,
+    prim_res: dict | None = None,
+    bred_children: list | None = None,
+    campaign_id: str | None = None,
+    generation: int | None = None,
+    desks: list[str] | None = None,
+    use_llm: bool = False,
+) -> dict:
+    """Honest generation scoreboard: only observed metrics; null when no sample. Never invent Sharpe/drill defaults.
+
+    `generation_fitness` rewards newly_approved, val/holdout of new approvals, drill pass, hint resolution,
+    and primitive lift. `children_bred` is telemetry only — not treated as success.
+    """
+    tm_res = tm_res or {}
+    drill_res = drill_res or {}
+    hint_res = hint_res or {}
+    prim_res = prim_res or {}
+
+    all_strats = ledger.q(
+        "SELECT id, dev_report, val_report, holdout_report, status FROM strategies "
+        "WHERE dev_report IS NOT NULL OR val_report IS NOT NULL OR holdout_report IS NOT NULL"
+    )
+    dev_sharpes: list[float] = []
+    val_sharpes: list[float] = []
+    hold_sharpes: list[float] = []
+    approved_count = 0
+    for sr_row in all_strats:
+        dsr = _report_sharpe(sr_row.get('dev_report'))
+        if dsr is not None:
+            dev_sharpes.append(dsr)
+        vsr = _report_sharpe(sr_row.get('val_report'))
+        if vsr is not None:
+            val_sharpes.append(vsr)
+        hsr = _report_sharpe(sr_row.get('holdout_report'))
+        if hsr is not None:
+            hold_sharpes.append(hsr)
+        if sr_row.get('status') in ('approved', 'paper'):
+            approved_count += 1
+
+    newly_ids = list(tm_res.get('approved_ids') or [])
+    new_val: list[float] = []
+    new_hold: list[float] = []
+    for sid in newly_ids:
+        st = ledger.strategy(sid) or {}
+        vsr = _report_sharpe(st.get('val_report'))
+        if vsr is not None:
+            new_val.append(vsr)
+        hsr = _report_sharpe(st.get('holdout_report'))
+        if hsr is not None:
+            new_hold.append(hsr)
+
+    port_rep = ((tm_res.get('portfolio') or {}).get('report') or {})
+    port_sr_raw = port_rep.get('sharpe') if isinstance(port_rep, dict) else None
+    try:
+        portfolio_sharpe = float(port_sr_raw) if port_sr_raw is not None else None
+    except (TypeError, ValueError):
+        portfolio_sharpe = None
+
+    prims = primitive_lift_leaderboard(ledger)
+    prims_obs = [p for p in prims if int(p.get('total_uses') or 0) > 0]
+    mean_lift = round(float(np.mean([p['composite_lift'] for p in prims_obs])), 3) if prims_obs else None
+    bandit_top = operator_bandit_leaderboard(ledger)
+    top_op = bandit_top[0]['operator'] if bandit_top else None
+
+    planted = drill_res.get('planted_signal_corr')
+    null_fdr = drill_res.get('null_false_discoveries')
+    drill_verdict = drill_res.get('verdict')  # None when drill not run — never default PROMOTED
+
+    newly_approved = int(tm_res.get('newly_approved') or 0)
+    # Fitness: observed learning signals only (children_bred excluded)
+    fit_new = min(1.0, newly_approved / 3.0)
+    fit_val = float(np.tanh(max(0.0, float(np.mean(new_val))) / 2.0)) if new_val else 0.0
+    fit_hold = float(np.tanh(max(0.0, float(np.mean(new_hold))) / 2.0)) if new_hold else 0.0
+    fit_drill = 1.0 if drill_verdict == 'PROMOTED' else (0.0 if drill_verdict else 0.0)
+    # Prefer explicit resolution stats when present
+    res_rate = hint_res.get('resolution_rate')
+    if res_rate is None:
+        hstat = ledger.q('SELECT SUM(hits) AS h, SUM(resolved_count) AS r FROM dynamic_hints')[0]
+        th, tr = int(hstat['h'] or 0), int(hstat['r'] or 0)
+        res_rate = (tr / th) if th > 0 else None
+    fit_hints = float(res_rate) if res_rate is not None else 0.0
+    fit_lift = float(np.tanh(max(0.0, mean_lift or 0.0))) if mean_lift is not None else 0.0
+    generation_fitness = round(
+        0.30 * fit_new
+        + 0.20 * fit_val
+        + 0.15 * fit_hold
+        + 0.15 * fit_drill
+        + 0.10 * fit_hints
+        + 0.10 * fit_lift,
+        4,
+    )
+
+    return {
+        'campaign_id': campaign_id,
+        'generation': generation,
+        'desks': list(desks or []),
+        'best_sharpe': round(max(dev_sharpes), 2) if dev_sharpes else None,
+        'mean_sharpe': round(float(np.mean(dev_sharpes)), 2) if dev_sharpes else None,
+        'best_val_sharpe': round(max(val_sharpes), 2) if val_sharpes else None,
+        'best_holdout_sharpe': round(max(hold_sharpes), 2) if hold_sharpes else None,
+        'portfolio_sharpe': round(portfolio_sharpe, 2) if portfolio_sharpe is not None else None,
+        'valid_discoveries': approved_count,
+        'val_passed': tm_res.get('val_passed'),
+        'newly_approved': newly_approved,
+        'newly_approved_val_sharpe_mean': round(float(np.mean(new_val)), 2) if new_val else None,
+        'newly_approved_holdout_sharpe_mean': round(float(np.mean(new_hold)), 2) if new_hold else None,
+        'total_approved': tm_res.get('total_approved', approved_count),
+        'top_operator': top_op,
+        'children_bred': len(bred_children or []),  # telemetry only — not a success metric
+        'primitives_evolved': prim_res.get('primitives_evolved'),
+        'mean_primitive_lift': mean_lift,
+        'active_hints': hint_res.get('active_dynamic_hints'),
+        'hint_resolution_rate': round(float(res_rate), 3) if res_rate is not None else None,
+        'planted_signal_corr': planted if planted is not None else None,
+        'null_false_discoveries': null_fdr if null_fdr is not None else None,
+        'drill_verdict': drill_verdict,
+        'generation_fitness': generation_fitness,
+        'llm_mode': 'deepseek-v4.1-flash-free' if use_llm else 'ast_deterministic',
+    }
+
+
+# ------------------------------------------------------------------ 2. Automated Error-to-Hint Compiler
+ERROR_SYNTHESIS_TEMPLATES = [
+    (
+        r"InvalidOperationError:.*rolling_.*window|rolling_mean.*min_samples|rolling_std.*min_samples",
+        r"InvalidOperationError:.*rolling_",
+        "Polars rolling functions require integer row counts (not time strings on numeric/panel columns) and `min_samples=` (not `min_periods=`): e.g. `pl.col('x').rolling_mean(20, min_samples=5).over('symbol')`.",
+    ),
+    (
+        r"ComputeError:.*(division by zero|log|sqrt|domain)",
+        r"ComputeError:.*(division by zero|log|sqrt|domain)",
+        "Polars ComputeError on math domain: guard denominators and log inputs with `.clip(lower_bound=1e-9)` or `+ 1e-9` before dividing/logging.",
+    ),
+    (
+        r"ShapeError:.*unable to broadcast|lengths don't match|shape mismatch",
+        r"ShapeError:.*(broadcast|length|shape)",
+        "Polars ShapeError: never mix filtered Series with the full panel; compute window/group expressions inside `panel.with_columns(<expr>.over('symbol'))` so row count stays identical.",
+    ),
+    (
+        r"TypeError:.*unsupported operand type.*'Expr'",
