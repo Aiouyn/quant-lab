@@ -1,0 +1,49 @@
+ (
+        f"Open-Ended Gen #{gen} Compositional AST Primitive ({chosen_k['id']} ∘ {chosen_g['id']} ∘ {chosen_s['id']}) "
+        f"synthesized to eliminate {target_desk} residual bottleneck ({residual_diagnosis['bottleneck_regime']})."
+    )
+
+    prim_code = f'''"""{prim_doc}"""
+from __future__ import annotations
+
+import numpy as np
+import polars as pl
+
+
+GRAMMAR_METADATA = {{
+    'generation': {gen},
+    'target_desk': {target_desk!r},
+    'signal_kernel': {chosen_k['id']!r},
+    'regime_gate': {chosen_g['id']!r},
+    'execution_stabilizer': {chosen_s['id']!r},
+    'ast_depth': {ast_depth},
+}}
+
+
+def {prim_name}(
+    df_or_signal,
+    raw_weights=None,
+    fast_w: int = {fast_w},
+    slow_w: int = {slow_w},
+    deadband: float = {deadband},
+    decay_lambda: float = {decay_lam},
+    cap: float = {cap_val},
+) -> np.ndarray:
+    """Causal Open-Ended Compositional Operator: {chosen_k['id']} -> {chosen_g['id']} -> {chosen_s['id']}.
+    Strictly causal over trailing windows [t-w+1 .. t] with zero lookahead leakage.
+    """
+    if raw_weights is not None:
+        base = np.asarray(raw_weights, dtype=float).reshape(-1)
+    elif isinstance(df_or_signal, pl.DataFrame):
+        for col in ('adjclose', 'px', 'bn_funding', 'f', 'p'):
+            if col in df_or_signal.columns:
+                base = df_or_signal[col].cast(pl.Float64).fill_null(0.0).to_numpy()
+                break
+        else:
+            base = np.zeros(len(df_or_signal), dtype=float)
+    elif isinstance(df_or_signal, pl.Series):
+        base = df_or_signal.cast(pl.Float64).fill_null(0.0).to_numpy()
+    else:
+        base = np.asarray(df_or_signal, dtype=float).reshape(-1)
+
+    x = np.nan_to_num(base.astype(flo
