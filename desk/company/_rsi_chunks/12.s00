@@ -1,0 +1,40 @@
+t=_loop, name='rsi-continuous-daemon', daemon=True)
+        _DAEMON_STATE['thread'] = t
+        t.start()
+
+    L_init = Ledger(s_cfg.ledger)
+    L_init.set('rsi_daemon', rsi_daemon_status())
+    return rsi_daemon_status(L_init)
+
+
+def stop_rsi_daemon(settings=None) -> dict:
+    """Stop the background continuous RSI daemon thread."""
+    from ..config import SETTINGS
+    from .ledger import Ledger
+
+    s_cfg = settings or SETTINGS
+    with _DAEMON_LOCK:
+        _DAEMON_STATE['running'] = False
+    L = Ledger(s_cfg.ledger)
+    st = rsi_daemon_status(L)
+    st['running'] = False
+    L.set('rsi_daemon', st)
+    return st
+
+
+# ------------------------------------------------------------------ 5. Snapshot & Seed Bootstrap
+def rsi_snapshot(ledger, settings=None) -> dict:
+    """Full RSI state for the Control Room UI and `python -m desk rsi status`."""
+    hints_rows = ledger.q('SELECT id, pattern, hint, source_error, author, hits, resolved_count, status, created FROM dynamic_hints ORDER BY hits DESC, created DESC LIMIT 30')
+    for h in hints_rows:
+        h['resolution_rate'] = round(h['resolved_count'] / max(h['hits'], 1), 3) if h['hits'] else 0.0
+
+    prims = primitive_lift_leaderboard(ledger)
+    lineages = ledger.q('SELECT child_id, child_kind, parent_ids, operator, desk, delta_score, created FROM lineages ORDER BY created DESC LIMIT 40')
+    for l in lineages:
+        try:
+            l['parents'] = json.loads(l['parent_ids']) if isinstance(l['parent_ids'], str) else l['parent_ids']
+        except Exception:
+            l['parents'] = [str(l['parent_ids'])]
+
+    charters = led

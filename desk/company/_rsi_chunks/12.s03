@@ -1,0 +1,42 @@
+forward_verdict': f_verdict,
+                    'weight': round(float(w_val), 4),
+                })
+        latest_portfolio = {
+            'id': pr['id'],
+            'author': pr['author'],
+            'status': pr['status'],
+            'created': pr['created'],
+            'weights': weights_map,
+            'report': rep_map,
+            'members': member_details,
+        }
+
+    # Gather forward survival rows across approved + retired_drift strategies
+    fwd_rows = ledger.q(
+        "SELECT id, name, pod, status, val_report, holdout_report, forward_report "
+        "FROM strategies WHERE status IN ('approved', 'paper', 'retired_drift') ORDER BY updated DESC LIMIT 16"
+    )
+    forward_survival = []
+    for fr in fwd_rows:
+        vrep = _parse_report(fr.get('val_report'))
+        hrep = _parse_report(fr.get('holdout_report'))
+        frep = _parse_report(fr.get('forward_report'))
+        vsr = _report_sharpe(vrep)
+        hsr = _report_sharpe(hrep)
+        if frep:
+            fsr = _report_sharpe(frep)
+            f_dd_raw = (frep.get('summary') or {}).get('max_drawdown')
+            try:
+                f_dd = float(f_dd_raw) if f_dd_raw is not None else None
+            except (TypeError, ValueError):
+                f_dd = None
+            drift_z = frep.get('drift_z')
+            try:
+                drift_z = float(drift_z) if drift_z is not None else None
+            except (TypeError, ValueError):
+                drift_z = None
+            verdict = frep.get('verdict') or 'NOT_RUN'
+        else:
+            fsr = None
+            f_dd = None
+            dri
