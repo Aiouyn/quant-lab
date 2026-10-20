@@ -1,0 +1,31 @@
+mmar & Hybrid LLM/Compositional Symbolic AST Synthesis of a brand-new `desk/lib/contrib/oe_*_v<gen>.py` primitive.
+    3. Verification via Self-Test + Empirical Causal Prefix-Invariance Probe (`max_abs_diff == 0.000000`).
+    4. Multi-Parent MAP-Elites Quality-Diversity (QD) Archive Illumination (12 behavioral niches) & MDL Complexity-Regularized Offspring Evaluation.
+    5. Co-Evolutionary Adversarial Regime Generator (Red-Queen Arms Race) & Bayesian Meta-Grammar Weight Update.
+    """
+    from ..config import SETTINGS
+
+    t0 = time.time()
+    s_cfg = settings or SETTINGS
+
+    prev_oe = ledger.get('open_ended_rsi', {}) or {}
+    gen = int(prev_oe.get('generation', 0)) + 1
+    prev_inventions = list(prev_oe.get('invention_ledger', []) or [])
+    prev_grammar = prev_oe.get('meta_grammar', None)
+
+    # 1. Initialize or load Self-Rewriting Meta-Grammar weights
+    if prev_grammar and isinstance(prev_grammar, dict) and prev_grammar.get('signal_kernels'):
+        kernels = [dict(x) for x in prev_grammar['signal_kernels']]
+        gates = [dict(x) for x in prev_grammar['regime_gates']]
+        stabilizers = [dict(x) for x in prev_grammar['execution_stabilizers']]
+    else:
+        kernels = [
+            {**k, 'posterior_weight': k['prior_weight'], 'delta_weight': 0.0, 'uses': 1, 'mean_lift': 0.42}
+            for k in OPEN_ENDED_GRAMMAR_SPEC['signal_kernels']
+        ]
+        gates = [
+            {**g, 'posterior_weight': g['prior_weight'], 'delta_weight': 0.0, 'uses': 1, 'mean_lift': 0.38}
+            for g in OPEN_ENDED_GRAMMAR_SPEC['regime_gates']
+        ]
+        stabilizers = [
+            {**s, 'posterior_weight': s['prior_weight'], 'delta_weight': 0.0, 'uses': 1, 'm
