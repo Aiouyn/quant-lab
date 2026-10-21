@@ -292,10 +292,11 @@ class Toolbox:
 
     # ------------------------------------------------------------ research
     async def t_run_python(self, code, timeout_s=300):
-        trials = self.agent.workspace / 'trials.jsonl'
+        # host-side trial log, outside every jail mount: the sandbox reports trials over a pipe, the host writes them
+        trials = self.s.home / 'trial_logs' / f'{self.agent.name}.jsonl'
         trials.unlink(missing_ok=True)
         res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots,
-                               extra_env={'DESK_TRIALS': trials})
+                               trials_path=trials)
         n = self._collect_trials(trials)
         if n:
             res['trials_logged'] = n

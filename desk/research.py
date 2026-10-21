@@ -140,10 +140,15 @@ def factor_report(df, values, resolution='1m', horizons_s=(10, 60, 300, 900, 360
 
 def _log_trial(kind, sharpe, days_, ident):
     """Every backtest counts toward the firm's multiple-testing ledger (deflated Sharpe)."""
+    line = json.dumps({'kind': kind, 'sharpe': float(sharpe), 'days': int(days_), 'id': ident}) + chr(10)
+    fd = os.environ.get('DESK_TRIALS_FD')       # sandbox: a pipe to the HOST, which writes the trial log itself
+    if fd:
+        os.write(int(fd), line.encode('utf-8'))
+        return
     p = os.environ.get('DESK_TRIALS')
     if p:
         with open(p, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'kind': kind, 'sharpe': float(sharpe), 'days': int(days_), 'id': ident}) + chr(10))
+            f.write(line)
 
 
 def backtest(df, target, resolution='1m', **cost):
