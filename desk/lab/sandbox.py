@@ -145,32 +145,57 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
 
 
 async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
-    """Trusted harness job in a subprocess (full store access decided by the caller)."""
+    """Trusted harness job in a subprocess (full store access decided by the caller).
+    Charter R7b: the job must carry `_ticket`, issued by the host ledger (Ledger.issue_ticket) for this exact job and
+    never used before; it is redeemed here before anything runs."""
+    from ..company.ledger import Ledger, TicketRefused
+    try:
+        Ledger(settings.ledger).redeem_ticket(job.get('_ticket'), job)
+    except TicketRefused as e:
+        return {'error': f'ticket_refused: {e}'}
     jobs = settings.home / 'jobs'
     jobs.mkdir(parents=True, exist_ok=True)
     jid = uuid.uuid4().hex[:12]
     jp, op = jobs / f'{jid}.json', jobs / f'{jid}.out.json'
     mem_mb = mem_mb or getattr(settings, 'job_memory_mb', 5000)
-    job = dict(job, _home=str(settings.home), _store=str(settings.store))   # the harness evaluates on THIS run's store
-    jp.write_text(json.dumps(job, default=str))
-    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
-    for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
-        env.pop(secret_key, None)
-    async with (slot or _nullslot()):
-        await _wait_for_memory(mem_mb)
-        proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op), cwd=str(ROOT),
-                                                    env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
-        out, err = await proc.communicate()
-        killed, _ = await watcher
+    # per-split view holding only job['allowed'] data, outside the store tree. A holdout view is bound to the R4 token
+    # the pipeline claimed in holdout_uses, opened at most once, and torn down on exit. Under the OS jail (PR #14) this view root is
+    # the ONLY store path to mount read-only. The job gets no _home: it only needs its store.
+    ledger = Ledger(settings.ledger)
+    from ..data.views import HoldoutRefused
     try:
-        if op.exists():
-            res = json.loads(op.read_text())
-        else:
-            res = {'error': f'harness failed ({killed or proc.returncode})', 'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
-    finally:
-        for p in (jp, op):
-            p.unlink(missing_ok=True)
+        return await _run_job_in_view(job, settings, ledger, jid, jp, op, timeout_s, mem_mb, slot)
+    except HoldoutRefused as e:
+        return {'error': f'holdout_refused: {e}'}
+
+
+async def _run_job_in_view(job, settings, ledger, jid, jp, op, timeout_s, mem_mb, slot):
+    from ..data.views import store_for_job
+    with store_for_job(settings.store, job, ledger=ledger, job_id=jid,
+                       root=getattr(settings, 'views_dir', None),
+                       forward_warmup_days=getattr(settings, 'forward_warmup_days', None)) as (store_root, holdout):
+        job = dict(job, _store=str(store_root))
+        jp.write_text(json.dumps(job, default=str))
+        env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
+        for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
+            env.pop(secret_key, None)
+        try:
+            async with (slot or _nullslot()):
+                await _wait_for_memory(mem_mb)
+                proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op),
+                                                            cwd=str(ROOT), env=env, stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.PIPE)
+                watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
+                out, err = await proc.communicate()
+                killed, _ = await watcher
+            if op.exists():
+                res = json.loads(op.read_text())
+            else:
+                res = {'error': f'harness failed ({killed or proc.returncode})',
+                       'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
+        finally:
+            for p in (jp, op):
+                p.unlink(missing_ok=True)
     return res
 
 

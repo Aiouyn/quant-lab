@@ -41,8 +41,8 @@ def _brief(r):
 
 def _settings(job):
     import dataclasses
-    if job.get('_home'):
-        return dataclasses.replace(SETTINGS, home=Path(job['_home']), store_dir=Path(job['_store']))
+    if job.get('_store'):                                   # run_job passes only the job's (per-split) store view
+        return dataclasses.replace(SETTINGS, store_dir=Path(job['_store']))
     return SETTINGS
 
 
@@ -369,6 +369,9 @@ def factor_eval(job):
 
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
+    if not job.get('_ticket'):                                # charter R7b: only run_job (which redeems it) launches us
+        Path(sys.argv[2]).write_text(json.dumps({'error': 'ticket_refused: job has no ledger trial ticket'}))
+        return
     try:
         out = {'strategy_eval': strategy_eval, 'factor_eval': factor_eval}[job['type']](job)
     except Exception as e:
