@@ -2,6 +2,8 @@
 
 This document chronicles the end-to-end engineering, quantitative calibration, and architectural evolution of **Quant Lab v3 (Desk OS)**: from diagnosing the failure modes of v2, through reality-calibrating market microstructure across four desks, to building a closed-loop **Autonomous Recursive Self-Improvement (RSI) Engine** powered by `deepseek-v4.1-flash-free` and gated by an out-of-sample **Truth Machine** and **Equal-Risk-Contribution (ERC) Master Portfolio**.
 
+> **SYNTHETIC-OUTPUT DECLARATION (2026-10-21).** Every RSI, tournament, `oe_*` primitive (`desk/lib/contrib/oe_*.py`) and immunization/drill output described in this document is **synthetic**. These outputs were produced on, or validated against, store_builder fallback panels or generated drill data, not verified market data. They are **not evidence of any trading edge**, and the numbers attached to them (Sharpe, lift, survival counts) must not be cited as performance.
+
 ---
 
 ## 1. Origins: Why Quant Lab v2 Failed & Why Desk OS v3 Exists
@@ -73,12 +75,26 @@ Phase 1 transformed Desk OS from a static multi-agent harness into a self-observ
 Phase 2 removed human-in-the-loop bottlenecks by making data provisioning, feature-library expansion, and strategy code mutation fully autonomous:
 
 ### 5.1 Multi-Desk Feature Store Builder (`desk/data/store_builder.py`)
-- Automatically populates `results/v3/store/{macro,perps,carry,pred}/panel.parquet` and `splits.json` with strict temporal boundaries:
-  - **`dev` (60%)**: Visible to researchers, sandbox scripts, and evolutionary mutation.
-  - **`val` (20%)**: Sealed validation window for out-of-sample gating and Deflated Sharpe calculation.
-  - **`holdout` (15%)**: One-shot holdout window (evaluated at most once per unique `code_sha256`).
-  - **`forward` (5%)**: Rolling post-approval forward monitor.
-- Each desk helper (`macro_panel`, `perps_panel`, `carry_panel`, `pred_panel`) enforces `split='dev'` by default in researcher sandboxes and auto-builds missing store files on demand.
+
+> **Synthetic-data caveat (2026-10-21).** `desk/data/store_builder.py` first tries public HTTP harvesting. If that fails, it falls back to a **deterministic synthetic generator** (seeded `np.random.default_rng(20261017/18/19)`) that writes calibrated, *made-up* returns, funding and prediction-market outcomes into `results/v3/store/{macro,perps,carry,pred}`.
+> A panel built this way contains **no market information**, and any Sharpe computed on it is meaningless. The module's own `provenance.json` (`verified_real`, `source`) must be checked before any result is cited.
+
+The per-desk splits (they are **not** a uniform 60/25/15; checked against the code at this commit):
+
+| Desk / source | dev | val | holdout | forward | Defined in |
+|---|---|---|---|---|---|
+| Generic feature store (1 Hz book) | 60% of days | 25% | 15% | days added later | `desk/data/store.py` (`dev_fraction`/`val_fraction` in `desk/config.py`) |
+| Carry, real panel | 60% of panel days | 25% | 15% | none | `desk/data/carry_data.py::_freeze_splits` |
+| Carry + perps, store_builder synthetic panel | **150 days** | **110 days** | **60 days** | 45 days → 2099 | `desk/data/store_builder.py` (contiguous 365-day timeline from 2025-10-15; overwrites `carry/splits.json` and `perps/splits.json`) |
+| Perps (lab) | 2023-06-01..2025-05-31 | 2025-06-01..2026-04-01 | 2026-04-02..2026-10-01 | 2026-10-02.. | `desk/lab/perps.py::SPLITS` (by date) |
+| Macro | 2000..2014 | 2015..2019 | 2020..2025-06 | 2025-07.. | `desk/lab/macro.py::SPLITS` (by year) |
+| Pred | ≤2026-02 | 2026-03..05 | 2026-06..07 | 2026-08.. | `desk/lab/pred.py::SPLITS`: date cut-offs chosen **by market count** (~57/22/19/rest of markets), not by days |
+
+Important points:
+- The store_builder carry split (150/110/60) and the `carry_data.py` 60/25/15 split **conflict**. Whichever wrote `carry/splits.json` first wins. Which one is on the operator's store is unverified.
+- Earlier versions of this section and the code notes describe splits as "frozen". **That claim is withdrawn.** `splits.json` files can be rewritten (`store_builder` writes them unconditionally on rebuild or `force`), and no hash of them has been recorded.
+- **All desks' holdouts are suspect** until the ledger (`company.db` `holdouts`/`trials`) has been audited for prior holdout access. See also §7.3.
+- Each desk helper (`macro_panel`, `perps_panel`, `carry_panel`, `pred_panel`) enforces `split='dev'` by default in researcher sandboxes and auto-builds missing store files on demand. Those auto-built files may be synthetic (see the caveat above).
 
 ### 5.2 Autonomous Toolsmith Loop (`evolve_primitives`)
 - Inspects `primitive_lift_leaderboard(ledger)` for modules flagged `NEEDS_REFACTOR` (such as early versions of `har_sigma`) and synthesizes replacement implementations plus new quantitative building blocks in `desk/lib/contrib/`:
@@ -155,12 +171,29 @@ Running multi-generation closed-loop campaigns (`run_rsi_campaign`) across all f
 - **Total Evolved Lineages Tracked**: `20+` multi-generation children across `macro`, `perps`, `carry`, and `pred`.
 - **Gate Filtering Efficacy**:
   - Candidates with high in-sample Sharpe but concentrated outlier days (`mean_ex_top5_days <= 0`) or excessive turnover under `1.5x` fees were caught and marked `rejected_val` (`S-ec8f29`, `S-77c7dd`), immediately penalizing their generating operators/primitives.
-  - **10 strategies** survived the full `dev` $\rightarrow$ sealed `val` (DSR) $\rightarrow$ one-shot `holdout` pipeline and exported verified bundles to `results/v3/bundles/`.
+  - ~~**10 strategies** survived the full `dev` → sealed `val` (DSR) → one-shot `holdout` pipeline and exported verified bundles to `results/v3/bundles/`.~~ **RETRACTED (2026-10-21):** unverified and contradicted. See the retraction notice in §7.2.
 
-### 7.2 Master Portfolio (`P-001`) Composition & Risk-Adjusted Performance
-- **Portfolio Sharpe (Out-of-Sample Combined)**: **`10.18`** (annualized across orthogonal multi-desk sleeves: `macro`, `perps`, `carry`, `pred`)
-- **Max Drawdown**: **`0.024`** (`2.4%` of unit notional)
-- **Diversification**: Cross-desk correlations between `macro` ETF trend/yield-curve sleeves, `carry` funding-basis sleeves, `perps` residual momentum sleeves, and `pred` calibration sleeves remain near zero (`|corr| < 0.25` across desks), yielding substantial variance reduction under ERC weighting.
+### 7.2 Master Portfolio (`P-001`): RETRACTED
+
+> **RETRACTION (2026-10-21).** The claims below are **retracted**: an out-of-sample portfolio Sharpe of 10.18, a 2.4% max drawdown, and "10 strategies survived holdout" (§7.1).
+> They are **unverified**: no ledger rows or `results/v3/bundles/` artifacts have been produced to back them.
+> They are **contradicted** by the research log, `RESEARCH_LOG_2026-10-03.md` (repo root), where every family evaluated out of sample was rejected or failed its holdout.
+> No out-of-sample alpha has been demonstrated in this repo. Do not cite these numbers.
+
+Original text, kept for the record:
+
+- ~~**Portfolio Sharpe (Out-of-Sample Combined)**: **`10.18`** (annualized across orthogonal multi-desk sleeves: `macro`, `perps`, `carry`, `pred`)~~
+- ~~**Max Drawdown**: **`0.024`** (`2.4%` of unit notional)~~
+- ~~**Diversification**: Cross-desk correlations between `macro` ETF trend/yield-curve sleeves, `carry` funding-basis sleeves, `perps` residual momentum sleeves, and `pred` calibration sleeves remain near zero (`|corr| < 0.25` across desks), yielding substantial variance reduction under ERC weighting.~~
+
+### 7.3 Burned holdouts (already seen; not usable for confirmation)
+
+The following holdout windows have already been observed. They **must not** be reused to confirm any strategy in the same family or any variant derived from it. Confirmation for these families has to come from a fresh, pre-registered out-of-sample source, such as the forward split or forward paper trading.
+
+In addition, **every desk's holdout (macro, perps, carry, pred) is SUSPECT** until the ledger's holdout-access records have been audited. The perps split note itself says val and holdout were already used by the 2026-10-03 family tests (`desk/lab/perps.py`). The carry holdout was seen by the spot-carry test.
+
+- **F05 funding sign-flip (receive the new rate):** **BURNED.** The family was discovered on its holdout (`RESEARCH_LOG_2026-10-03.md`, row 7).
+- **Spot cash-and-carry (short HL perp / long Binance spot):** **BURNED.** The holdout was evaluated once and failed: −2.8% maker, −11.6% taker (`RESEARCH_LOG_2026-10-03.md`, row 5).
 
 ---
 
