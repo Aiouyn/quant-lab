@@ -110,10 +110,10 @@ def test_sandbox_env_roots_hide_val_and_holdout(tmp_path):
     assert 'CARRY 1.0' in out, out
 
 
-@pytest.mark.xfail(strict=False, reason=(
+@pytest.mark.xfail(strict=True, reason=(
     'run_python is not an OS-level filesystem boundary: sandboxed code can walk settings.store and read val/holdout '
     'files directly. Fixed by QL Safety\'s filesystem-isolation sandbox PR '
-    'https://github.com/Aiouyn/quant-lab/pull/11; flip to a normal test once it lands.'))
+    'https://github.com/Aiouyn/quant-lab/pull/11; strict: an unexpected pass (isolation landed) fails CI, so remove the marker then.'))
 def test_sandbox_cannot_read_val_holdout_from_filesystem(tmp_path):
     s = _settings(tmp_path)
     _plant(s)
