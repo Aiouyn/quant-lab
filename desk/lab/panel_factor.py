@@ -13,8 +13,6 @@ Values are cached to artifacts/factor_values/<id>.parquet for later novelty chec
 """
 from __future__ import annotations
 
-import types
-
 import numpy as np
 import polars as pl
 
@@ -27,11 +25,9 @@ DESK_CFG = {
 
 
 def load_factor(code):
-    ns = {'np': np, 'pl': pl}
-    exec(compile(code, '<factor>', 'exec'), ns)
-    if not callable(ns.get('factor')):
-        raise ValueError('factor module must define factor(panel, params)')
-    return types.SimpleNamespace(factor=ns['factor'], PARAMS=dict(ns.get('PARAMS', {})), DESK=ns.get('DESK'))
+    """Agent-authored module: executed in the OS jail (factor_jail), never exec'd in this process."""
+    from .factor_jail import load
+    return load(code)
 
 
 def values(mod, panel):

@@ -1,8 +1,9 @@
 """Isolated execution of agent Python code and trusted harness jobs (async subprocesses).
 
 Sandbox: credential-free environment, dev-only data view, thread caps, wall-clock timeout and an RSS
-watchdog. This protects the organization from accidents (runaway loops, memory blowups, peeking at
-validation data by mistake); it is not an OS-level security boundary against hostile code.
+watchdog, and an OS-level jail (desk/lab/jail.py: bubblewrap with no network, a read-only minimal filesystem, the dev
+data view read-only, a private /tmp, the workspace as the only writable host path, rlimits and a non-root uid).
+If bubblewrap is unavailable run_python fails closed (JailUnavailable) unless DESK_SANDBOX_UNSAFE=1 is set for local dev.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ except ImportError:
     psutil = None
 
 from ..config import ROOT
+from . import jail
 
 SAFE_ENV = ('SYSTEMROOT', 'SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA',
             'APPDATA', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'COMSPEC', 'WINDIR', 'PATHEXT')
@@ -38,6 +40,34 @@ def _env(extra):
                 'PYTHONDONTWRITEBYTECODE': '1'})
     env.update({k: str(v) for k, v in extra.items()})
     return env
+
+
+def _carry_dev_view(settings):
+    """Dev-only copy of the carry store (splits.json with the dev split only + coin files cut at the dev end), so the
+    jail never mounts the full carry store. Rebuilt when the source changes. Returns <view>/carry."""
+    src = settings.store / 'carry'
+    view = settings.store / 'views' / 'carry_dev' / 'carry'
+    if not (src / 'splits.json').exists():
+        return view
+    from datetime import datetime, timezone
+    import shutil
+    import polars as pl
+    files = sorted((src / 'coins').glob('*.parquet'))
+    stamp = json.dumps([(src / 'splits.json').stat().st_mtime] + [(f.name, f.stat().st_mtime) for f in files])
+    if (view / '.stamp').exists() and (view / '.stamp').read_text() == stamp:
+        return view
+    dev = json.loads((src / 'splits.json').read_text())['dev']
+    end = int(datetime.fromisoformat(dev[1]).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
+    tmp = view.with_name('carry.tmp')
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / 'coins').mkdir(parents=True)
+    (tmp / 'splits.json').write_text(json.dumps({'dev': dev}))
+    for f in files:
+        pl.read_parquet(f).filter(pl.col('ts') < end).write_parquet(tmp / 'coins' / f.name)
+    (tmp / '.stamp').write_text(stamp)
+    shutil.rmtree(view, ignore_errors=True)
+    tmp.rename(view)
+    return view
 
 
 def _clip(text, head=2500, tail=6500):
@@ -111,6 +141,7 @@ async def _wait_for_memory(mem_mb, headroom_mb=1500, typical_mb=2000, max_wait_s
 
 async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_mb=None, slot=None, extra_env=None):
     """Run agent code with `from desk.research import *` preloaded. Returns stdout/stderr/status."""
+    jail.require() if not jail.unsafe_opt_in() else None    # fail closed before writing anything
     timeout_s = min(int(timeout_s or settings.sandbox_timeout_s), 1800)
     mem_mb = mem_mb or settings.sandbox_memory_mb
     scripts = Path(workspace) / 'scripts'
@@ -123,7 +154,7 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
     path.write_text(''.join(f + '\n' for f in fut) + PREAMBLE.format(root=str(ROOT)) + body, encoding='utf-8')
     env = _env({'DESK_STORE_ROOT': settings.store / 'views' / 'dev',
                 'DESK_LIBRARY': settings.artifacts / 'library.json',
-                'DESK_CARRY_ROOT': settings.store / 'carry',
+                'DESK_CARRY_ROOT': _carry_dev_view(settings),
                 'DESK_PERPS_DEV': settings.store / 'perps' / 'views' / 'dev.parquet',
                 'DESK_MACRO_DEV': settings.store / 'macro' / 'views' / 'dev.parquet',
                 'DESK_PERPS_DEV_FILLS': settings.store / 'perps' / 'views' / 'dev_fills.parquet',
@@ -133,7 +164,11 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
     async with (slot or _nullslot()):
         await _wait_for_memory(mem_mb)
         t0 = time.time()
-        proc = await asyncio.create_subprocess_exec(sys.executable, '-u', str(path), cwd=str(workspace), env=env,
+        ws = Path(workspace).resolve()
+        ro = [v for k, v in env.items() if k.startswith('DESK_') and k != 'DESK_TRIALS' and Path(v).is_absolute()]
+        argv, pre = jail.python_cmd([str(path.resolve())], rw=[ws], ro=ro, cwd=ws,
+                                    lim=jail.limits(timeout_s=timeout_s, mem_mb=mem_mb))
+        proc = await asyncio.create_subprocess_exec(*argv, cwd=str(workspace), env=env, preexec_fn=pre,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
         out, err = await proc.communicate()
