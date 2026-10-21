@@ -107,3 +107,29 @@ def test_run_job_fails_closed(tmp_path, monkeypatch):
     monkeypatch.delenv(jail.UNSAFE_ENV, raising=False)
     with pytest.raises(jail.JailUnavailable):
         asyncio.run(run_job(_job(CLEAN), _settings(tmp_path)))
+
+
+def test_run_job_cannot_read_splits_outside_allowed(tmp_path):
+    """With PR #16's per-split views only job['allowed'] data is mounted: val sentinels are unreachable to a dev job,
+    through the harness store, the view root, or the original store path."""
+    s = _settings(tmp_path)
+    p = pl.read_parquet(s.store / 'macro' / 'panel.parquet')
+    val = p.with_columns(pl.col('date') + pl.duration(days=365 * 3), pl.lit(777.0).alias('adjclose'), pl.lit(777.0).alias('close'))
+    pl.concat([p, val]).write_parquet(s.store / 'macro' / 'panel.parquet')     # 2016-2017 rows = val split
+    body = ("from pathlib import Path\nimport polars as _p\nimport desk.config as c\nseen = set()\n"
+            f"for top in [Path({str(s.store)!r}), Path({str(tmp_path)!r})]:\n"
+            "    for f in top.rglob('*.parquet'):\n"
+            "        try:\n            d = _p.read_parquet(f)\n        except Exception:\n            continue\n"
+            "        for col in d.columns:\n"
+            "            if d[col].dtype.is_numeric():\n                seen |= {float(v) for v in d[col].drop_nulls()} & {777.0}\n"
+            "seen |= {float(v) for v in panel['adjclose']} & {777.0}\n"
+            "r = sorted(seen)")
+    code = ("DESK = 'macro'\nPARAMS = {}\n"
+            "def signal(panel, params):\n" + ''.join('    ' + l + '\n' for l in body.splitlines()) +
+            "    raise RuntimeError('PROBE ' + repr(r))\n")
+    out = asyncio.run(run_job(_job(code, stress=False, allowed=['dev']), s, timeout_s=120)).get('error', '')
+    assert 'PROBE []' in out, out
+    # sanity: the same probe in-process (no jail, full store) does see the val sentinel
+    direct = harness.main.__globals__['strategy_eval']
+    with pytest.raises(RuntimeError, match=r'PROBE \[777\.0\]'):
+        direct(dict(_job(code, stress=False, allowed=['dev']), _home=str(s.home), _store=str(s.store)))

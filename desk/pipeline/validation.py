@@ -12,6 +12,8 @@ import time
 
 from ..lab.sandbox import run_job
 
+SEALED_SPLITS = ('val', 'holdout')
+
 # Desk-aware Sharpe bars (dev, val). The default was calibrated for intraday crypto; daily cross-asset macro premia run
 # at Sharpe 0.5-1.0, so 1.5 made the macro desk unpassable by design. Over 15 dev years Sharpe 0.7 is t ~ 2.7; DSR,
 # bootstrap, stress, holdout and forward gates still apply unchanged.
@@ -127,7 +129,20 @@ class Pipeline:
             # until the machine can actually provide it)
             self.L.event('pipeline', 'EVAL_RETRY_MEMORY', {'type': job.get('type'), 'split': job.get('split')})
             r = await run_job(job, self.s, timeout_s=timeout, slot=slot, mem_mb=8000)
+        if 'error' in r and job.get('split') in SEALED_SPLITS:
+            r = self._seal_error(job, r)
         return r
+
+    def _seal_error(self, job, r):
+        """Sealed (val/holdout) jobs: raw error text / stdout / traces could carry sealed data back to the author.
+        Keep them host-side only (a log file outside the ledger and every jail mount) and return a fixed code."""
+        raw = str(r.get('error', ''))
+        code = 'infrastructure_error' if raw.startswith('harness failed') else 'evaluation_error'
+        log = self.s.home / 'logs' / 'sealed_errors.jsonl'
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'ts': time.time(), 'split': job.get('split'), 'code': code, 'raw': r}, default=str) + '\n')
+        return {'error': code, 'sealed': True}
 
     def _notify(self, s, text, also=()):
         for who in {s['author'], *also}:
