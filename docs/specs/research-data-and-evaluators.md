@@ -1,0 +1,322 @@
+# Spec: research data and evaluators needed by preregs #4, #8 and #9
+
+- **Status:** SPEC ONLY. Written 2026-10-21 from code and docs; no data was read and nothing was run.
+- **Reviewers:** QL Validator, QL Safety, QL Engineer.
+- **Base:** origin/main `313b185cac9e53c9d0bfcaf48774b34e79d72d34`.
+- **Consumers:**
+  - **#4:** `docs/prereg/2026-10-21_hl_native_carry_btc_hype_val.md` (branch `research/prereg-hl-carry`)
+  - **#8:** `docs/prereg/2026-10-21_macro_xasset_tsmom_fxcarry.md` (branch `research/prereg-macro-tsmom`)
+  - **#9:** `docs/prereg/2026-10-21_polymarket_favorite_longshot.md` (branch `research/prereg-pred-flb`)
+- **Charter references:** R-numbers (R1.3, R7a) are cited as given by QL Validator *(per Validator charter, pending: branch `validator/gate-charter` was not on origin at 2026-10-21 05:4x UTC+2)*. They must be re-checked against the charter once it is published.
+- **Out of scope:** `desk/company/rsi.py`, gate logic, DSR methodology (owned by Validator / RSI Architect), and infra design. This doc only states needs.
+
+## Rules that apply to every item
+- **G1, no holdout or forward read:**
+  - Every new evaluator takes an explicit `allowed` split set, which may contain only `dev` and `val`. It must raise `SplitViolation` (`desk/data/store.py`) when asked for **`holdout` or `forward`**, or when either one appears in `allowed`.
+  - **Tests:**
+    - Evaluator calls with `split='holdout'`, with `split='forward'`, and with `allowed` containing either one must all raise.
+    - A fixture panel with sentinel `NaN` values in every holdout- and forward-dated row must give a finite result, which shows those rows are never materialized.
+    - Spy on the parquet scan and assert that the row filter's upper bound is at or before the end of val.
+- **G2, no lookahead:** a causality test in the style of `desk/lab/carry.py::carry_causality`. Truncate the panel at cut-points 0.4 and 0.7; positions and signals before the cut must be identical.
+- **G3, determinism:** two runs with the same inputs and seed give byte-identical result JSON. Its SHA-256 is recorded.
+- **G4, pinning, runtime split check and atomic writes:**
+  - Every output file gets a sidecar `<file>.sha256` and a `manifest.json` containing `{git_commit, code_sha256 per file, config_sha256, inputs: {path: sha256}, splits_sha256, bootstrap_seed, created_utc}`.
+  - **Runtime splits.json abort (R1.3, per Validator charter, pending):** at start-up, the evaluator computes the SHA-256 of the desk's `splits.json` and compares it with the value pinned in the prereg (or in `split_manifest.json`, P0-B). On any mismatch it aborts **before** loading data.
+    - Test: changing one byte of a fixture `splits.json` makes the evaluator raise, and no data file is opened (spy on reads).
+  - **Atomic writes:** every output (results, manifests, sidecars, ledger export files) is written to a temp file in the same directory, then `fsync`, then `os.replace` onto the final name. A partial file must never appear under the final name.
+    - Test: inject an exception mid-write. The final path is either absent or holds the previous complete version, and no `*.tmp` file is left behind (or the run fails loudly naming it).
+- **G5, nothing fabricated:** when an input is missing, the code **raises**. It never imputes or substitutes synthetic data.
+- **G6, ledger trial row (mandatory; JSON alone is not enough):**
+  - Every evaluator run, whether it passes, fails or aborts after loading data, produces **one trial row** carrying the **R4 strategy identity** (per Validator charter, pending: branch `validator/gate-charter` was not on origin at the time of writing, so the exact field list must be taken from R4 when it is published). At minimum the row must carry `{desk, split, family, strategy_code_sha256, config_sha256}`, plus `evaluator_commit`, a metric summary, `result_json_sha256` and `created`.
+  - **Written host-side (R7c, per Validator charter, pending):** the evaluator process **does not write to the ledger**. It emits its result and manifest (G4). The **host-side harness** then validates them and writes the row into the **ledger core that QL Engineer is building**, which is the only sink. An evaluator with direct ledger write access fails review.
+  - This depends on R7a (P0-C). Until R7a and the ledger core land, val runs are refused. There is no JSON-only fallback.
+  - **Tests:**
+    - A fixture run through the host harness against a temporary ledger core gives exactly one new row, with every R4 identity field non-null and matching the run's hashes.
+    - A changed config gives a second row with a different `config_sha256`.
+    - A G1 or G4 abort writes **no** row.
+    - The evaluator process runs with **no** ledger credentials or handle: an attempted write from inside it raises.
+- **G7, bootstrap standard (applies to every bootstrap in every evaluator: items 1, 2 and 7 (the macro evaluator), and 6):**
+  - The method is **studentized (bootstrap-t) or BCa**. Plain percentile intervals aren't allowed. The method used is logged.
+  - Daily series use a stationary or circular block bootstrap with **block size = max(5, ceil(T^(1/3)))**, where T is the series length. Cluster bootstraps (#9) resample whole clusters, and the same method rule applies.
+  - Use **≥ 5,000 draws**, with the seed logged in the manifest and the trial row.
+  - **Null-drill check (acceptance test for every evaluator):** on 500 synthetic zero-mean series (or shuffled or sign-randomized versions of a fixture), the one-sided 95% lower bound must exclude 0 (a false positive) in **≤ 5%** of runs, with binomial tolerance: fail if the count exceeds 35 of 500. For the cluster bootstrap, use calibrated Bernoulli(p) outcomes with the cluster structure kept. On a planted-signal fixture, the bound must exclude 0 in ≥ 80% of runs, so the check also covers power.
+  - **Conflict note:** the existing bootstrap helper in `desk/lab/stats.py` (non-studentized, fixed small block, too few draws by default) does **not** meet this standard. A G7-compliant implementation is needed; changing stats/gates belongs to Validator / RSI Architect, and it is assigned separately. Preregs #4, #8 and #9 have been amended to cite G7 and are BLOCKED until it ships.
+
+## P0 prerequisites
+
+### P0-A. Synthetic-fallback fix and provenance checks (`desk/data/store_builder.py`)
+- **Purpose:** #4, #8 and #9 all abort unless the store is real. Today `store_builder.py` silently falls back to seeded synthetic panels (rng seeds 20261017/18/19). It also **overwrites** `carry/splits.json` and `perps/splits.json` with a synthetic 150/110/60/45-day split, which conflicts with `carry_data.py::_freeze_splits` (60/25/15).
+- **Inputs:** the existing builders in `store_builder.py`, and `provenance.json` per desk.
+- **Outputs:**
+  1. The synthetic generator only runs behind an explicit `--synthetic` flag, and writes to `results/v3/store_synthetic/<desk>/`, **never** to `results/v3/store/`.
+  2. `results/v3/store/<desk>/provenance.json` with schema `{desk, source ∈ {yahoo, hyperliquid+binance, polymarket}, verified_real: true, fetched_utc, row_count, first_ts, last_ts, fetcher_commit}`.
+  3. A shared `assert_real(desk)` helper that every evaluator calls first.
+  4. The `splits.json` files are never rewritten when they already exist (see P0-B).
+- **Acceptance tests:**
+  - With the network mocked to fail, building into `store/` raises, and no file under `store/` changes (check by hashing the directory before and after).
+  - With `--synthetic`, output lands only in `store_synthetic/`, and `assert_real` on it raises.
+  - `assert_real` raises on `verified_real=false` or `source=deterministic_local_fixture`.
+  - Running the builder on an existing `splits.json` leaves its SHA-256 unchanged.
+- **Dependencies:** none.
+- **Priority:** P0, because every result on a possibly-synthetic store is meaningless.
+- **Size:** S–M (about 1–2 days).
+
+### P0-B. `splits.json` hashing and split metadata (all desks)
+- **Purpose:** #4 §3 (SHA, panel N, first/last day, val dates), #8 §1, #9 §2.
+- **Inputs:** `results/v3/store/{carry,macro,pred,perps}/splits.json`. For carry: **only the `ts` column** of the coin panels (read through a column projection; no value columns).
+- **Outputs:** `results/v3/store/split_manifest.json`:
+  ```
+  {desk: {splits_sha256, splits: {...}, generator: "carry_data._freeze_splits" | "lab SPLITS const" | "store_builder synthetic",
+          panel_days_N, panel_first_day, panel_last_day, val_start, val_end, recomputed_val_matches: bool}}
+  ```
+  For carry, `val_start = days[floor(0.60·N)]` and `val_end = days[floor(0.85·N)−1]`, matching `_freeze_splits`. For macro and pred, the values are compared against the `SPLITS` constants in `desk/lab/macro.py` and `desk/lab/pred.py`.
+- **Acceptance tests:**
+  - A fixture panel with N = 100 days gives val = days[60..84].
+  - A fixture whose splits.json `note` is the store_builder "contiguous 365d" one is flagged `generator = store_builder synthetic` and makes the tool exit non-zero.
+  - Reads are column-projected to `ts`. A test asserts no other column is loaded (spy on `pl.scan_parquet().select`).
+  - Determinism: the same inputs give the same manifest hash.
+- **Dependencies:** P0-A.
+- **Priority:** P0. It's cheap and unblocks every prereg's pins.
+- **Size:** S (about 0.5 day).
+
+### P0-C. Ledger trial-count query, after the R7a schema change (reference only)
+- **Purpose:**
+  - The n_trials floors in #4 (≥ 4), #8 (≥ 51) and #9 (≥ 15) are each combined with the ledger figure as a **hard floor**: N = max(prereg floor, ledger trials).
+  - **Per R9 (per Validator charter, pending)** the ledger figure counts **trials per family**: ledger rows with a distinct code + config hash for that family on that desk, across splits. It does **not** count distinct strategies.
+  - G6 needs a place to write trial rows.
+- **Observation from code:** `Ledger.trial_stats` (`desk/company/ledger.py`) counts `COUNT(DISTINCT code_hash)` over `trials WHERE kind IN ('dev_backtest','submission') AND days>=10`. That is firm-wide: the `trials` table has **no desk, split or family column**.
+- **Prerequisite, replacing the earlier `json_extract` proposal:** the **R7a ledger schema change** (per Validator charter, pending). It adds `desk`, `split` and `family` columns to the trials table, plus `config_hash` alongside `code_hash`.
+  - With that in place, the count is a plain read-only query: `SELECT COUNT(DISTINCT code_hash || ':' || config_hash) FROM trials WHERE desk=? AND split='val' AND family=?`, with variants per family or per desk as the Validator decides. `trial_sr_std` comes from the same rows.
+  - The earlier proposal to parse `$.desk` from `strategies.val_report` JSON is **withdrawn**.
+- **Known gap:** evaluations run before R7a (e.g. the ad-hoc scripts in `RESEARCH_LOG_2026-10-03.md`) have no rows. That's why the preregs keep hand-counted floors. Backfilling them (if at all) is the Validator's call.
+- **Ownership:** QL Validator / RSI Architect own the R7a schema, the DSR definition and the query. This spec only states the need.
+- **Acceptance (for the owners; stated as a need):**
+  - After migration, a fixture ledger with known rows across 2 desks × 2 splits × 2 families returns the hand-computed counts.
+  - Old rows keep `NULL` in the new columns and are excluded from family counts unless they are backfilled.
+- **Priority:** P0. It blocks G6 and every prereg run. It is not an engineering build here. **Size:** owner-estimated.
+
+## Items
+
+### (1) HL-native carry evaluator: needed by #4
+- **Purpose:** backtest the always-on 1× long HL spot / 1× short HL perp position for BTC and HYPE. No such evaluator exists: `desk/lab/carry.py` models HL perp vs **Binance perp**, and the script behind the research-log result isn't in the repo.
+- **Inputs:**
+  - HL hourly perp funding, HL perp mark/mid, HL spot mid for BTC and HYPE (from `desk/data/carry_data.py` / `hl_ctx.py` sources), plus a schema `{ts, coin, perp_px, spot_px, hl_funding}`.
+  - Val window from P0-B.
+  - Costs and rules exactly as in #4 §5–§7: 10 bps per entry, exit and re-hedge notional; re-hedge monthly or when |Δprice since last hedge| > 40%; 1.15× capital; USDC interest excluded; 1.5× stress.
+- **Outputs:** `results/v3/prereg/hl_carry/val_result.json` containing:
+  - per coin and combined: annualized return on capital, each quarter's return, max drawdown, share of hours with negative funding, the G7 bootstrap lower bound, DSR inputs
+  - the HYPE coverage rule from #4 §5: a BTC-only figure always, with HYPE excluded below 90 val days
+  - a manifest per G4
+- **Acceptance tests:**
+  - **Fixture 1:** constant funding of +1 bp/h, flat prices, no re-hedge. Expected return on capital = (8760 bp/yr − 20 bp) / 1.15, within 1e-9.
+  - **Fixture 2:** a +45% price path triggers exactly one re-hedge, charged 10 bps on the re-hedged notional.
+  - **Fixture 3:** negative funding gives a negative return, with the sign checked.
+  - **Fixture 4:** 1.5× stress raises costs by exactly 1.5×.
+  - G1 (asked for holdout or forward, it raises), G2, G3, G6, G7 null drill.
+- **Dependencies:** P0-A, P0-B.
+- **Priority:** P1. #4's forward paper (day 30, about 2026-11-02) is the stronger evidence and doesn't need this, but the val check does.
+- **Size:** M (about 2–3 days).
+
+### (2) FX-carry engine change and rate series (10 verified, 3 pairs dropped): needed by #8
+- **Purpose:** `desk/lab/macro.py` and `macro_data.py` state that FX spot returns exclude interest-rate carry. #8 §4 requires the daily carry r_base − r_quote (ACT/360) on every `fx` row, using rates known at close t and applied over (t+1, t+2].
+- **Inputs:**
+  - US: `^IRX`, already in the macro panel (class `rate`).
+  - Non-US short rates: the series IDs are now fixed in #8 §4 (OECD MEI via FRED, monthly averages; availability rule below, matching #8 at `17f4f7e`).
+    - **Verified:** `IR3TIB01{EZ,GB,JP,AU,NZ,CA,CH,MX,ZA,CN}M156N`. Each FRED catalog page was checked for existence and date range covering 2014–2019; no data was downloaded.
+    - **Pairs dropped in #8:** TRY=X (`IR3TIB01TRM156N` ends 2008-04), and BRL=X and INR=X (candidate IDs `IR3TIB01BRM156N` and `IR3TIB01INM156N` are **UNVERIFIED**; their FRED pages returned 404). That leaves 11 pairs.
+    - **Correction to the earlier version of this spec:** `MXN=X`, `ZAR=X` and `CNY=X` are also quoted as USD/XXX, so the carry is r_USD − r_XXX for those pairs too.
+  - Release timing: lag each monthly value by one month.
+  - Pair mapping: from the `UNIVERSE` symbols in `macro_data.py`. Note that `JPY=X`, `CAD=X`, `CHF=X` and the other `XXX=X` symbols are quoted as USD/XXX, so the carry sign flips for them. `EURJPY=X` is a cross, so its carry is r_EUR − r_JPY.
+- **Outputs:**
+  - **Availability rule (from #8):**
+    1. Each monthly value becomes usable from the first NYSE trading day **after its first-publication date**, taken from the ALFRED vintages (https://alfred.stlouisfed.org): `realtime_start` of the first vintage containing that month.
+    2. **Fallback**, when ALFRED has no vintage for that series and month: the value for month m is usable from the **first NYSE trading day of month m+2**.
+    3. The last usable value is **carried forward** step-wise, with no interpolation.
+    4. **Revisions are never backfilled:** a value as first published stays in force until the next month's value becomes usable. Later vintages never overwrite history.
+    - Whether ALFRED has vintages for these series is UNVERIFIED.
+    - `^IRX` is daily and usable at the close of its own date.
+  - `results/v3/store/macro/rates.parquet` with schema `{ref_month, ccy, rate_annual, source_id, vintage_date, available_from, rule ∈ {alfred_first_pub, m_plus_2}}`, plus a sha256 sidecar.
+  - An engine change in `desk/lab/macro.py` that adds carry for `cls == 'fx'` rows only, behind a flag that defaults on once reviewed.
+  - A currency with no reviewed series means that pair is **excluded** (G5). Nothing is imputed.
+- **Acceptance tests:**
+  - **Fixture:** a constant 5% base rate and 0% quote rate on a flat price gives a daily return of 0.05/360 per calendar day, applied on the documented lag.
+  - **Fixture:** the sign flips for USD/XXX quoting.
+  - **No-lookahead:** a rate value dated month m only affects returns from `available_from` onwards (G2-style truncation test).
+  - **Lag-rule fixture:**
+    - A series with an ALFRED first vintage on 2015-03-17 for ref month 2015-02 gives `available_from` = the next NYSE trading day (2015-03-18).
+    - The same month with no vintage gives `available_from` = the first NYSE trading day of 2015-04 (2015-04-01).
+    - Days between updates carry the prior value forward.
+    - A later revised vintage (e.g. 2015-05-20, with a different value for 2015-02) **does not** change any carry computed for dates before the next month's value becomes usable. This checks that revisions aren't backfilled.
+    - The log records `rule` per row.
+  - Non-fx rows' P&L is byte-identical before and after the change (regression hash).
+  - A missing currency raises or excludes the pair; it is never filled.
+  - G1 (holdout and forward blocked), G3, G6, G7 null drill.
+- **Dependencies:** P0-A (macro store real), P0-B.
+- **Priority:** P1. It blocks #8 completely, and the risk premium #8 targets is well documented, but #8 also needs the configs written.
+- **Size:** M (about 2–4 days, mostly sourcing the series and checking quoting).
+
+### (3) Full Polymarket re-fetch with archived/delisted coverage: needed by #9
+- **Purpose:** #9 §4 needs a full, non-incremental re-page, because the cursor checkpoint in `desk/data/polymarket.py::fetch_markets` "may miss a market created long ago that closes later". It also needs an answer on whether gamma `closed=true` returns archived or delisted markets, which is unknown from the code.
+- **Inputs:** gamma-api `/markets/keyset` (`closed=true`). An `archived=true` query parameter appeared to be **ignored** in a single-record check (it returned markets with `archived=false`), so archived coverage stays **UNVERIFIED**. The re-page must count the markets returned with `archived=true` (field documented at https://docs.polymarket.com/market-data/market-details.md), and clob `prices-history` as now.
+- **Additional stored fields (required by #9 r2):**
+  - `closed_time` (gamma `closedTime`, VERIFIED; it has a non-ISO format such as `2026-03-16 06:41:45+00`, so parse it explicitly) and `resolution_time` (gamma `umaEndDate`, field VERIFIED, meaning inferred). These feed #9's anchor A = min(endDate, closedTime, resolution) and its rule dropping markets with closedTime < endDate.
+  - Also store `conditionId` (VERIFIED), because the trades endpoint keys on it. The current fetcher stores only the gamma `id` and `yes_token`.
+  - **Trades:** per-market records `{conditionId, timestamp, side, price, size, outcomeIndex, transactionHash}` from data-api `GET /trades?market=<conditionId>&start=&end=&takerOnly=true` (VERIFIED: https://docs.polymarket.com/api-reference/core/get-trades-for-a-user-or-markets).
+    - Constraints: offset ≤ 10,000 (a 400 past that), so page inside `start`/`end` windows. Market-scoped history only reaches back about 3 years.
+    - It returns trades for markets closed in March 2026 (one `limit=1` check).
+    - Only the 7-day window before each market's snapshot is needed. They feed #9's floor of at least 20 trades in the 7 days before the snapshot.
+- **Outputs:**
+  - `results/v3/store/pred/markets_full.parquet` (same columns as now, plus `closed_time`, `resolution_time` and the item-4 fields).
+  - `results/v3/store/pred/trades/<market>.parquet`, plus a sha256 manifest.
+  - `results/v3/store/pred/fetch_report.json` with schema `{pages, markets_seen, kept, dropped_by_reason: {non_binary, unresolved, low_volume, parse}, archived_returned_count, missing_price_history}`.
+  - A fresh cursor that is not reused.
+- **Acceptance tests:**
+  - **Mocked API fixture** (pages with known markets, including one "old-created, late-closed" market placed behind a stale cursor): the full mode finds it, and incremental mode documents that it misses it.
+  - The drop-reason counts equal the fixture's known counts.
+  - The price-history missing rate is reported. #9 aborts if it is over 10% of eligible markets (the threshold lives in the prereg, not the fetcher).
+  - Re-running against the same mocked responses gives an identical parquet hash (G3).
+  - **Fixture:** a market with closedTime < endDate is flagged; A = min(endDate, closedTime, resolution) is computed correctly. Missing `closed_time` or `resolution_time` raises; it is never imputed.
+  - **Fixture:** a mocked `/trades` response that returns a 400 at offset > 10,000 makes the fetcher switch to splitting the `start`/`end` window, and the total count is still exact.
+  - **Fixture trades:** the trade count in [snapshot − 7 d, snapshot) is correct at the window boundaries. No trades after the snapshot are counted (no-lookahead).
+- **Dependencies:** P0-A.
+- **Priority:** P1. #9 can't define its universe without it.
+- **Size:** M (about 2 days, plus run time).
+
+### (4) Stored outcome labels and event/group ids: needed by #9 (clustering: event id → negRiskMarketID → (category, date of A); more than 20% on the last fallback means exploratory)
+- **Purpose:** #9 §4 excludes non-Yes/No binaries, because `fetch_markets` currently treats the first outcome as "YES" when there is no "yes" label. #9 §5–§6 also cluster bootstraps by event.
+- **Inputs:** gamma market fields `outcomes` (a JSON string), `events[].id` and `negRiskMarketID`. All are VERIFIED on a live single-record response (https://gamma-api.polymarket.com/markets/613835) and in https://docs.polymarket.com/market-data/market-details.md. Also store `archived`, `feesEnabled` and `feeType` (VERIFIED).
+- **Outputs:** new columns in `markets_full.parquet` and the panel metadata: `outcome_labels: list[str]`, `is_yes_no: bool`, `event_id: str | null`, `neg_risk_group: str | null`. If `event_id` is null for some markets, `fetch_report.json` reports the share. #9 then falls back to the `end_ms` date plus `category` cluster, and discloses that.
+- **Acceptance tests:**
+  - A fixture with outcomes `["Yes","No"]`, `["No","Yes"]` and `["Team A","Team B"]` gives `is_yes_no` = T, T, F, and the YES index is correct for the second.
+  - A fixture of a 3-candidate neg-risk event gives 3 rows with the same `event_id`.
+  - The `outcome` column is unchanged for existing Yes/No markets (regression).
+- **Dependencies:** item (3), which writes these columns in the same fetch.
+- **Priority:** P1.
+- **Size:** S (about 0.5–1 day on top of (3)).
+
+### (5) Dispute / ambiguous-resolution source: needed by #9
+- **Purpose:** #9 §4 excludes disputed or ambiguous resolutions. No field for this exists in the code.
+- **Inputs:**
+  - **Primary (field VERIFIED):** gamma `umaResolutionStatus` and `umaResolutionStatuses`, a JSON-string history such as `["proposed","resolved"]`.
+  - **#9 rule:** flag a market as disputed if the history has more than one `proposed` entry, or any token other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED.
+  - **Background:** the dispute process (2-hour challenge period, re-proposal, DVM vote) is VERIFIED at https://docs.polymarket.com/concepts/resolution.md.
+  - **Independent check (UNVERIFIED, optional):** UMA Optimistic Oracle dispute events via the UMA subgraph.
+  - Original note: **to be identified (REQUIRED).** Candidates are gamma market fields related to UMA resolution status, or UMA optimistic-oracle dispute events on-chain. Neither has been verified here. If no reliable source is found, the alternative is a documented waiver in #9.
+- **Outputs:** `results/v3/store/pred/disputes.parquet` with schema `{market, disputed: bool, source, evidence_ref}`, plus a sha256 sidecar.
+- **Acceptance tests:**
+  - On a hand-labelled fixture of known disputed and clean markets (labels with cited public references), precision and recall are reported. QL Validator sets the bar.
+  - Every disputed flag carries an `evidence_ref`.
+  - The resolution outcome itself is never used as a feature (no outcome columns are read).
+- **Dependencies:** item (3).
+- **Priority:** P2. It's a refinement, and #9 permits a disclosed waiver.
+- **Size:** M (research-heavy, and the size is uncertain).
+
+### (6) Bucket and event-clustered bootstrap evaluator, plus the sleeve strategy: needed by #9
+- **Purpose:** #9 §3, §5 and §6. Neither the evaluator nor the strategy is in the repo.
+- **Inputs:**
+  - The pred panel with columns `ts, market, p, end_ms, outcome, category, volume` (`desk/lab/pred.py`), plus `event_id` and `is_yes_no` from item 4.
+  - Rules fixed by #9:
+    - **Calibration snapshot:** the last row ≤ A − 24 h, within 6 h, where A = min(endDate, closedTime, umaEndDate). Markets with closedTime < endDate are **kept** and anchored on A; dropping them would select on the outcome. Their count and share are reported.
+    - **Buckets:** 14 edges.
+    - **Val membership:** both A and the snapshot fall in [2026-03-01, 2026-06-01) UTC. The sleeve considers only these markets.
+    - **Sleeve entry (from #9 at `55734bd`):**
+      - Entry time E = scheduled `endDate` − 24 h. The sleeve's bucket comes from the last price with `ts ≤ E`, within 6 h; otherwise the market is skipped as stale and counted.
+      - Only markets with E ≥ 2026-03-01 00:00 UTC are entered.
+      - If `closedTime` or `umaEndDate` ≤ E, the market is **skipped and counted**, with the share per bucket reported.
+      - If resolution comes after entry, the payout is booked **at resolution** (`umaEndDate`, else `closedTime`).
+      - **Sensitivity (reported, not a gate):** skipped markets are re-entered at A − 24 h, and the run is labelled not tradable.
+    - **Calibration p-value (null-centred bootstrap-t, G7 clustered form):**
+      - t_obs = m̂/ŝe and, for each draw, t* = (m* − m̂)/se*.
+      - p = (1 + #{|t*| ≥ |t_obs|}) / (1 + draws).
+      - se* comes from an inner bootstrap or a cluster-robust formula, and the method is logged.
+    - **Liquidity:** at least 20 trades in the 7 days before the snapshot (from item 3's trades).
+    - **Multiple testing:** Holm–Bonferroni across the 14 buckets at α = 0.05. Each bucket's p-value comes from the cluster bootstrap.
+    - **Fees:** the current schedule is VERIFIED (https://docs.polymarket.com/trading/fees). Its rollout for non-crypto/sports categories on 2026-03-30 is UNVERIFIED officially (secondary sources only). #9 therefore uses all-trades fees as the conservative base case and a `feesEnabled`-only version as a secondary report.
+    - **Costs:** an **engine change in `desk/lab/pred.py`:** an uncapped 1.5-cent half-spread for p < 0.10 or p ≥ 0.90 (1 cent otherwise), plus a category taker fee of C × feeRate × p(1−p) (rates in #9 §7, with 0.07 for unmapped categories). Both are scaled by `fee_mult`.
+    - **Minimum counts:** 30 markets and 10 events per bucket.
+- **Outputs:**
+  - `results/v3/prereg/pred_flb/calibration.json`: per bucket `{n_markets, n_events, mean_price, yes_rate, miscal, ci95_lo, ci95_hi, pass}`. The bootstrap follows G7's clustered form (resamples clusters; studentized; ≥ 5,000 draws; seed logged).
+  - `sleeve.json`: base, 1.5× cost and +1 delay-row runs via `desk/lab/pred.py::run_pred` / `summarize_pred`, plus the G7 bootstrap lower bound, `mean_ex_top`, results per half, an event-clustered lower bound, and DSR inputs.
+  - The strategy file `desk/strategies/pred_flb_sleeve.py`, following the `pred.py` strategy contract (path is a proposal).
+  - Manifests per G4.
+- **Acceptance tests:**
+  - **Planted-signal fixture:** synthetic markets where 0–2-cent contracts resolve YES at exactly half their price. The evaluator recovers miscalibration within the CI and passes. The sleeve's P&L sign is positive after costs.
+  - **Null fixture:** perfectly calibrated outcomes, drawn Bernoulli(p). Over 200 seeds, the bucket false-pass rate is ≤ 5%.
+  - **Clustering:** duplicating one event 50 times widens the CI compared with treating the copies as independent markets.
+  - **Snapshot no-lookahead:** perturbing prices after the snapshot leaves bucket assignment unchanged.
+  - **Boundary:** a market ending in val with a snapshot before 2026-03-01 is excluded and counted.
+  - **Holm fixture:** with known p-values, the rejection set equals a hand-computed Holm result.
+  - **Early-closed kept:** a fixture market with closedTime < endDate appears in calibration with its snapshot at A − 24 h, not at endDate − 24 h, and it is counted in the "early-closed" tally (not excluded).
+  - **Sleeve entry time:**
+    - Perturbing any price after E leaves the sleeve's bucket and entry unchanged (no-lookahead).
+    - Entry never happens at a time later than E.
+  - **Skip rule:** a fixture market with `umaEndDate` < E produces no sleeve position, increments the skip counter, and appears in the per-bucket skip share.
+  - **Payout at resolution:** a fixture market resolving at E + 3 h is closed at E + 3 h, with payout 1 or 0 and no further P&L.
+  - **Sensitivity run:** it re-enters skipped markets at A − 24 h, is labelled non-gating, and changes no pass/fail flag.
+  - **Null-centred p-value:**
+    - On the clustered null drill (calibrated outcomes), p-values are roughly uniform: the share with p < 0.05 is ≤ 5% within binomial tolerance.
+    - On a fixture where m̂ is far from 0, an uncentred version (t* = m*/se*) would give a large p, while the centred one gives a small p. This guards against the common centring bug.
+  - **Cost fixture:** at p = 0.03 the tail half-spread is 1.5 cents (not capped at 0.5 × 0.03 = 0.015, which here happens to coincide; also test p = 0.01, where the engine cap would give 0.005 and the new rule must give 0.015); the fee equals C × 0.07 × p(1−p) for crypto.
+  - G1: neither holdout nor forward is read. The fixture puts `NaN` outcomes in holdout and forward rows and the result stays finite.
+  - G3.
+- **Dependencies:** item (4) (event ids). Item (3) is needed for the real run but not for the fixture tests.
+- **Priority:** P1. It can be built in parallel against fixtures right away.
+- **Size:** M (about 2–3 days).
+
+### (7) Macro trading-day calendar and annualization fix: needed by #8
+- **Purpose:** macro panel rows are calendar days whenever any symbol trades. Crypto trades on weekends, while `desk/lab/macro.py::summarize` annualizes with 252 (`sharpe(daily, periods=252)`, `years = len(daily)/252`), so a daily series that includes weekends is mis-annualized. #8 r2 drops BTC-USD and ETH-USD and evaluates on **NYSE trading days (dates where SPY has a row) at 252**.
+- **Inputs:** the macro panel `date` and `symbol` columns, plus the #8 universe (crypto excluded).
+- **Outputs:** an evaluator option (or wrapper) that restricts the simulation to the SPY-date calendar. Returns over a gap are close-to-close, and FX carry accrues ACT/360 over the gap. It must **assert** that every evaluation date is a SPY date and not a weekend.
+- **Acceptance tests:**
+  - **Fixture:** a panel with weekend crypto rows and weekday ETF rows. After the filter, no evaluation date is a weekend, and annualized Sharpe uses √252.
+  - **Fixture:** a known constant daily return r on 252 trading days gives `ann_return` = 252·r.
+  - Including a crypto symbol in the #8 universe raises.
+  - The P&L of non-crypto symbols matches the unfiltered engine on SPY dates (regression).
+  - G1 (holdout and forward blocked), G3, G6, G7 null drill.
+- **Dependencies:** P0-A.
+- **Priority:** P1. It blocks #8, and it is small.
+- **Size:** S (about 0.5–1 day).
+
+## Dependency graph
+```mermaid
+graph TD
+  A[P0-A store_builder fix + provenance] --> B[P0-B splits.json hashing + metadata]
+  A --> I3[(3) Polymarket full re-fetch]
+  B --> I1[(1) HL-native carry evaluator]
+  B --> I2[(2) FX carry engine + 10 verified rate series]
+  A --> I7[(7) macro trading-day calendar]
+  I7 --> P8
+  I3 --> I4[(4) outcome labels + event ids]
+  I3 --> I5[(5) dispute source]
+  I4 --> I6[(6) bucket/cluster evaluator + sleeve]
+  R7a[R7a ledger schema: desk/split/family + config_hash - Validator/RSI owned]
+  R7a --> C[P0-C ledger trial-count query - Validator owned]
+  R7a --> G6[G6 trial rows from every evaluator]
+  G6 --> I1
+  G6 --> I2
+  G6 --> I6
+  G6 --> I7
+  I1 --> P4{{prereg #4 run}}
+  I2 --> P8{{prereg #8 run}}
+  I6 --> P9{{prereg #9 run}}
+  I5 -.optional / waiver.-> P9
+  C --> P4
+  C --> P8
+  C --> P9
+  G[Eval gating fix - Validator/RSI, out of scope] --> P4
+  G --> P8
+  G --> P9
+```
+
+## Suggested queue order
+1. **P0-A:** store_builder fix and provenance. It unblocks everything.
+2. **P0-B:** split manifest. It fills #4 §3, #8 §1 and #9 §2.
+3. **R7a then P0-C (Validator/RSI owned):** the ledger schema change, then the trial-count query. These must land before any evaluator can run on val (G6). Engineering can build the evaluators against a temporary ledger in parallel.
+4. **(6) against fixtures** and **(3)**, in parallel. Item (6) needs no real data to build and test.
+5. **(4):** in the same fetch as (3).
+6. **(1):** HL-native carry evaluator. Its timing can follow the #4 forward verdict around 2026-11-02.
+7. **(7):** macro calendar fix (small; it can go earlier).
+8. **(2):** FX carry and rates. The sourcing has the longest lead time, so start it early if capacity allows.
+9. **(5):** dispute source, or a decision to waive it.
+
+Nothing on this list authorises running any prereg. Each still needs its own REQUIRED-BEFORE-RUN items filled and the gating sign-off.
