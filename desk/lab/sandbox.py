@@ -179,22 +179,47 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
             'script': str(path.relative_to(workspace))}
 
 
+JOB_ENV = ('PATH', 'LANG', 'LC_ALL', 'TZ', 'RESULTS_DIR', 'DATABASE_PATH')
+
+
+def _job_env():
+    """Allowlist for the jailed harness: DESK_* settings + locale/path, never credentials."""
+    env = {k: v for k, v in os.environ.items() if k in JOB_ENV or k.startswith('DESK_')}
+    for k in list(env):
+        if any(t in k.upper() for t in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD')):
+            env.pop(k)
+    env.update(PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2',
+               PYTHONDONTWRITEBYTECODE='1')
+    return env
+
+
 async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
-    """Trusted harness job in a subprocess (full store access decided by the caller)."""
-    jobs = settings.home / 'jobs'
-    jobs.mkdir(parents=True, exist_ok=True)
+    """Harness job (it executes agent strategy/factor modules) in the OS jail.
+
+    The store and artifacts are mounted READ-ONLY (split access is still enforced by the harness stores); the only
+    writable host paths are this job's private dir and the job's values_dir (factor value cache). No network, no
+    credentials, non-root uid, rlimits. Fails closed without bwrap unless DESK_SANDBOX_UNSAFE=1 (local dev)."""
+    if not jail.unsafe_opt_in():
+        jail.require()
     jid = uuid.uuid4().hex[:12]
-    jp, op = jobs / f'{jid}.json', jobs / f'{jid}.out.json'
+    jdir = settings.home / 'jobs' / jid
+    jdir.mkdir(parents=True, exist_ok=True)
+    jp, op = jdir / 'job.json', jdir / 'out.json'
     mem_mb = mem_mb or getattr(settings, 'job_memory_mb', 5000)
     job = dict(job, _home=str(settings.home), _store=str(settings.store))   # the harness evaluates on THIS run's store
     jp.write_text(json.dumps(job, default=str))
-    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
-    for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
-        env.pop(secret_key, None)
+    rw = [jdir.resolve()]
+    if job.get('values_dir'):
+        rw.append(Path(job['values_dir']).resolve())
+    ro = [Path(settings.store).resolve(), Path(settings.artifacts).resolve()]
+    argv, pre = jail.python_cmd([str(Path(__file__).resolve().parent / '_harness_entry.py'), str(jp.resolve()), str(op.resolve())],
+                                rw=rw, ro=ro, cwd=ROOT, lim=jail.limits(timeout_s=timeout_s, mem_mb=mem_mb))
+    if argv[0] == sys.executable:                                      # unsafe local-dev opt-in: old module invocation
+        argv = [sys.executable, '-m', 'desk.lab.harness', str(jp), str(op)]
     async with (slot or _nullslot()):
         await _wait_for_memory(mem_mb)
-        proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op), cwd=str(ROOT),
-                                                    env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(*argv, cwd=str(ROOT), env=_job_env(), preexec_fn=pre,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
         out, err = await proc.communicate()
         killed, _ = await watcher
@@ -204,8 +229,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
         else:
             res = {'error': f'harness failed ({killed or proc.returncode})', 'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
     finally:
-        for p in (jp, op):
-            p.unlink(missing_ok=True)
+        import shutil
+        shutil.rmtree(jdir, ignore_errors=True)
     return res
 
 

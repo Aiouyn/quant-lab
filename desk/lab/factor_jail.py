@@ -41,7 +41,8 @@ def _inproc(code):                                        # DESK_SANDBOX_UNSAFE=
 def run(code: str, panels=(), params=None, timeout_s=None):
     """Exec `code` in the jail; return (meta, [values per panel]). meta = {'has_factor', 'PARAMS', 'DESK'}.
     params=None uses the module's own PARAMS."""
-    if not jail.available() and jail.unsafe_opt_in():
+    # already jailed (e.g. inside a jailed run_job harness): exec here, the outer jail is the boundary
+    if jail.inside() or (not jail.available() and jail.unsafe_opt_in()):
         ns = _inproc(code)
         f = ns.get('factor')
         meta = {'has_factor': callable(f), 'PARAMS': dict(ns.get('PARAMS', {})), 'DESK': ns.get('DESK')}
