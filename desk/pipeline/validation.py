@@ -12,8 +12,21 @@ import time
 
 from ..lab.identity import strategy_desk
 from ..lab.sandbox import run_job
+from ..lab.sandbox import run_job as _run_job
 
 SEALED_SPLITS = ('val', 'holdout')
+SEALED_FAILURE = {'error': 'sealed_failure', 'sealed': True}
+
+
+def sealed_splits():
+    """val + holdout; forward joins once PR #16 offers a forward-only view (hook: views.FORWARD_ONLY_VIEW)."""
+    from ..data import views
+    return SEALED_SPLITS + (('forward',) if getattr(views, 'FORWARD_ONLY_VIEW', False) else ())
+
+
+def sealed_quantum_s():
+    import os
+    return float(os.getenv('DESK_SEALED_QUANTUM_S', '900'))
 
 # Desk-aware Sharpe bars (dev, val). The default was calibrated for intraday crypto; daily cross-asset macro premia run
 # at Sharpe 0.5-1.0, so 1.5 made the macro desk unpassable by design. Over 15 dev years Sharpe 0.7 is t ~ 2.7; DSR,
@@ -129,26 +142,49 @@ class Pipeline:
 
     async def _job(self, job, timeout=5400):
         slot = self.org.job_slots if self.org else None
+        sealed = job.get('split') in sealed_splits()
+        t0 = time.monotonic()
+
+        async def run_job(job, s, **kw):                # sealed jobs: an exception is just another sealed failure
+            try:
+                return await _run_job(job, s, **kw)
+            except Exception as e:
+                if not sealed:
+                    raise
+                return {'error': f'harness failed (exception {type(e).__name__}: {e})'}
         r = await run_job(job, self.s, timeout_s=timeout, slot=slot)
         if str(r.get('error', '')).startswith(('harness failed (memory', 'harness failed (system_memory')):
             # our infrastructure ran out of room, not the strategy: retry once with a larger cap (the memory gate waits
-            # until the machine can actually provide it)
-            self.L.event('pipeline', 'EVAL_RETRY_MEMORY', {'type': job.get('type'), 'split': job.get('split')})
+            # until the machine can actually provide it). Sealed jobs: logged host-side only, no ledger event.
+            if sealed:
+                self._sealed_log(job, 'retry_memory', r)
+            else:
+                self.L.event('pipeline', 'EVAL_RETRY_MEMORY', {'type': job.get('type'), 'split': job.get('split')})
             r = await run_job(job, self.s, timeout_s=timeout, slot=slot, mem_mb=8000)
-        if 'error' in r and job.get('split') in SEALED_SPLITS:
-            r = self._seal_error(job, r)
+        if sealed:
+            if 'error' in r:
+                r = self._seal_error(job, r)
+            await self._pad(t0)
         return r
 
-    def _seal_error(self, job, r):
-        """Sealed (val/holdout) jobs: raw error text / stdout / traces could carry sealed data back to the author.
-        Keep them host-side only (a log file outside the ledger and every jail mount) and return a fixed code."""
-        raw = str(r.get('error', ''))
-        code = 'infrastructure_error' if raw.startswith('harness failed') else 'evaluation_error'
+    async def _pad(self, t0):
+        """Sealed jobs return only on a fixed time quantum, so runtime (busy loops, early exits, OOM retries) is not
+        observable through the result, ledger timestamps or retry behaviour beyond the bucket count."""
+        q = sealed_quantum_s()
+        el = time.monotonic() - t0
+        await asyncio.sleep(q * max(1, -(-el // q)) - el)
+
+    def _sealed_log(self, job, what, r):
         log = self.s.home / 'logs' / 'sealed_errors.jsonl'
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'ts': time.time(), 'split': job.get('split'), 'code': code, 'raw': r}, default=str) + '\n')
-        return {'error': code, 'sealed': True}
+            f.write(json.dumps({'ts': time.time(), 'split': job.get('split'), 'what': what, 'raw': r}, default=str) + '\n')
+
+    def _seal_error(self, job, r):
+        """Sealed (val/holdout[/forward]) jobs: every failure (strategy error, infra error, timeout, OOM) collapses to
+        ONE fixed status. Raw error text, traces and stdout stay host-side only (a log outside the ledger and mounts)."""
+        self._sealed_log(job, 'failure', r)
+        return dict(SEALED_FAILURE)
 
     def _notify(self, s, text, also=()):
         for who in {s['author'], *also}:
@@ -244,6 +280,7 @@ class Pipeline:
             from ..company.ledger import HoldoutAlreadyUsed
             from ..lab.identity import evaluation_identity, evaluation_settings
             ident, comp = evaluation_identity(s['code'], evaluation_settings(job, _gate_settings(self.s)), self.s.store)
+            job['_identity'] = ident                    # run_job keys the one-shot holdout VIEW on it too (not job_id)
             try:
                 self.L.claim_holdout(ident, sid, comp, code_hash=s['code_hash'])
             except HoldoutAlreadyUsed:

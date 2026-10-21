@@ -280,7 +280,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     # per-split view holding only job['allowed'] data (PR #16); a holdout view is one-shot. It is the ONLY store
     # path mounted (read-only) into the jail.
     try:
-        with store_for_job(settings.store, job, job_id=jid) as store_root:
+        # holdout one-shot is keyed on the R4 identity when the pipeline supplies it (charter R4), else the job id
+        with store_for_job(settings.store, job, job_id=job.get('_identity') or jid) as store_root:
             job = dict(job, _home=str(settings.home), _store=str(store_root))   # the harness evaluates on THIS view
             jp.write_text(json.dumps(job, default=str))
             rw = [jdir.resolve()]

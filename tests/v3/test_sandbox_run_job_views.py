@@ -65,7 +65,8 @@ def test_artifacts_not_mounted(tmp_path, store):  # noqa: F811
     assert 'PROBE HIDDEN' in out['error'], out
 
 
-def test_val_job_error_is_sanitized(tmp_path, store):  # noqa: F811
+def test_val_job_error_is_sanitized(tmp_path, store, monkeypatch):  # noqa: F811
+    monkeypatch.setenv('DESK_SEALED_QUANTUM_S', '1')
     from desk.pipeline.validation import Pipeline
     s = _settings(tmp_path, store)
     p = Pipeline.__new__(Pipeline)
@@ -75,8 +76,68 @@ def test_val_job_error_is_sanitized(tmp_path, store):  # noqa: F811
             "print('STDOUT-LEAK', v)\nraise RuntimeError('LEAK %r' % v)\n")
     for split, allowed in (('val', ['dev', 'val']), ('holdout', ['dev', 'val', 'holdout'])):
         r = asyncio.run(p._job({'type': 'strategy_eval', 'code': code, 'split': split, 'allowed': allowed}, timeout=120))
-        assert r == {'error': 'evaluation_error', 'sealed': True}, r
+        assert r == {'error': 'sealed_failure', 'sealed': True}, r
     log = [json.loads(l) for l in (s.home / 'logs' / 'sealed_errors.jsonl').read_text().splitlines()]
     assert len(log) == 2 and 'LEAK' in json.dumps(log[0]['raw'])          # raw text kept host-side only
     r = asyncio.run(p._job({'type': 'strategy_eval', 'code': code, 'split': 'dev', 'allowed': ['dev']}, timeout=120))
     assert 'LEAK' in r['error']                                           # dev errors unchanged
+
+
+def _pipe(s):
+    from desk.pipeline.validation import Pipeline
+    p = Pipeline.__new__(Pipeline)
+    p.s, p.org = s, None
+    return p
+
+
+BUSY = ("import time\nt = time.time()\nwhile time.time() - t < 3:\n    pass\n"
+        "raise RuntimeError('condition was true')\n")
+FAST = "raise ValueError('condition was false')\n"
+
+
+def test_holdout_busy_loop_vs_immediate_indistinguishable(tmp_path, store, monkeypatch):  # noqa: F811
+    """1-bit-per-run leak: error class and runtime must not differ between a busy-looping and an instant job."""
+    import time
+    monkeypatch.setenv('DESK_SEALED_QUANTUM_S', '8')
+    s = _settings(tmp_path, store)
+    p = _pipe(s)
+    out = []
+    for i, code in enumerate((BUSY, FAST)):
+        t0 = time.monotonic()
+        r = asyncio.run(p._job({'type': 'strategy_eval', 'code': code, 'split': 'holdout',
+                                'allowed': ['dev', 'val', 'holdout'], '_identity': f'id{i}'}, timeout=60))
+        out.append((r, time.monotonic() - t0))
+    (r1, t1), (r2, t2) = out
+    assert r1 == r2 == {'error': 'sealed_failure', 'sealed': True}
+    assert 8 <= t1 < 8.8 and 8 <= t2 < 8.8, (t1, t2)                      # both released on the same quantum
+    assert abs(t1 - t2) < 0.5, (t1, t2)
+
+
+def test_resubmitted_holdout_identity_refused(tmp_path, store, monkeypatch):  # noqa: F811
+    """The one-shot holdout view is keyed on the R4 identity: a second job with the same identity gets no data."""
+    from desk.data import views
+    monkeypatch.setenv('DESK_SEALED_QUANTUM_S', '1')
+    s = _settings(tmp_path, store)
+    p = _pipe(s)
+    ok = "DESK = 'macro'\nPARAMS = {}\nraise RuntimeError('PROBE')\n"
+    job = {'type': 'strategy_eval', 'code': ok, 'split': 'holdout', 'allowed': ['dev', 'val', 'holdout'], '_identity': 'a' * 64}
+    asyncio.run(p._job(dict(job), timeout=60))
+    assert views.holdout_consumed(store, 'a' * 64)
+    with pytest.raises(views.ViewError):                                    # raw run_job refuses the identity
+        asyncio.run(run_job(dict(job), s, timeout_s=60))
+    assert asyncio.run(p._job(dict(job), timeout=60)) == {'error': 'sealed_failure', 'sealed': True}
+
+
+def test_sealed_retry_leaves_no_ledger_event(tmp_path, store, monkeypatch):  # noqa: F811
+    from desk.pipeline import validation
+    monkeypatch.setenv('DESK_SEALED_QUANTUM_S', '1')
+    calls = []
+
+    async def fake(job, s, **kw):
+        calls.append(kw.get('mem_mb'))
+        return {'error': 'harness failed (memory)'}
+    monkeypatch.setattr(validation, '_run_job', fake)
+    p = _pipe(_settings(tmp_path, store))
+    p.L = types_ns = type('L', (), {'event': lambda *a, **k: (_ for _ in ()).throw(AssertionError('ledger event'))})()
+    r = asyncio.run(p._job({'type': 'strategy_eval', 'code': 'x', 'split': 'val', 'allowed': ['dev', 'val']}))
+    assert r == {'error': 'sealed_failure', 'sealed': True} and calls == [None, 8000]
