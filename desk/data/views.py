@@ -7,7 +7,7 @@ Where: OUTSIDE the store tree, in a configurable views root (`views_root=` / $DE
   dev+val@<stamp>/   allowed = ['dev', 'val']   (superseded versions pruned 24 h after their LAST USE)
   holdout-<job>/     allowed = ['dev', 'val', 'holdout']   ONE-SHOT per evaluation identity (desk/lab/identity.py:
                      normalized strategy AST + desk.* dependency closure + eval settings + data version), checked and
-                     recorded atomically in the ledger (holdout_view_claims, append-only). Torn down after the job.
+                     bound to the token claimed in the ledger's holdout_uses; opened once (holdout_views, append-only); torn down after.
   forward@<stamp>/   allowed = [..., 'forward']    post-holdout rows plus a PRE-REGISTERED warmup window before the
                      holdout end, of length Settings.forward_warmup_days (config, never the job). Nothing earlier.
 `allowed` must be a chronological prefix of (dev, val, holdout, forward). No job ever gets the full store.

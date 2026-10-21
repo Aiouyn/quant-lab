@@ -161,7 +161,7 @@ def test_view_files_0444_and_store_untouched_by_build_and_teardown(store, vroot,
         assert mode == (0o555 if p.is_dir() else 0o444), (p, oct(mode))
         if p.is_file():
             assert p.stat().st_nlink == 1
-    with views.one_shot_holdout(store, _hjob(), ledger, job_id='j1', root=vroot) as (h, _):
+    with views.one_shot_holdout(store, _claimed(ledger, store, _hjob()), ledger, job_id='j1', root=vroot) as (h, _):
         assert (h / '1s').exists()
     views.remove_view(v)
     assert not v.exists() and not h.exists()
@@ -195,8 +195,16 @@ def test_read_only_view_needs_no_writes(store, vroot, allowed):
     assert _tree(v) == before
 
 
+def _claimed(ledger, store, job, sid='S-1'):
+    """What the pipeline does: claim the R4 identity in holdout_uses, then hand the job its token."""
+    from desk.lab.identity import evaluation_identity, evaluation_settings
+    ident, comp = evaluation_identity(job['code'], evaluation_settings(job), store)
+    ledger.claim_holdout(ident, sid, comp)
+    return dict(job, _holdout_token=ident)
+
+
 def test_one_shot_holdout_contents_and_teardown(store, vroot, ledger):
-    with views.store_for_job(store, _hjob(), ledger=ledger, job_id='promo1', root=vroot) as (v, h):
+    with views.store_for_job(store, _claimed(ledger, store, _hjob()), ledger=ledger, job_id='promo1', root=vroot) as (v, h):
         nums = _numbers(v)
         assert SENT['holdout'] in nums and SENT['forward'] not in nums and SENT['forward'] / 1000 not in nums
         assert _max_date(v) <= SPL['holdout'][-1]
@@ -204,48 +212,47 @@ def test_one_shot_holdout_contents_and_teardown(store, vroot, ledger):
     assert not v.exists()
 
 
-def test_cosmetic_resubmission_is_refused(store, vroot, ledger):
-    with views.one_shot_holdout(store, _hjob(), ledger, job_id='a', root=vroot):
-        pass
-    with pytest.raises(views.HoldoutRefused, match='already consumed'):
-        with views.one_shot_holdout(store, _hjob(STRAT_COSMETIC, values_dir='/x', return_daily=True), ledger,
-                                    job_id='b', root=vroot):
+def test_holdout_view_is_bound_to_its_r4_token(store, vroot, ledger):
+    from desk.company.ledger import HoldoutAlreadyUsed
+    job = _claimed(ledger, store, _hjob())
+    with pytest.raises(views.HoldoutRefused, match='without a ledger holdout token'):
+        with views.one_shot_holdout(store, _hjob(), ledger, root=vroot):
             pass
+    with pytest.raises(views.HoldoutRefused, match='not a claimed'):          # forged / unclaimed token
+        with views.one_shot_holdout(store, dict(_hjob(), _holdout_token='f' * 64), ledger, root=vroot):
+            pass
+    with pytest.raises(views.HoldoutRefused, match='different code'):         # token reused for other code
+        with views.one_shot_holdout(store, dict(job, code=STRAT.replace('+ 1', '+ 2')), ledger, root=vroot):
+            pass
+    with views.one_shot_holdout(store, job, ledger, job_id='a', root=vroot):
+        pass
+    with pytest.raises(views.HoldoutRefused, match='already opened'):         # one view per token, ever
+        with views.one_shot_holdout(store, job, ledger, job_id='b', root=vroot):
+            pass
+    with pytest.raises(HoldoutAlreadyUsed):                                    # cosmetic copy can't get a token
+        _claimed(ledger, store, _hjob(STRAT_COSMETIC, values_dir='/x', return_daily=True), sid='S-2')
     assert not list(vroot.glob('holdout-*'))
-    # a genuinely different strategy, settings or data version is a new identity
-    with views.one_shot_holdout(store, _hjob(STRAT.replace('+ 1', '+ 2')), ledger, job_id='c', root=vroot):
-        pass
-    with views.one_shot_holdout(store, _hjob(cost={'taker_bps': 9.0}), ledger, job_id='d', root=vroot):
-        pass
-    rows = ledger.q('SELECT kind FROM holdout_view_claims ORDER BY id')
-    assert [r['kind'] for r in rows] == ['claim', 'done', 'claim', 'done', 'claim', 'done']
 
 
-def test_failed_job_still_consumes_and_infra_kill_allows_one_retry(store, vroot, ledger):
+def test_failed_job_still_consumes_its_token(store, vroot, ledger):
+    job = _claimed(ledger, store, _hjob())
     with pytest.raises(RuntimeError):
-        with views.one_shot_holdout(store, _hjob(), ledger, job_id='p1', root=vroot) as (v, h):
+        with views.one_shot_holdout(store, job, ledger, job_id='p1', root=vroot) as (v, h):
             raise RuntimeError('strategy crashed')
     assert not v.exists()
     with pytest.raises(views.HoldoutRefused):
-        with views.one_shot_holdout(store, _hjob(), ledger, job_id='p2', root=vroot):
-            pass
-    other = _hjob(STRAT.replace('+ 1', '+ 3'))
-    with views.one_shot_holdout(store, other, ledger, job_id='m1', root=vroot) as (v, h):
-        h.infra_failed()                                   # OOM-killed before producing a result
-    with views.one_shot_holdout(store, other, ledger, job_id='m2', root=vroot) as (v, h):
-        h.infra_failed()
-    with pytest.raises(views.HoldoutRefused):              # capped at 2 attempts
-        with views.one_shot_holdout(store, other, ledger, job_id='m3', root=vroot):
+        with views.one_shot_holdout(store, job, ledger, job_id='p2', root=vroot):
             pass
 
 
 def test_identity_ignores_cosmetics_but_not_dependencies():
-    from desk.lab.identity import evaluation_identity
-    a = evaluation_identity(_hjob(), '/nonexistent')[0]
-    assert a == evaluation_identity(_hjob(STRAT_COSMETIC, _home='/h', _store='/s'), '/nonexistent')[0]
-    dep = _hjob('from desk.lib.contrib.har_sigma import har_sigma\n' + STRAT)
-    ident, comp = evaluation_identity(dep, '/nonexistent')
-    assert ident != a and 'desk.lib.contrib.har_sigma' in comp['deps']
+    from desk.lab.identity import evaluation_identity, evaluation_settings
+    def ident(job):
+        return evaluation_identity(job['code'], evaluation_settings(job), '/nonexistent')
+    a = ident(_hjob())[0]
+    assert a == ident(_hjob(STRAT_COSMETIC, _store='/s', _holdout_token='x'))[0]
+    i2, comp = ident(_hjob('from desk.lib.contrib.har_sigma import har_sigma\n' + STRAT))
+    assert i2 != a and 'desk.lib.contrib.har_sigma' in dict(comp['deps'])
 
 
 def test_symlinks_are_never_followed(store, vroot, tmp_path):
@@ -280,12 +287,34 @@ def test_views_root_must_be_outside_store(store):
     assert v.parent == store.resolve().parent / 'store_views'
 
 
-def test_allowed_must_be_a_prefix_and_forward_gets_full_store(store, vroot):
+def test_allowed_must_be_a_prefix(store, vroot):
     with pytest.raises(views.ViewError):
         views.view_for_allowed(store, ['val'], root=vroot)
     with pytest.raises(views.ViewError):
         views.view_for_allowed(store, ['dev', 'val', 'holdout'], root=vroot)
-    assert views.view_for_allowed(store, ['dev', 'val', 'holdout', 'forward'], root=vroot) == store
+
+
+def test_forward_view_is_post_holdout_plus_preregistered_warmup(store, vroot):
+    ALL = ['dev', 'val', 'holdout', 'forward']
+    with pytest.raises(views.ViewError, match='warmup'):                       # no config value: refuse
+        views.view_for_allowed(store, ALL, root=vroot)
+    v = views.view_for_allowed(store, ALL, root=vroot, forward_warmup_days=3)
+    assert v != store and v.parent == vroot.resolve()
+    lo = SPL['holdout'][-3]                                                    # 3 warmup days before holdout end
+    nums = _numbers(v)
+    assert SENT['forward'] in nums and SENT['val'] not in nums and SENT['val'] / 1000 not in nums
+    days = sorted(p.stem for p in (v / '1m').glob('*.parquet'))
+    assert days[0] == lo and days[-1] == SPL['forward'][-1]
+    fu = pl.read_parquet(v / 'funding_hl.parquet')['hour']
+    assert fu.min() == _ms(lo)
+    sp = json.loads((v / 'splits.json').read_text())
+    assert sp['dev'] == [] and sp['val'] == [] and sp['holdout'] == SPL['holdout'][-3:]
+    assert json.loads((v / 'macro' / 'splits.json').read_text())['dev'] == []
+    assert pl.read_parquet(v / 'perps' / 'panel.parquet')['ts'].min() == _ms(lo)
+    import dataclasses
+    from desk.config import SETTINGS
+    assert {f.name for f in dataclasses.fields(SETTINGS)} >= {'forward_warmup_days'}
+    # the job cannot widen it: run_job takes the length from settings only (see test_run_job_* below)
 
 
 def test_prune_by_last_use_not_build_time(store, vroot):
@@ -302,7 +331,7 @@ def test_prune_by_last_use_not_build_time(store, vroot):
     assert not v1.exists() and v2.exists() and v3.exists()          # idle for 3 days: pruned
 
 
-@pytest.mark.parametrize('allowed', [['dev'], ['dev', 'val'], ['dev', 'val', 'holdout']])
+@pytest.mark.parametrize('allowed', [['dev'], ['dev', 'val'], ['dev', 'val', 'holdout'], ['dev', 'val', 'holdout', 'forward']])
 def test_run_job_hands_the_harness_only_its_view(store, tmp_path, monkeypatch, allowed):
     import asyncio
     import types
@@ -324,12 +353,19 @@ def test_run_job_hands_the_harness_only_its_view(store, tmp_path, monkeypatch, a
     monkeypatch.setattr(sandbox.asyncio, 'create_subprocess_exec', fake_exec)
     monkeypatch.setattr(sandbox, '_watch', no_watch)
     s = types.SimpleNamespace(home=tmp_path / 'home', store=store, job_memory_mb=100, views_dir=tmp_path / 'v',
-                              ledger=tmp_path / 'home' / 'desk.sqlite3')
-    job = dict(_hjob(), allowed=allowed)
-    res = asyncio.run(sandbox.run_job(job, s))
+                              ledger=tmp_path / 'home' / 'desk.sqlite3', forward_warmup_days=3)
+    s.home.mkdir()
+    from desk.company.ledger import Ledger
+    L = Ledger(s.ledger)
+    job = dict(_hjob(), allowed=allowed, split=allowed[-1], forward_warmup_days=999)   # job-supplied warmup is ignored
+    if 'holdout' in allowed and 'forward' not in allowed:
+        job = _claimed(L, store, job)
+    res = asyncio.run(sandbox.run_job(dict(job, _ticket=L.issue_ticket('t', job)), s))
     assert res == {'ok': True} and seen['exists'] and '_home' not in seen['job']
     assert seen['store'] != store and seen['store'].parent == (tmp_path / 'v').resolve()
-    if 'holdout' in allowed:
+    if 'holdout' in allowed and 'forward' not in allowed:
         assert not seen['store'].exists()                   # one-shot: torn down after the job
-        again = asyncio.run(sandbox.run_job(dict(job, code=STRAT_COSMETIC), s))
+        again = asyncio.run(sandbox.run_job(dict(job, _ticket=L.issue_ticket('t', job)), s))
         assert again['error'].startswith('holdout_refused')
+    if 'forward' in allowed:
+        assert json.loads((seen['store'] / '.view.json').read_text())['warmup_days'] == 3

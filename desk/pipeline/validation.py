@@ -237,6 +237,7 @@ class Pipeline:
             except HoldoutAlreadyUsed:
                 self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_identical_code'])
                 return
+            job['_holdout_token'] = ident                   # the holdout view is built for, and only for, this token
             r = await self._job(job)
             if 'error' in r:
                 self.L.holdout_result(ident, sid, None)

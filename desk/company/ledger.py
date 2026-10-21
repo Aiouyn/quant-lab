@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 # Charter R4/R6: insert-only tables. holdout_uses is keyed on the R4 evaluation identity (desk/lab/identity.py) and
 # outcomes go to holdout_results as new rows. UPDATE/DELETE abort; a BEFORE INSERT trigger aborts a duplicate key so
 # INSERT OR REPLACE cannot delete-and-reinsert (recursive_triggers is also ON for every connection).
-INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'job_tickets', 'job_ticket_uses')
+INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'holdout_views', 'job_tickets', 'job_ticket_uses')
 LEDGER_CORE = """
 CREATE TABLE IF NOT EXISTS holdout_uses(identity TEXT PRIMARY KEY, strategy TEXT, created REAL, components TEXT);
 CREATE TABLE IF NOT EXISTS holdout_results(id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT, strategy TEXT,
@@ -74,6 +74,10 @@ CREATE TRIGGER IF NOT EXISTS job_ticket_uses_no_dup BEFORE INSERT ON job_ticket_
 CREATE TRIGGER IF NOT EXISTS job_tickets_no_dup BEFORE INSERT ON job_tickets
   WHEN EXISTS (SELECT 1 FROM job_tickets WHERE id = NEW.id)
   BEGIN SELECT RAISE(ABORT, 'job_tickets is append-only'); END;
+CREATE TABLE IF NOT EXISTS holdout_views(identity TEXT PRIMARY KEY, job_id TEXT, created REAL);
+CREATE TRIGGER IF NOT EXISTS holdout_views_no_dup BEFORE INSERT ON holdout_views
+  WHEN EXISTS (SELECT 1 FROM holdout_views WHERE identity = NEW.identity)
+  BEGIN SELECT RAISE(ABORT, 'holdout view already opened for this identity'); END;
 CREATE TRIGGER IF NOT EXISTS holdout_uses_no_dup BEFORE INSERT ON holdout_uses
   WHEN EXISTS (SELECT 1 FROM holdout_uses WHERE identity = NEW.identity)
   BEGIN SELECT RAISE(ABORT, 'holdout_uses: identity already used (one-shot holdout)'); END;
@@ -386,6 +390,21 @@ class Ledger:
             if db.execute('SELECT 1 FROM job_ticket_uses WHERE id=?', (tid,)).fetchone():
                 db.rollback(); raise TicketRefused('job ticket already used')
             db.execute('INSERT INTO job_ticket_uses VALUES(?,?)', (tid, time.time()))
+
+    def open_holdout_view(self, identity, job_id, ast_sha):
+        """Bind a holdout view to its R4 token (one transaction): the token must be a claimed holdout_uses row whose
+        recorded normalized-AST hash equals the job's code, and no view may ever have been opened for it."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT components FROM holdout_uses WHERE identity=?', (identity,)).fetchone()
+            if row is None:
+                db.rollback(); raise HoldoutAlreadyUsed('holdout token is not a claimed holdout_uses identity')
+            comp = json.loads(row[0]) if row[0] else {}
+            if comp.get('ast') != ast_sha:
+                db.rollback(); raise HoldoutAlreadyUsed('holdout token was claimed for different code')
+            if db.execute('SELECT 1 FROM holdout_views WHERE identity=?', (identity,)).fetchone():
+                db.rollback(); raise HoldoutAlreadyUsed('holdout view already opened for this token')
+            db.execute('INSERT INTO holdout_views VALUES(?,?,?)', (identity, job_id, time.time()))
 
     def holdout_result(self, identity, strategy, passed):
         self.x('INSERT INTO holdout_results(identity,strategy,passed,created) VALUES(?,?,?,?)',

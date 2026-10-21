@@ -111,7 +111,7 @@ def strategy_desk(source: str) -> str:
 
 
 def evaluation_settings(job: dict, extra=None) -> dict:
-    s = {k: job[k] for k in job if k not in EPHEMERAL_KEYS}
+    s = {k: job[k] for k in job if k not in EPHEMERAL_KEYS and not str(k).startswith('_')}
     if extra:
         s['_gates'] = extra
     return s

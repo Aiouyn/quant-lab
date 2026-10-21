@@ -112,6 +112,9 @@ class Settings:
     max_drawdown: float = 0.20
     max_top5_day_share: float = 0.5
     min_holdout_sharpe: float = 0.5
+    # forward views (desk/data/views.py): post-holdout rows plus this many days before the holdout end as indicator
+    # warmup. Pre-registered here, never taken from a job; a strategy's WARMUP_DAYS beyond it simply sees less history.
+    forward_warmup_days: int = 90
     # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1` + `deepseek-v4.1-flash`)
     provider: str = field(default_factory=_provider)
     model: str = field(default_factory=_default_model)
