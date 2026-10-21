@@ -3,6 +3,9 @@
 Contract: a strategy emits target[i] in [-1, 1] using data up to and including row i.
 The order is filled `latency` later at the then-current mid, crossing the half spread, plus
 depth-sweep impact (from the deep OKX book at decision time), extra slippage and taker fees.
+Validity: both the decision row AND the fill row must be `valid` (and the fill row contiguous in time).
+If the fill row is invalid/forward-filled or across a gap, the order is dropped (no fill, no carry-over);
+the strategy's target on the next valid decision row is re-evaluated as usual. certify.py implements the same.
 Hourly Hyperliquid funding is charged on open positions at each hour boundary.
 Position unit: target 1.0 == `unit_notional` USD (fixed, non-compounding -> clean daily PnL series).
 """
@@ -118,22 +121,31 @@ def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel):
     mid = df['mid'].to_numpy().astype(np.float64)
     lat_rows = max(1, int(round(cost.latency_s / res_s))) if res_s == 1 else 1
     if res_s == 1:
-        exec_mid = np.full(n, np.nan)
-        exec_mid[:-lat_rows] = mid[lat_rows:]
-        if cost.latency_s > res_s:
-            pass
+        shift = lat_rows                     # fill `latency` rows later
+        src = mid
     else:
         # bars: decision at bar end, fill at the next bar's first observed mid (+ extra latency rows if stressed)
-        op = df['open'].to_numpy().astype(np.float64) if 'open' in df.columns else mid
         extra = max(0, int(round((cost.latency_s - 1) / res_s)))
-        exec_mid = np.full(n, np.nan)
-        exec_mid[:n - 1 - extra] = op[1 + extra:]
-    # gaps across days: exec at the next row only if it is contiguous in time
+        shift = 1 + extra
+        src = df['open'].to_numpy().astype(np.float64) if 'open' in df.columns else mid
+    exec_mid = np.full(n, np.nan)
+    if shift < n:
+        exec_mid[:n - shift] = src[shift:]
+    # gaps across days: exec only if the fill row is contiguous in time (same `shift` rows as the fill itself)
     ts = df['ts'].to_numpy()
-    step = res_s * 1000 * lat_rows
+    step = res_s * 1000 * shift
     nxt = np.full(n, np.iinfo(np.int64).max)
-    nxt[:-lat_rows] = ts[lat_rows:]
+    if shift < n:
+        nxt[:n - shift] = ts[shift:]
     exec_mid[(nxt - ts) > step + 5000] = np.nan
+    # FILL-row validity: an order whose execution row is invalid (forward-filled book state) does not fill at that
+    # stale mid. Contract: the order is DROPPED (no fill on this decision); the next decision row re-targets.
+    if 'valid' in df.columns:
+        v = df['valid'].to_numpy() >= 0.5
+        fill_ok = np.zeros(n, bool)
+        if shift < n:
+            fill_ok[:n - shift] = v[shift:]
+        exec_mid[~fill_ok] = np.nan
     hs = (df['spread_bps'].to_numpy().astype(np.float64) / 2) if 'spread_bps' in df.columns else np.full(n, 0.005)
 
     def col(c, default):
