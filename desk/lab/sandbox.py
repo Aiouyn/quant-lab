@@ -1,8 +1,9 @@
 """Isolated execution of agent Python code and trusted harness jobs (async subprocesses).
 
 Sandbox: credential-free environment, dev-only data view, thread caps, wall-clock timeout and an RSS
-watchdog. This protects the organization from accidents (runaway loops, memory blowups, peeking at
-validation data by mistake); it is not an OS-level security boundary against hostile code.
+watchdog, and an OS-level jail (desk/lab/jail.py: bubblewrap with no network, a read-only minimal filesystem, the dev
+data view read-only, a private /tmp, the workspace as the only writable host path, rlimits and a non-root uid).
+If bubblewrap is unavailable run_python fails closed (JailUnavailable) unless DESK_SANDBOX_UNSAFE=1 is set for local dev.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ except ImportError:
     psutil = None
 
 from ..config import ROOT
+from . import jail
 
 SAFE_ENV = ('SYSTEMROOT', 'SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA',
             'APPDATA', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'COMSPEC', 'WINDIR', 'PATHEXT')
@@ -38,6 +40,37 @@ def _env(extra):
                 'PYTHONDONTWRITEBYTECODE': '1'})
     env.update({k: str(v) for k, v in extra.items()})
     return env
+
+
+def _carry_dev_view(settings):
+    """Dev-only copy of the carry store (splits.json with the dev split only + coin files cut at the dev end), so the
+    jail never mounts the full carry store. Rebuilt when the source changes. Returns <view>/carry."""
+    src = settings.store / 'carry'
+    pr7 = src / 'views' / 'dev' / 'carry'                # PR #7's own dev view (lab.carry.write_dev_view), if built
+    if (pr7 / 'splits.json').exists():
+        return pr7
+    view = settings.store / 'views' / 'carry_dev' / 'carry'
+    if not (src / 'splits.json').exists():
+        return view
+    from datetime import datetime, timezone
+    import shutil
+    import polars as pl
+    files = sorted((src / 'coins').glob('*.parquet'))
+    stamp = json.dumps([(src / 'splits.json').stat().st_mtime] + [(f.name, f.stat().st_mtime) for f in files])
+    if (view / '.stamp').exists() and (view / '.stamp').read_text() == stamp:
+        return view
+    dev = json.loads((src / 'splits.json').read_text())['dev']
+    end = int(datetime.fromisoformat(dev[1]).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
+    tmp = view.with_name('carry.tmp')
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / 'coins').mkdir(parents=True)
+    (tmp / 'splits.json').write_text(json.dumps({'dev': dev}))
+    for f in files:
+        pl.read_parquet(f).filter(pl.col('ts') < end).write_parquet(tmp / 'coins' / f.name)
+    (tmp / '.stamp').write_text(stamp)
+    shutil.rmtree(view, ignore_errors=True)
+    tmp.rename(view)
+    return view
 
 
 def _clip(text, head=2500, tail=6500):
@@ -109,8 +142,51 @@ async def _wait_for_memory(mem_mb, headroom_mb=1500, typical_mb=2000, max_wait_s
     return round(time.time() - t0, 1)
 
 
-async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_mb=None, slot=None, extra_env=None):
-    """Run agent code with `from desk.research import *` preloaded. Returns stdout/stderr/status."""
+def _trial_reader(fd, buf):
+    import threading
+
+    def _run():
+        with os.fdopen(fd, 'rb') as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                if len(buf[0]) < 8_000_000:
+                    buf[0] += chunk
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
+
+
+def _write_trials(trials_path, raw, run):
+    """HOST writes the SELF-REPORT log (informational only, never counted as trials, charter R7c): records the jail
+    sent over the pipe + one run record per sandboxed run
+    (written even when the code reported nothing, crashed or was killed)."""
+    trials_path = Path(trials_path)
+    trials_path.parent.mkdir(parents=True, exist_ok=True)
+    good = []
+    for line in raw.decode('utf-8', 'replace').splitlines():
+        try:
+            t = json.loads(line)
+            good.append(json.dumps({'kind': str(t['kind']), 'sharpe': float(t['sharpe']), 'days': int(t['days']),
+                                    'id': str(t['id'])[:64]}))
+        except Exception:
+            continue
+    with open(trials_path, 'a', encoding='utf-8') as f:
+        f.writelines(g + '\n' for g in good)
+    with open(trials_path.with_name(trials_path.stem + '.runs.jsonl'), 'a', encoding='utf-8') as f:
+        f.write(json.dumps(dict(run, trials=len(good))) + '\n')
+    return len(good)
+
+
+async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_mb=None, slot=None, extra_env=None,
+                     trials_path=None):
+    """Run agent code with `from desk.research import *` preloaded. Returns stdout/stderr/status.
+
+    trials_path: HOST-side trial log (must be outside the workspace). The jail gets only the write end of a pipe
+    (DESK_TRIALS_FD); the host validates the records, appends them and always appends a run record to
+    <trials>.runs.jsonl. The path itself is never mounted or exposed to the jail."""
+    jail.require() if not jail.unsafe_opt_in() else None    # fail closed before writing anything
     timeout_s = min(int(timeout_s or settings.sandbox_timeout_s), 1800)
     mem_mb = mem_mb or settings.sandbox_memory_mb
     scripts = Path(workspace) / 'scripts'
@@ -129,16 +205,44 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
                 'DESK_PERPS_DEV_FILLS': settings.store / 'perps' / 'views' / 'dev_fills.parquet',
                 'DESK_PRED_DEV': settings.store / 'pred' / 'views' / 'dev.parquet',
                 'DESK_PRED_DEV_OUTCOMES': settings.store / 'pred' / 'views' / 'dev_outcomes.parquet', **(extra_env or {})})
+    env['DESK_CARRY_ROOT'] = str(_carry_dev_view(settings))   # never the full carry store
+    env.pop('DESK_TRIALS', None)                         # never hand the jail a writable trial-log path
+    if trials_path is not None:
+        tp = Path(trials_path).resolve()
+        if Path(workspace).resolve() in tp.parents or tp == Path(workspace).resolve():
+            raise ValueError('trials_path must be outside the sandbox workspace')
+    rfd = wfd = None
     tq = time.time()
     async with (slot or _nullslot()):
         await _wait_for_memory(mem_mb)
         t0 = time.time()
-        proc = await asyncio.create_subprocess_exec(sys.executable, '-u', str(path), cwd=str(workspace), env=env,
-                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        ws = Path(workspace).resolve()
+        ro = [v for k, v in env.items() if k.startswith('DESK_') and k != 'DESK_TRIALS' and Path(v).is_absolute()]
+        argv, pre = jail.python_cmd([str(path.resolve())], rw=[ws], ro=ro, cwd=ws,
+                                    lim=jail.limits(timeout_s=timeout_s, mem_mb=mem_mb))
+        buf, reader = [b''], None
+        if trials_path is not None:
+            rfd, wfd = os.pipe()
+            env['DESK_TRIALS_FD'] = str(wfd)
+            reader = _trial_reader(rfd, buf)
+        try:
+            proc = await asyncio.create_subprocess_exec(*argv, cwd=str(workspace), env=env, preexec_fn=pre,
+                                                        pass_fds=(wfd,) if wfd is not None else (),
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        finally:
+            if wfd is not None:
+                os.close(wfd)                            # host keeps only the read end
         watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
         out, err = await proc.communicate()
         killed, peak = await watcher
+        if reader is not None:
+            await asyncio.to_thread(reader.join, 10)
     status = 'ok' if proc.returncode == 0 and not killed else (f'killed:{killed}' if killed else f'error:{proc.returncode}')
+    if trials_path is not None:
+        import hashlib
+        _write_trials(trials_path, buf[0], {'run': name, 'script': str(path.relative_to(workspace)), 'status': status,
+                                            'code_sha': hashlib.sha256(code.encode()).hexdigest()[:16],
+                                            'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z')})
     return {'status': status, 'seconds': round(time.time() - t0, 1), 'queued_s': round(t0 - tq, 1), 'peak_mb': round(peak / 1e6),
             'stdout': _clip(out.decode('utf-8', 'replace')), 'stderr': _clip(err.decode('utf-8', 'replace'), 1500, 3500),
             'script': str(path.relative_to(workspace))}

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 
+from ..lab.identity import strategy_desk
 from ..lab.sandbox import run_python, run_job
 from ..lab.strategy import code_hash, load_strategy, StrategyError
 
@@ -292,13 +294,16 @@ class Toolbox:
 
     # ------------------------------------------------------------ research
     async def t_run_python(self, code, timeout_s=300):
-        trials = self.agent.workspace / 'trials.jsonl'
-        trials.unlink(missing_ok=True)
+        # charter R7c: the HOST counts every sandbox run as one trial, keyed on the R4 identity of the submitted script
+        # (insert-only ledger core). The sandbox's own pipe reports (DESK_TRIALS_FD) are informational only: they go
+        # to a host-written log outside every mount and never count or set metrics.
+        selfrep = self.s.home / 'trial_logs' / f'{self.agent.name}.jsonl'
         res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots,
-                               extra_env={'DESK_TRIALS': trials})
-        n = self._collect_trials(trials)
-        if n:
-            res['trials_logged'] = n
+                               trials_path=selfrep)
+        ident = self._sandbox_identity(code)
+        self.L.trial(self.agent.name, 'sandbox_run', ident, None, None, desk=self._desk_of(code), split='dev',
+                     family='unassigned', identity=ident)
+        n = 1
         from .hints import hints, record_hint_resolution
         from .rsi import record_primitive_outcome
         ok = (res['status'] == 'ok')
@@ -316,19 +321,22 @@ class Toolbox:
                                                      'error': err_line})
         return res
 
-    def _collect_trials(self, path):
-        if not path.exists():
-            return 0
-        n = 0
-        for line in path.read_text(encoding='utf-8').splitlines():
-            try:
-                t = json.loads(line)
-                self.L.trial(self.agent.name, t['kind'], t['id'], t['sharpe'], t['days'])
-                n += 1
-            except Exception:
-                pass
-        path.unlink(missing_ok=True)
-        return n
+    def _sandbox_identity(self, code):
+        """R4 identity of a run_python script (normalized AST + deps + settings + data version); raw sha256 when the
+        script does not parse (it still counts)."""
+        from ..lab.identity import evaluation_identity, evaluation_settings
+        try:
+            return evaluation_identity(code, evaluation_settings({'type': 'run_python', 'split': 'dev'}), self.s.store,
+                                       desk=self._desk_of(code))[0]
+        except SyntaxError:
+            return hashlib.sha256(code.encode()).hexdigest()
+
+    @staticmethod
+    def _desk_of(code):
+        try:
+            return strategy_desk(code)
+        except SyntaxError:
+            return 'unknown'
 
     async def t_register_factor(self, name, code, description):
         dm = re.search(r"^DESK\s*=\s*['\"](perps|macro|pred)['\"]", code, re.M)
@@ -407,7 +415,8 @@ class Toolbox:
         sr = out['summary'].get('sharpe')
         from .rsi import record_primitive_outcome
         record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
-        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'))
+        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'),
+                     desk=out.get('desk') or strategy_desk(code), split='dev', family='unassigned')
         self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out

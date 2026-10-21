@@ -51,10 +51,9 @@ def base_features(df: pl.DataFrame) -> np.ndarray:
 def factor_matrix(df, factor_codes):
     cols = []
     for code in factor_codes:
-        ns = {'np': np, 'pl': pl}
-        exec(code, ns)                                   # trusted library factor modules (causal, registered)
-        v = ns['factor'](df, dict(ns.get('PARAMS', {})))
-        v = np.asarray(v.to_numpy() if isinstance(v, pl.Series) else v, dtype=float)
+        # library factor modules are agent-authored: evaluate them in the OS jail, not exec() in this process
+        from desk.lab.factor_jail import run as run_factor
+        v = run_factor(code, [df])[1][0]
         cols.append(_z(pl.Series(np.nan_to_num(v))).to_numpy())
     return np.column_stack(cols) if cols else np.zeros((len(df), 0))
 

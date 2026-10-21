@@ -139,11 +139,17 @@ def factor_report(df, values, resolution='1m', horizons_s=(10, 60, 300, 900, 360
 
 
 def _log_trial(kind, sharpe, days_, ident):
-    """Every backtest counts toward the firm's multiple-testing ledger (deflated Sharpe)."""
-    p = os.environ.get('DESK_TRIALS')
-    if p:
-        with open(p, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'kind': kind, 'sharpe': float(sharpe), 'days': int(days_), 'id': ident}) + chr(10))
+    """Self-report only (charter R7c): inside the sandbox this sends an INFORMATIONAL record over the host pipe
+    (DESK_TRIALS_FD); the host logs it but never counts it or uses its metrics. The counted trial is written host-side,
+    one per run_python call, by the tool layer."""
+    fd = os.environ.get('DESK_TRIALS_FD')
+    if fd:
+        try:
+            os.write(int(fd), (json.dumps({'kind': kind, 'sharpe': float(sharpe), 'days': int(days_), 'id': ident})
+                               + chr(10)).encode('utf-8'))
+        except (OSError, ValueError, TypeError):
+            pass
+    return None
 
 
 def backtest(df, target, resolution='1m', **cost):
