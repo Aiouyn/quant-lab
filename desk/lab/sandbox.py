@@ -151,26 +151,32 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     jid = uuid.uuid4().hex[:12]
     jp, op = jobs / f'{jid}.json', jobs / f'{jid}.out.json'
     mem_mb = mem_mb or getattr(settings, 'job_memory_mb', 5000)
-    job = dict(job, _home=str(settings.home), _store=str(settings.store))   # the harness evaluates on THIS run's store
-    jp.write_text(json.dumps(job, default=str))
-    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
-    for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
-        env.pop(secret_key, None)
-    async with (slot or _nullslot()):
-        await _wait_for_memory(mem_mb)
-        proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op), cwd=str(ROOT),
-                                                    env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
-        out, err = await proc.communicate()
-        killed, _ = await watcher
-    try:
-        if op.exists():
-            res = json.loads(op.read_text())
-        else:
-            res = {'error': f'harness failed ({killed or proc.returncode})', 'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
-    finally:
-        for p in (jp, op):
-            p.unlink(missing_ok=True)
+    from ..data.views import store_for_job
+    # per-split view holding only job['allowed'] data; a holdout view is one-shot (torn down + marked consumed on exit).
+    # Under the OS jail (PR #14) this view root is the ONLY store path to mount read-only.
+    with store_for_job(settings.store, job, job_id=jid) as store_root:
+        job = dict(job, _home=str(settings.home), _store=str(store_root))   # the harness evaluates on THIS job's view
+        jp.write_text(json.dumps(job, default=str))
+        env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
+        for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
+            env.pop(secret_key, None)
+        try:
+            async with (slot or _nullslot()):
+                await _wait_for_memory(mem_mb)
+                proc = await asyncio.create_subprocess_exec(sys.executable, '-m', 'desk.lab.harness', str(jp), str(op),
+                                                            cwd=str(ROOT), env=env, stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.PIPE)
+                watcher = asyncio.create_task(_watch(proc, timeout_s, mem_mb))
+                out, err = await proc.communicate()
+                killed, _ = await watcher
+            if op.exists():
+                res = json.loads(op.read_text())
+            else:
+                res = {'error': f'harness failed ({killed or proc.returncode})',
+                       'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
+        finally:
+            for p in (jp, op):
+                p.unlink(missing_ok=True)
     return res
 
 
