@@ -53,6 +53,11 @@ def _probe():
     return exe, ''
 
 
+def inside() -> bool:
+    """True when this process already runs inside the jail (uid 65534 + the boot script bound at /tmp)."""
+    return os.getuid() == JAIL_UID and Path('/tmp/.jail_boot.py').is_file()
+
+
 def available() -> bool:
     return _probe()[0] is not None
 
