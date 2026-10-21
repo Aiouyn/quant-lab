@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 
+from ..lab.identity import strategy_desk
 from ..lab.sandbox import run_python, run_job
 from ..lab.strategy import code_hash, load_strategy, StrategyError
 
@@ -292,13 +294,12 @@ class Toolbox:
 
     # ------------------------------------------------------------ research
     async def t_run_python(self, code, timeout_s=300):
-        trials = self.agent.workspace / 'trials.jsonl'
-        trials.unlink(missing_ok=True)
-        res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots,
-                               extra_env={'DESK_TRIALS': trials})
-        n = self._collect_trials(trials)
-        if n:
-            res['trials_logged'] = n
+        # charter R7c: trials are written host-side from what the host launched. One trial per sandbox run, keyed on
+        # the submitted script; nothing the sandbox writes (the old DESK_TRIALS file) is read back as a trial.
+        res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots)
+        self.L.trial(self.agent.name, 'sandbox_run', hashlib.sha256(code.encode()).hexdigest(), None, None,
+                     desk='unknown', split='dev', family='unassigned')
+        n = 1
         from .hints import hints, record_hint_resolution
         from .rsi import record_primitive_outcome
         ok = (res['status'] == 'ok')
@@ -315,20 +316,6 @@ class Toolbox:
         self.L.event(self.agent.name, 'RUN_PYTHON', {'status': res['status'], 'seconds': res['seconds'], 'queued_s': res.get('queued_s', 0), 'trials': n,
                                                      'error': err_line})
         return res
-
-    def _collect_trials(self, path):
-        if not path.exists():
-            return 0
-        n = 0
-        for line in path.read_text(encoding='utf-8').splitlines():
-            try:
-                t = json.loads(line)
-                self.L.trial(self.agent.name, t['kind'], t['id'], t['sharpe'], t['days'])
-                n += 1
-            except Exception:
-                pass
-        path.unlink(missing_ok=True)
-        return n
 
     async def t_register_factor(self, name, code, description):
         dm = re.search(r"^DESK\s*=\s*['\"](perps|macro|pred)['\"]", code, re.M)
@@ -407,7 +394,8 @@ class Toolbox:
         sr = out['summary'].get('sharpe')
         from .rsi import record_primitive_outcome
         record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
-        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'))
+        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'),
+                     desk=out.get('desk') or strategy_desk(code), split='dev', family='unassigned')
         self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out

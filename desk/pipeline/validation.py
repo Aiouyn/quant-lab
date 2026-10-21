@@ -10,6 +10,7 @@ import asyncio
 import json
 import time
 
+from ..lab.identity import strategy_desk
 from ..lab.sandbox import run_job
 
 # Desk-aware Sharpe bars (dev, val). The default was calibrated for intraday crypto; daily cross-asset macro premia run
@@ -62,6 +63,11 @@ def holdout_gates(s):
         'holdout_sharpe>=%.1f' % s.min_holdout_sharpe: lambda r: r['summary']['sharpe'] >= s.min_holdout_sharpe,
         'holdout_drawdown': lambda r: r['summary']['max_drawdown'] <= s.max_drawdown,
     }
+
+
+def _gate_settings(s):
+    """Gate settings that enter the R4 identity (values only; the decision logic is holdout_gates/check)."""
+    return {'min_holdout_sharpe': s.min_holdout_sharpe, 'max_drawdown': s.max_drawdown}
 
 
 def check(gates, report):
@@ -178,7 +184,8 @@ class Pipeline:
                 self.L.update_strategy(sid, status='rejected_dev', dev_report=r, gate_reasons=['evaluation_error'])
                 self._notify(s, f'[{sid}] {s["name"]}: evaluation failed: {r["error"][:600]}')
                 return
-            self.L.trial(s['author'], 'submission', r['code_hash'], r['summary']['sharpe'], r['summary']['days'])
+            self.L.trial(s['author'], 'submission', r['code_hash'], r['summary']['sharpe'], r['summary']['days'],
+                         desk=r.get('desk') or strategy_desk(s['code']), split='dev', family='unassigned')
             failed = check(DEV_GATES, r)
             if failed:
                 self.L.update_strategy(sid, status='rejected_dev', dev_report=r, gate_reasons=failed)
@@ -216,18 +223,24 @@ class Pipeline:
             self.L.event('pipeline', 'VAL_PASS', {'id': sid, 'sharpe': r['summary']['sharpe'], 'dsr': r['stats'].get('dsr')})
             s = self.L.strategy(sid)
         if s['status'] == 'holdout':
-            used = self.L.q('SELECT strategy FROM holdout_uses WHERE code_hash=?', (s['code_hash'],))
-            if used and used[0]['strategy'] != sid:
+            job = {'type': 'strategy_eval', 'code': s['code'], 'split': 'holdout', 'allowed': ['dev', 'val', 'holdout'],
+                   'cost': self.cost(), 'return_daily': True, 'stress': True}
+            # charter R4/R6: one holdout per evaluation identity, checked and recorded atomically BEFORE any data loads
+            from ..company.ledger import HoldoutAlreadyUsed
+            from ..lab.identity import evaluation_identity, evaluation_settings
+            ident, comp = evaluation_identity(s['code'], evaluation_settings(job, _gate_settings(self.s)), self.s.store)
+            try:
+                self.L.claim_holdout(ident, sid, comp, code_hash=s['code_hash'])
+            except HoldoutAlreadyUsed:
                 self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_identical_code'])
                 return
-            self.L.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (s['code_hash'], sid, time.time(), None))
-            r = await self._job({'type': 'strategy_eval', 'code': s['code'], 'split': 'holdout', 'allowed': ['dev', 'val', 'holdout'],
-                                 'cost': self.cost(), 'return_daily': True, 'stress': True})
+            r = await self._job(job)
             if 'error' in r:
+                self.L.holdout_result(ident, sid, None)
                 self.L.update_strategy(sid, status='error', holdout_report=r, gate_reasons=['holdout_error'])
                 return
             failed = check(holdout_gates(self.s), r)
-            self.L.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed else 1, s['code_hash']))
+            self.L.holdout_result(ident, sid, not failed)
             if failed:
                 self.L.update_strategy(sid, status='rejected_holdout', holdout_report=r, gate_reasons=failed)
                 self._notify(s, f'[{sid}] {s["name"]} passed validation but FAILED the one-shot holdout. It is retired.')
