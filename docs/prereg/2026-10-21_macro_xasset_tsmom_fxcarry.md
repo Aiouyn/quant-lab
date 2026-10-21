@@ -4,6 +4,8 @@
 - **Desk:** macro.
 - **Reviewers:** QL Validator, QL Safety.
 
+> **BLOCKED:** blocked until `desk/lab/stats.py` ships a G7-compliant bootstrap (assigned separately). The pin for that implementation (commit + SHA-256) is `REQUIRED-BEFORE-RUN`. Every bootstrap bound in this document follows the PR #10 spec rule G7.
+
 ## 0. Run conditions (binding)
 - This test runs **once, on val only, and never on holdout.** The holdout is suspect anyway (`JOURNEY.md` §5.1/§7.3 in PR #3).
 - It runs only after **both** of these are signed off by QL Validator:
@@ -43,7 +45,8 @@
 | repo HEAD (origin/main) | `313b185cac9e53c9d0bfcaf48774b34e79d72d34` |
 | `desk/lab/macro.py` (engine, SPLITS), last changed `7c140052faccaf3e76833ad1c9c711038c2129dc` | SHA-256 `1ce90652e87e09a09ca525bc10b485f3725940658fb40f2c722862ed08ba1a22` |
 | `desk/data/macro_data.py` (universe, costs) | SHA-256 `790c2cd194153126e85930105fc9ae09a6f4894e5333049c804d3838045c3eb0` |
-| `desk/lab/stats.py` (`dsr`, `block_bootstrap_lower`, `mean_ex_top`) | SHA-256 `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| `desk/lab/stats.py` (`dsr`, `mean_ex_top`) | SHA-256 `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| G7-compliant bootstrap in `desk/lab/stats.py` (not yet shipped) | `REQUIRED-BEFORE-RUN` (commit + SHA-256) |
 | FX-carry engine change (§4) | `REQUIRED-BEFORE-RUN` (commit + SHA-256) |
 | Strategy file(s) for configs A/B/C | `REQUIRED-BEFORE-RUN` (commit + SHA-256 each) |
 
@@ -150,7 +153,7 @@ To **PASS**, a config must meet all of the following:
    - The ledger count is the number of distinct macro-desk strategies with a val evaluation (query in PR #10, P0-C). It is `REQUIRED-BEFORE-RUN`.
    - `trial_sr_std` comes from the ledger, also `REQUIRED-BEFORE-RUN`.
 3. **Both val halves (§1, trading-day count split) have positive Sharpe.**
-4. **Block-bootstrap 95% lower bound ≥ 0** on the daily mean (`stats.block_bootstrap_lower`, defaults: block 5, n 2000, alpha 0.05, seed 7).
+4. **Block-bootstrap 95% lower bound ≥ 0** (one-sided) on the daily mean, computed per the PR #10 spec rule **G7** (studentized or BCa interval; block size max(5, ceil(T^(1/3))); ≥ 5,000 draws; seed logged in the manifest and the ledger row; passes the null-drill false-positive check).
 5. **Mean excluding the top 5 days > 0** (`stats.mean_ex_top`, k = 5).
 6. **1.5× cost stress** (`MacroCost.stressed(fee_mult=1.5)`): val Sharpe is still > 0 and net P&L is still > 0.
 
