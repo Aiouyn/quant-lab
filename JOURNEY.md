@@ -75,9 +75,10 @@ Phase 2 removed human-in-the-loop bottlenecks by making data provisioning, featu
 ### 5.1 Multi-Desk Feature Store Builder (`desk/data/store_builder.py`)
 - Automatically populates `results/v3/store/{macro,perps,carry,pred}/panel.parquet` and `splits.json` with strict temporal boundaries:
   - **`dev` (60%)**: Visible to researchers, sandbox scripts, and evolutionary mutation.
-  - **`val` (20%)**: Sealed validation window for out-of-sample gating and Deflated Sharpe calculation.
+  - **`val` (25%)**: Sealed validation window for out-of-sample gating and Deflated Sharpe calculation.
   - **`holdout` (15%)**: One-shot holdout window (evaluated at most once per unique `code_sha256`).
-  - **`forward` (5%)**: Rolling post-approval forward monitor.
+  - **`forward`**: Any day added after the split was frozen (a rolling, never-seen holdout; not part of the 60/25/15 split).
+- The split is **60/25/15** (dev/val/holdout), as implemented in `desk/data/store.py` and `desk/data/carry_data.py`.
 - Each desk helper (`macro_panel`, `perps_panel`, `carry_panel`, `pred_panel`) enforces `split='dev'` by default in researcher sandboxes and auto-builds missing store files on demand.
 
 ### 5.2 Autonomous Toolsmith Loop (`evolve_primitives`)
@@ -155,12 +156,27 @@ Running multi-generation closed-loop campaigns (`run_rsi_campaign`) across all f
 - **Total Evolved Lineages Tracked**: `20+` multi-generation children across `macro`, `perps`, `carry`, and `pred`.
 - **Gate Filtering Efficacy**:
   - Candidates with high in-sample Sharpe but concentrated outlier days (`mean_ex_top5_days <= 0`) or excessive turnover under `1.5x` fees were caught and marked `rejected_val` (`S-ec8f29`, `S-77c7dd`), immediately penalizing their generating operators/primitives.
-  - **10 strategies** survived the full `dev` $\rightarrow$ sealed `val` (DSR) $\rightarrow$ one-shot `holdout` pipeline and exported verified bundles to `results/v3/bundles/`.
+  - ~~**10 strategies** survived the full `dev` → sealed `val` (DSR) → one-shot `holdout` pipeline and exported verified bundles to `results/v3/bundles/`.~~ **RETRACTED (2026-10-21):** unverified and contradicted. See the retraction notice in §7.2.
 
-### 7.2 Master Portfolio (`P-001`) Composition & Risk-Adjusted Performance
-- **Portfolio Sharpe (Out-of-Sample Combined)**: **`10.18`** (annualized across orthogonal multi-desk sleeves: `macro`, `perps`, `carry`, `pred`)
-- **Max Drawdown**: **`0.024`** (`2.4%` of unit notional)
-- **Diversification**: Cross-desk correlations between `macro` ETF trend/yield-curve sleeves, `carry` funding-basis sleeves, `perps` residual momentum sleeves, and `pred` calibration sleeves remain near zero (`|corr| < 0.25` across desks), yielding substantial variance reduction under ERC weighting.
+### 7.2 Master Portfolio (`P-001`): RETRACTED
+
+> **RETRACTION (2026-10-21).** The claims below are **retracted**: an out-of-sample portfolio Sharpe of 10.18, a 2.4% max drawdown, and "10 strategies survived holdout" (§7.1).
+> They are **unverified**: no ledger rows or `results/v3/bundles/` artifacts have been produced to back them.
+> They are **contradicted** by the research log, `RESEARCH_LOG_2026-10-03.md` (repo root), where every family evaluated out of sample was rejected or failed its holdout.
+> No out-of-sample alpha has been demonstrated in this repo. Do not cite these numbers.
+
+Original text, kept for the record:
+
+- ~~**Portfolio Sharpe (Out-of-Sample Combined)**: **`10.18`** (annualized across orthogonal multi-desk sleeves: `macro`, `perps`, `carry`, `pred`)~~
+- ~~**Max Drawdown**: **`0.024`** (`2.4%` of unit notional)~~
+- ~~**Diversification**: Cross-desk correlations between `macro` ETF trend/yield-curve sleeves, `carry` funding-basis sleeves, `perps` residual momentum sleeves, and `pred` calibration sleeves remain near zero (`|corr| < 0.25` across desks), yielding substantial variance reduction under ERC weighting.~~
+
+### 7.3 Burned holdouts (already seen; not usable for confirmation)
+
+The following holdout windows have already been observed. They **must not** be reused to confirm any strategy in the same family or any variant derived from it. Confirmation for these families has to come from a fresh, pre-registered out-of-sample source, such as the forward split or forward paper trading.
+
+- **F05 funding sign-flip (receive the new rate):** **BURNED.** The family was discovered on its holdout (`RESEARCH_LOG_2026-10-03.md`, row 7).
+- **Spot cash-and-carry (short HL perp / long Binance spot):** **BURNED.** The holdout was evaluated once and failed: −2.8% maker, −11.6% taker (`RESEARCH_LOG_2026-10-03.md`, row 5).
 
 ---
 
