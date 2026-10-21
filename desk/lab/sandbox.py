@@ -159,7 +159,8 @@ def _trial_reader(fd, buf):
 
 
 def _write_trials(trials_path, raw, run):
-    """HOST writes the trial log: valid trial records reported by the jail + one run record per sandboxed run
+    """HOST writes the SELF-REPORT log (informational only, never counted as trials, charter R7c): records the jail
+    sent over the pipe + one run record per sandboxed run
     (written even when the code reported nothing, crashed or was killed)."""
     trials_path = Path(trials_path)
     trials_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +321,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     # per-split view holding only job['allowed'] data (PR #16); a holdout view is one-shot. It is the ONLY store
     # path mounted (read-only) into the jail.
     try:
-        with store_for_job(settings.store, job, job_id=jid) as store_root:
+        # holdout one-shot is keyed on the R4 identity when the pipeline supplies it (charter R4), else the job id
+        with store_for_job(settings.store, job, job_id=job.get('_identity') or jid) as store_root:
             job = dict(job, _home=str(settings.home), _store=str(store_root))   # the harness evaluates on THIS view
             jp.write_text(json.dumps(job, default=str))
             rw = [jdir.resolve()]
