@@ -7,16 +7,37 @@
   - **#4:** `docs/prereg/2026-10-21_hl_native_carry_btc_hype_val.md` (branch `research/prereg-hl-carry`)
   - **#8:** `docs/prereg/2026-10-21_macro_xasset_tsmom_fxcarry.md` (branch `research/prereg-macro-tsmom`)
   - **#9:** `docs/prereg/2026-10-21_polymarket_favorite_longshot.md` (branch `research/prereg-pred-flb`)
+- **Charter references:** R-numbers (R1.3, R7a) are cited as given by QL Validator *(per Validator charter, pending: branch `validator/gate-charter` was not on origin at 2026-10-21 05:4x UTC+2)*. They must be re-checked against the charter once it is published.
 - **Out of scope:** `desk/company/rsi.py`, gate logic, DSR methodology (owned by Validator / RSI Architect), and infra design. This doc only states needs.
 
 ## Rules that apply to every item
-- **G1, no holdout read:**
-  - Every new evaluator takes an explicit `allowed` split set. It must raise `SplitViolation` (`desk/data/store.py`) when asked for holdout.
-  - Test: call the evaluator with `split='holdout'` and with `allowed=('dev','val')`, and assert it raises. Also add a monkeypatched-open test asserting that no holdout-dated rows are ever materialized (a fixture panel with a sentinel `NaN` in holdout rows; the result must be finite).
+- **G1, no holdout or forward read:**
+  - Every new evaluator takes an explicit `allowed` split set, which may contain only `dev` and `val`. It must raise `SplitViolation` (`desk/data/store.py`) when asked for **`holdout` or `forward`**, or when either one appears in `allowed`.
+  - **Tests:**
+    - Evaluator calls with `split='holdout'`, with `split='forward'`, and with `allowed` containing either one must all raise.
+    - A fixture panel with sentinel `NaN` values in every holdout- and forward-dated row must give a finite result, which shows those rows are never materialized.
+    - Spy on the parquet scan and assert that the row filter's upper bound is at or before the end of val.
 - **G2, no lookahead:** a causality test in the style of `desk/lab/carry.py::carry_causality`. Truncate the panel at cut-points 0.4 and 0.7; positions and signals before the cut must be identical.
 - **G3, determinism:** two runs with the same inputs and seed give byte-identical result JSON. Its SHA-256 is recorded.
-- **G4, pinning:** every output file is written with a sidecar `<file>.sha256` and a `manifest.json` containing `{git_commit, code_sha256 per file, inputs: {path: sha256}, created_utc}`.
+- **G4, pinning, runtime split check and atomic writes:**
+  - Every output file gets a sidecar `<file>.sha256` and a `manifest.json` containing `{git_commit, code_sha256 per file, config_sha256, inputs: {path: sha256}, splits_sha256, bootstrap_seed, created_utc}`.
+  - **Runtime splits.json abort (R1.3, per Validator charter, pending):** at start-up, the evaluator computes the SHA-256 of the desk's `splits.json` and compares it with the value pinned in the prereg (or in `split_manifest.json`, P0-B). On any mismatch it aborts **before** loading data.
+    - Test: changing one byte of a fixture `splits.json` makes the evaluator raise, and no data file is opened (spy on reads).
+  - **Atomic writes:** every output (results, manifests, sidecars, ledger export files) is written to a temp file in the same directory, then `fsync`, then `os.replace` onto the final name. A partial file must never appear under the final name.
+    - Test: inject an exception mid-write. The final path is either absent or holds the previous complete version, and no `*.tmp` file is left behind (or the run fails loudly naming it).
 - **G5, nothing fabricated:** when an input is missing, the code **raises**. It never imputes or substitutes synthetic data.
+- **G6, ledger trial row (mandatory; JSON alone is not enough):**
+  - Every evaluator run, whether it passes, fails or aborts after loading data, writes **one row** to the ledger trials table with `{desk, split, family, strategy_code_sha256, config_sha256, evaluator_commit, metric summary (e.g. sharpe, days), result_json_sha256, created}`.
+  - This depends on the R7a ledger schema change (P0-C). Until R7a lands, the evaluator **refuses to run** on val. It does not fall back to JSON-only logging.
+  - Test: run an evaluator on a fixture against a temporary ledger, and assert exactly one new row with every field non-null, matching the run's hashes.
+  - Test: a second run with a changed config gives a second row with a different `config_sha256`.
+  - Test: a run that aborts on a G1 or G4 check writes **no** trial row, because no data was evaluated.
+- **G7, bootstrap standard (applies to every bootstrap in every evaluator: items 1, 2 and 7 (the macro evaluator), and 6):**
+  - The method is **studentized (bootstrap-t) or BCa**. Plain percentile intervals aren't allowed. The method used is logged.
+  - Daily series use a stationary or circular block bootstrap with **block size = max(5, ceil(T^(1/3)))**, where T is the series length. Cluster bootstraps (#9) resample whole clusters, and the same method rule applies.
+  - Use **≥ 5,000 draws**, with the seed logged in the manifest and the trial row.
+  - **Null-drill check (acceptance test for every evaluator):** on 500 synthetic zero-mean series (or shuffled or sign-randomized versions of a fixture), the one-sided 95% lower bound must exclude 0 (a false positive) in **≤ 5%** of runs, with binomial tolerance: fail if the count exceeds 35 of 500. For the cluster bootstrap, use calibrated Bernoulli(p) outcomes with the cluster structure kept. On a planted-signal fixture, the bound must exclude 0 in ≥ 80% of runs, so the check also covers power.
+  - **Conflict note:** `desk/lab/stats.py::block_bootstrap_lower` (a percentile interval with block 5, n 2000 and seed 7, as defaults) does **not** meet this standard. A conforming implementation is needed; changing stats/gates belongs to Validator / RSI Architect. Preregs #4, #8 and #9 currently cite the `block_bootstrap_lower` defaults, and #9 cites a 10,000-draw percentile cluster bootstrap. **These conflict with G7 and are flagged here, not edited.** The prereg owners must amend them before running.
 
 ## P0 prerequisites
 
@@ -55,14 +76,20 @@
 - **Priority:** P0. It's cheap and unblocks every prereg's pins.
 - **Size:** S (about 0.5 day).
 
-### P0-C. Ledger trial-count query (reference only)
-- **Purpose:** the n_trials floors in #4 (≥ 4), #8 (≥ 6) and #9 (≥ 15) are each combined with "ledger count if larger".
-- **Observation from code:** `Ledger.trial_stats` (`desk/company/ledger.py`) counts `COUNT(DISTINCT code_hash)` over `trials WHERE kind IN ('dev_backtest','submission') AND days>=10`. That is firm-wide: the `trials` table has **no desk or split column**. Per-desk val counts therefore have to come from `strategies` (`val_report IS NOT NULL`), with the desk taken from the report JSON.
-  - Proposed read-only query (the JSON path `$.desk` is an assumption that must be checked against real reports): `SELECT COUNT(DISTINCT code_hash) FROM strategies WHERE val_report IS NOT NULL AND json_extract(val_report,'$.desk') = ?`.
-  - Evaluations run by ad-hoc scripts (e.g. those in `RESEARCH_LOG_2026-10-03.md`) are **not** in the ledger. That's why the preregs keep hand-counted floors.
-- **Outputs:** `{desk: {val_trials, trial_sr_std}}` for the preregs to copy in.
-- **Ownership:** QL Validator / RSI Architect own DSR and decide the definition. Engineering only provides the read-only query.
-- **Priority:** P0 for running, but it is not an engineering build. **Size:** XS.
+### P0-C. Ledger trial-count query, after the R7a schema change (reference only)
+- **Purpose:**
+  - The n_trials floors in #4 (≥ 4), #8 (≥ 51) and #9 (≥ 15) are each combined with "ledger count if larger", and in #8 and #9 the ledger is a hard floor.
+  - G6 needs a place to write trial rows.
+- **Observation from code:** `Ledger.trial_stats` (`desk/company/ledger.py`) counts `COUNT(DISTINCT code_hash)` over `trials WHERE kind IN ('dev_backtest','submission') AND days>=10`. That is firm-wide: the `trials` table has **no desk, split or family column**.
+- **Prerequisite, replacing the earlier `json_extract` proposal:** the **R7a ledger schema change** (per Validator charter, pending). It adds `desk`, `split` and `family` columns to the trials table, plus `config_hash` alongside `code_hash`.
+  - With that in place, the count is a plain read-only query: `SELECT COUNT(DISTINCT code_hash || ':' || config_hash) FROM trials WHERE desk=? AND split='val' AND family=?`, with variants per family or per desk as the Validator decides. `trial_sr_std` comes from the same rows.
+  - The earlier proposal to parse `$.desk` from `strategies.val_report` JSON is **withdrawn**.
+- **Known gap:** evaluations run before R7a (e.g. the ad-hoc scripts in `RESEARCH_LOG_2026-10-03.md`) have no rows. That's why the preregs keep hand-counted floors. Backfilling them (if at all) is the Validator's call.
+- **Ownership:** QL Validator / RSI Architect own the R7a schema, the DSR definition and the query. This spec only states the need.
+- **Acceptance (for the owners; stated as a need):**
+  - After migration, a fixture ledger with known rows across 2 desks × 2 splits × 2 families returns the hand-computed counts.
+  - Old rows keep `NULL` in the new columns and are excluded from family counts unless they are backfilled.
+- **Priority:** P0. It blocks G6 and every prereg run. It is not an engineering build here. **Size:** owner-estimated.
 
 ## Items
 
@@ -225,7 +252,13 @@ graph TD
   I3 --> I4[(4) outcome labels + event ids]
   I3 --> I5[(5) dispute source]
   I4 --> I6[(6) bucket/cluster evaluator + sleeve]
-  C[P0-C ledger trial-count query - Validator owned]
+  R7a[R7a ledger schema: desk/split/family + config_hash - Validator/RSI owned]
+  R7a --> C[P0-C ledger trial-count query - Validator owned]
+  R7a --> G6[G6 trial rows from every evaluator]
+  G6 --> I1
+  G6 --> I2
+  G6 --> I6
+  G6 --> I7
   I1 --> P4{{prereg #4 run}}
   I2 --> P8{{prereg #8 run}}
   I6 --> P9{{prereg #9 run}}
@@ -241,7 +274,7 @@ graph TD
 ## Suggested queue order
 1. **P0-A:** store_builder fix and provenance. It unblocks everything.
 2. **P0-B:** split manifest. It fills #4 §3, #8 §1 and #9 §2.
-3. **P0-C:** ledger query, handed to Validator. It runs in parallel.
+3. **R7a then P0-C (Validator/RSI owned):** the ledger schema change, then the trial-count query. These must land before any evaluator can run on val (G6). Engineering can build the evaluators against a temporary ledger in parallel.
 4. **(6) against fixtures** and **(3)**, in parallel. Item (6) needs no real data to build and test.
 5. **(4):** in the same fetch as (3).
 6. **(1):** HL-native carry evaluator. Its timing can follow the #4 forward verdict around 2026-11-02.
