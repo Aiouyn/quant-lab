@@ -1,32 +1,31 @@
-"""Multi-desk market panel harvester & deterministic local fallback builder for `results/v3/store`.
+"""Multi-desk store orchestrator for `results/v3/store`: builds the four research panels from REAL downloads only.
 
-Populates and verifies the four primary research panels:
-- `macro` : daily cross-asset ETF & macro index panel (`date`, `symbol`, `open`, `high`, `low`, `close`,
-            `adjclose`, `adj_open`, `volume`, `cls`, `tradable`, `cost_bps`) across `dev`, `val`, `holdout`, `forward`.
-- `perps` : hourly Hyperliquid multi-coin perpetual panel (`ts`, `coin`, `px`, `px_fill`, `oracle`, `mark`,
-            `premium`, `oi`, `vlm`, `isp`, `f`, `lo`, `hi`, `bn_oi_value`, `bn_ls_accounts`, `bn_ls_top_positions`,
-            `bn_taker_ratio`) plus `dev_panel.parquet` and `dev_fills.parquet`.
-- `carry` : hourly Hyperliquid-vs-Binance cross-venue funding & basis panel stored per coin in `carry/coins/<COIN>.parquet`
-            plus `carry/splits.json`.
-- `pred`  : hourly Polymarket binary prediction market panel (`ts`, `market`, `p`, `end_ms`, `category`,
-            `hours_to_end`, `outcome`, `volume`) plus `dev_panel.parquet`.
+- `macro` : daily cross-asset panel from Yahoo Finance v8 (desk.data.macro_data) + `dev_panel.parquet`.
+- `perps` : hourly Hyperliquid panel from the minute HL asset-ctx store (desk.data.perps_panel) + dev views.
+- `carry` : hourly Hyperliquid-vs-Binance panels per coin (desk.data.carry_data) + frozen `carry/splits.json`.
+- `pred`  : hourly Polymarket panel (desk.data.polymarket) + `dev_panel.parquet`.
 
-Each builder attempts fast public HTTP harvesting first (with a short timeout budget) and seamlessly
-augments or falls back to a calibrated, multi-regime deterministic generator so `macro_panel()`,
-`perps_panel()`, `carry_panel()`, `pred_panel()`, and full truth-machine validation always work out-of-the-box.
+Fail loud: a failed or insufficient download raises `StoreBuildError` naming the source, symbols/coins and date
+range. There is NO synthetic or seeded fallback. Split files are frozen: created only when absent, never rewritten,
+and a build whose computed split differs raises `SplitsMismatch`. Every built panel gets an atomically written
+`provenance.json` (source, fetch time UTC, row counts, date range, code commit).
+
+The universes and `_fetch_*` helpers below are kept for the live-flux / dry-run parity paths; they are not used to
+build the store.
 """
 from __future__ import annotations
 
-import io
 import json
+import os
+import tempfile
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import httpx
-import numpy as np
 import polars as pl
 
+from .provenance import StoreBuildError, atomic_write_parquet, freeze_splits, write_provenance
 from ..lab.macro import SPLITS as MACRO_SPLITS
 from ..lab.perps import SPLITS as PERPS_SPLITS, HOUR, visible as perps_visible
 from ..lab.pred import SPLITS as PRED_SPLITS, visible as pred_visible
@@ -191,401 +190,107 @@ def _fetch_hl_real_hourly(coin: str, timeout: float = 6.0) -> tuple[dict[int, tu
     return candles_out, funding_out
 
 
+def _cached(desk, root, panel_path, asset_col, time_col):
+    df = pl.read_parquet(panel_path, columns=[asset_col, time_col])
+    prov = json.loads((root / 'provenance.json').read_text(encoding='utf-8'))
+    return {'desk': desk, 'status': 'cached', 'rows': len(df), 'assets': int(df[asset_col].n_unique()),
+            'source': prov.get('source', 'unknown'), 'verified_real': bool(prov.get('verified_real', False)),
+            'fetched_at_utc': prov.get('fetched_at_utc')}
+
+
+def _need_remote(desk, try_remote, root):
+    if not try_remote:
+        raise StoreBuildError(f'{desk}: no cached panel under {root} and remote fetch is disabled (try_remote=False). '
+                              'Synthetic fallback was removed; build the store with remote access first.')
+
+
+def _ms(day: str) -> int:
+    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
 def build_macro_store(settings, force: bool = False, try_remote: bool = True) -> dict:
-    """Build `results/v3/store/macro/panel.parquet`, `splits.json`, `provenance.json`, and `dev_panel.parquet`."""
+    """`macro/panel.parquet`, `splits.json` (frozen), `provenance.json`, `dev_panel.parquet` from Yahoo Finance."""
+    from . import macro_data
     root = settings.store / 'macro'
-    root.mkdir(parents=True, exist_ok=True)
-    panel_path = root / 'panel.parquet'
-    splits_path = root / 'splits.json'
-    dev_path = root / 'dev_panel.parquet'
-    prov_path = root / 'provenance.json'
-
+    panel_path, dev_path, prov_path = root / 'panel.parquet', root / 'dev_panel.parquet', root / 'provenance.json'
     if panel_path.exists() and dev_path.exists() and prov_path.exists() and not force:
-        df = pl.read_parquet(panel_path)
-        prov = json.loads(prov_path.read_text(encoding='utf-8'))
-        return {
-            'desk': 'macro',
-            'status': 'cached',
-            'rows': len(df),
-            'symbols': int(df['symbol'].n_unique()),
-            'start': str(df['date'].min()),
-            'end': str(df['date'].max()),
-            'source': prov.get('source', 'cached'),
-            'verified_real': bool(prov.get('verified_real', False)),
-        }
-
-    if not splits_path.exists() or force:
-        splits_path.write_text(json.dumps(MACRO_SPLITS, indent=1), encoding='utf-8')
-
-    yahoo_frames = _fetch_yahoo_daily_panel(MACRO_UNIVERSE) if try_remote else []
-    if len(yahoo_frames) >= 6:
-        panel = pl.concat(yahoo_frames).sort(['date', 'symbol'])
-        source = 'real_public_api:yahoo_finance_v8'
-        verified_real = True
-    else:
-        spy_live = _try_fetch_stooq_spy() if try_remote else {}
-        source = 'public_harvest+calibrated' if spy_live else 'deterministic_local_fixture'
-        verified_real = bool(spy_live)
-
-        split_blocks = [
-            (date(2013, 1, 2), date(2014, 12, 31)),
-            (date(2018, 6, 1), date(2019, 12, 31)),
-            (date(2024, 1, 2), date(2025, 6, 30)),
-            (date(2025, 7, 1), date(2025, 9, 30)),
-        ]
-        dates: list[date] = []
-        for d0, d1 in split_blocks:
-            span = (d1 - d0).days + 1
-            dates.extend(d0 + timedelta(days=i) for i in range(span) if (d0 + timedelta(days=i)).weekday() < 5)
-        n_days = len(dates)
-
-        rng = np.random.default_rng(20261017)
-        regime_innov = rng.normal(0.0, 1.0, n_days)
-        global_trend = pl.Series(regime_innov).ewm_mean(span=28, ignore_nulls=True).to_numpy() * 1.15
-        vol_state = np.clip(0.85 + 0.35 * pl.Series(np.abs(regime_innov)).ewm_mean(span=20, ignore_nulls=True).to_numpy(), 0.55, 2.4)
-
-        frames = []
-        for idx, (sym, cls_name, tradable, cost_bps, ann_drift, ann_vol) in enumerate(MACRO_UNIVERSE):
-            sym_rng = np.random.default_rng(20261017 + (idx + 1) * 97)
-            daily_vol = (ann_vol / np.sqrt(252.0)) * vol_state
-            daily_drift = ann_drift / 252.0
-            beta = 0.35 if 'eq' in cls_name else (-0.28 if cls_name == 'rates' else (0.18 if cls_name == 'cmdty' else 0.12))
-            idio = sym_rng.normal(0.0, 1.0, n_days)
-            idio_trend = pl.Series(idio).ewm_mean(span=21, ignore_nulls=True).to_numpy() * 0.95
-            ret = daily_drift + daily_vol * (0.28 * beta * global_trend + 0.16 * idio_trend + 0.92 * idio)
-            ret = np.clip(ret, -0.09, 0.09)
-            px = 100.0 * np.exp(np.cumsum(ret))
-            if sym == 'SPY' and spy_live:
-                for i_d, dt in enumerate(dates):
-                    if dt in spy_live:
-                        px[i_d] = spy_live[dt]
-            intraday_rng = np.abs(sym_rng.normal(0.004, 0.002, n_days))
-            open_px = px * (1.0 + sym_rng.normal(0.0, 0.0015, n_days))
-            high_px = np.maximum(px, open_px) * (1.0 + intraday_rng)
-            low_px = np.minimum(px, open_px) * (1.0 - intraday_rng)
-            vol_shares = sym_rng.uniform(1.5e6, 2.5e7, n_days) * vol_state
-            frames.append(pl.DataFrame({
-                'date': dates,
-                'symbol': [sym] * n_days,
-                'open': np.round(open_px, 4),
-                'high': np.round(high_px, 4),
-                'low': np.round(low_px, 4),
-                'close': np.round(px, 4),
-                'adjclose': np.round(px, 4),
-                'adj_open': np.round(open_px, 4),
-                'volume': np.round(vol_shares, 0),
-                'cls': [cls_name] * n_days,
-                'tradable': np.full(n_days, tradable, dtype=np.int8),
-                'cost_bps': np.full(n_days, cost_bps, dtype=np.float64),
-            }))
-        panel = pl.concat(frames).sort(['date', 'symbol'])
-
-    panel.write_parquet(panel_path, compression='zstd')
-    dev_end = date.fromisoformat(MACRO_SPLITS['dev'][1])
-    panel.filter(pl.col('date') <= dev_end).write_parquet(dev_path, compression='zstd')
-
-    prov = {
-        'desk': 'macro',
-        'source': source,
-        'verified_real': verified_real,
-        'rows': len(panel),
-        'symbols': int(panel['symbol'].n_unique()),
-        'start': str(panel['date'].min()),
-        'end': str(panel['date'].max()),
-        'updated': time.time(),
-    }
-    prov_path.write_text(json.dumps(prov, indent=2), encoding='utf-8')
+        return _cached('macro', root, panel_path, 'symbol', 'date')
+    _need_remote('macro', try_remote, root)
+    root.mkdir(parents=True, exist_ok=True)
+    splits = freeze_splits(root / 'splits.json', MACRO_SPLITS, 'macro')
+    fetched_at = datetime.now(timezone.utc)
+    frames = macro_data.fetch_universe()
+    macro_data.check_complete(frames)
+    panel = macro_data.assemble(frames)
+    atomic_write_parquet(panel, panel_path)
+    atomic_write_parquet(panel.filter(pl.col('date') <= date.fromisoformat(splits['dev'][1])), dev_path)
+    prov = write_provenance(root, 'macro', 'yahoo_finance_v8_chart', panel, 'date', 'symbol', fetched_at=fetched_at)
     return {**prov, 'status': 'built'}
 
 
 def build_perps_and_carry_stores(settings, force: bool = False, try_remote: bool = True) -> dict:
-    """Build `perps/panel.parquet` (+ dev views) and `carry/coins/*.parquet` (+ `splits.json` & `provenance.json`)."""
-    perps_root = settings.store / 'perps'
-    carry_root = settings.store / 'carry'
-    carry_coins_dir = carry_root / 'coins'
+    """Perps panel (+ dev views) from the HL minute ctx store and carry coin panels from HL/Binance downloads."""
+    from . import carry_data, perps_panel
+    perps_root, carry_root = settings.store / 'perps', settings.store / 'carry'
+    p_panel, p_dev, p_fills = perps_root / 'panel.parquet', perps_root / 'dev_panel.parquet', perps_root / 'dev_fills.parquet'
+    if (p_panel.exists() and p_dev.exists() and (perps_root / 'provenance.json').exists()
+            and (carry_root / 'splits.json').exists() and (carry_root / 'provenance.json').exists() and not force):
+        return {'perps': _cached('perps', perps_root, p_panel, 'coin', 'ts'),
+                'carry': {**json.loads((carry_root / 'provenance.json').read_text(encoding='utf-8')), 'status': 'cached'}}
+    _need_remote('perps/carry', try_remote, settings.store)
     perps_root.mkdir(parents=True, exist_ok=True)
-    carry_coins_dir.mkdir(parents=True, exist_ok=True)
 
-    perps_panel_path = perps_root / 'panel.parquet'
-    perps_dev_path = perps_root / 'dev_panel.parquet'
-    perps_fills_path = perps_root / 'dev_fills.parquet'
-    perps_splits_path = perps_root / 'splits.json'
-    perps_prov_path = perps_root / 'provenance.json'
-    carry_splits_path = carry_root / 'splits.json'
-    carry_prov_path = carry_root / 'provenance.json'
+    # perps: real HL minute asset contexts (desk.data.hl_ctx) -> hourly panel
+    files = sorted(Path(perps_panel.HLCTX).glob('*.parquet'))
+    if not files:
+        raise StoreBuildError(f'perps: no Hyperliquid asset-ctx files in {perps_panel.HLCTX} (source '
+                              'QUANT_DATA/hyperliquid/asset_ctxs via desk.data.hl_ctx); run the harvest first. No synthetic fill.')
+    splits = freeze_splits(perps_root / 'splits.json', PERPS_SPLITS, 'perps')
+    fetched_at = datetime.now(timezone.utc)
+    fd, tmp = tempfile.mkstemp(prefix='.panel.parquet.', suffix='.tmp', dir=perps_root)
+    os.close(fd)
+    try:
+        perps_panel.build(settings, out=Path(tmp))
+        panel = pl.read_parquet(tmp)
+        if panel.is_empty():
+            raise StoreBuildError(f'perps: HL ctx files {files[0].stem}..{files[-1].stem} produced an empty panel')
+        os.replace(tmp, p_panel)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    dev_sub = panel.filter(pl.col('ts') < _ms(splits['dev'][1]) + 86_400_000)
+    atomic_write_parquet(perps_visible(dev_sub), p_dev)
+    atomic_write_parquet(dev_sub.select('ts', 'coin', 'lo', 'hi'), p_fills)
+    perps_prov = write_provenance(perps_root, 'perps', f'hyperliquid_asset_ctxs:{perps_panel.HLCTX}', panel, 'ts', 'coin',
+                                  fetched_at=fetched_at, input_files=len(files),
+                                  input_range=[files[0].stem, files[-1].stem])
 
-    if perps_panel_path.exists() and perps_dev_path.exists() and carry_splits_path.exists() and perps_prov_path.exists() and not force:
-        df = pl.read_parquet(perps_panel_path)
-        prov = json.loads(perps_prov_path.read_text(encoding='utf-8'))
-        return {
-            'perps': {
-                'desk': 'perps',
-                'status': 'cached',
-                'rows': len(df),
-                'coins': int(df['coin'].n_unique()),
-                'source': prov.get('source', 'cached'),
-                'verified_real': bool(prov.get('verified_real', False)),
-            },
-            'carry': {
-                'desk': 'carry',
-                'status': 'cached',
-                'rows': len(df),
-                'coins': len(list(carry_coins_dir.glob('*.parquet'))),
-                'source': prov.get('source', 'cached'),
-                'verified_real': bool(prov.get('verified_real', False)),
-            },
-        }
-
-    live_hl = _try_fetch_live_hl_mids() if try_remote else {}
-
-    # Single contiguous 365-day hourly timeline across dev (150d) -> val (110d) -> holdout (60d) -> forward (45d) = 8,760 hours
-    t0_ms = int(datetime.fromisoformat('2025-10-15').replace(tzinfo=timezone.utc).timestamp() * 1000)
-    n_days_total = 365
-    n_h = n_days_total * 24
-    ts_all = t0_ms + np.arange(n_h, dtype=np.int64) * HOUR
-
-    def _iso_at_day(d_idx: int) -> str:
-        return datetime.fromtimestamp((t0_ms + d_idx * 86_400_000) / 1000.0, timezone.utc).strftime('%Y-%m-%d')
-
-    contiguous_splits = {
-        'created': time.time(),
-        'dev': [_iso_at_day(0), _iso_at_day(149)],
-        'val': [_iso_at_day(150), _iso_at_day(259)],
-        'holdout': [_iso_at_day(260), _iso_at_day(319)],
-        'forward': [_iso_at_day(320), '2099-12-31'],
-        'note': 'contiguous 365d hourly panel anchored to Hyperliquid candleSnapshot + fundingHistory',
-    }
-
-    rng = np.random.default_rng(20261018)
-    mkt_factor = rng.normal(0.0, 0.0028, n_h)
-
-    real_candles_count = 0
-    real_funding_count = 0
-    perps_frames = []
-
-    for idx, (coin, base_px, ann_vol, mean_f_bps) in enumerate(PERPS_COINS):
-        c_rng = np.random.default_rng(20261018 + (idx + 1) * 131)
-        hl_candles, hl_fund_map = _fetch_hl_real_hourly(coin) if try_remote else ({}, {})
-        real_candles_count += len(hl_candles)
-        real_funding_count += len(hl_fund_map)
-
-        if coin in live_hl and live_hl[coin]['markPx'] > 0:
-            base_px = live_hl[coin]['markPx']
-
-        # Multi-week funding & crowding cycle (~22d primary wave + ~9d secondary wave)
-        t_axis = np.arange(n_h, dtype=np.float64)
-        slow_wave = (
-            0.75 * np.sin(2.0 * np.pi * t_axis / (24.0 * 22.0) + idx * 0.95)
-            + 0.35 * np.cos(2.0 * np.pi * t_axis / (24.0 * 9.0) + idx * 1.55)
-        )
-        if len(hl_fund_map) >= 100:
-            sorted_f = np.asarray([v for _, v in sorted(hl_fund_map.items())], dtype=np.float64)
-            f_demean = np.resize(sorted_f - np.mean(sorted_f), n_h)
-        else:
-            f_demean = c_rng.normal(0.0, 0.25e-4, n_h)
-
-        # Hourly funding rate in fraction/hr (~1.35 bps/hr amplitude across regime waves)
-        hl_f = (1.35e-4 * slow_wave) + 0.35 * f_demean + c_rng.normal(0.0, 0.18e-4, n_h)
-        bn_f_rate = 0.25 * hl_f + c_rng.normal(0.0, 0.12e-4, n_h)
-        bn_f_paid = bn_f_rate
-
-        # Cumulative mean-reverting basis process so daily basis PnL has realistic std (Carry Sharpe ~2.8-3.8, top5 < 0.42)
-        basis_innov = c_rng.normal(0.0, 18.5e-4, n_h)
-        basis_rw = np.zeros(n_h, dtype=np.float64)
-        for t_i in range(1, n_h):
-            basis_rw[t_i] = 0.96 * basis_rw[t_i - 1] + basis_innov[t_i]
-        hl_prem = 0.8 * hl_f + basis_rw
-        bn_prem = 0.6 * bn_f_rate - 0.45 * basis_rw
-
-        h_vol = ann_vol / np.sqrt(24.0 * 365.0)
-        if len(hl_candles) >= 200:
-            sorted_c = [v for _, v in sorted(hl_candles.items())]
-            closes = np.asarray([x[3] for x in sorted_c], dtype=np.float64)
-            real_rets = np.diff(np.log(np.maximum(closes, 1e-8)), prepend=np.log(max(closes[0], 1e-8)))
-            real_rets[0] = 0.0
-            real_rets = real_rets - np.mean(real_rets)
-            emp_std = max(float(np.std(real_rets)), 1e-4)
-            real_rets = np.clip(real_rets * (h_vol / emp_std), -0.025, 0.025)
-            idio_ret = np.resize(real_rets, n_h) * 0.82
-        else:
-            idio_ret = c_rng.normal(0.0, h_vol * 0.82, n_h)
-
-        # Moderate funding-crowding return predictability against real hourly crypto volatility (Sharpe ~2.8-3.9)
-        ret = 0.35 * mkt_factor - 0.72 * (1.35e-4 * slow_wave) + idio_ret
-        ret = np.clip(ret, -0.035, 0.035)
-        px = base_px * np.exp(np.cumsum(ret) - np.sum(ret))
-        px_fill = px * (1.0 + c_rng.normal(0.0, 0.00012, n_h))
-        lo = np.minimum(px, px_fill) * 0.993
-        hi = np.maximum(px, px_fill) * 1.007
-
-        oi_base = float((live_hl.get(coin) or {}).get('openInterest') or 6.0e7)
-        oi_usd = np.maximum(2.5e7, oi_base) * (1.0 + 0.18 * np.tanh(slow_wave))
-        vlm_usd = oi_usd * 0.85
-        isp_bps = np.clip(1.6 + (1.5e7 / np.maximum(oi_usd, 1e6)), 1.2, 5.0)
-
-        perps_frames.append(pl.DataFrame({
-            'ts': ts_all,
-            'coin': [coin] * n_h,
-            'px': px,
-            'px_fill': px_fill,
-            'oracle': px * (1.0 - hl_prem),
-            'mark': px,
-            'premium': hl_prem,
-            'oi': oi_usd,
-            'vlm': vlm_usd,
-            'isp': isp_bps,
-            'f': hl_f,
-            'lo': lo,
-            'hi': hi,
-            'bn_oi_value': oi_usd * 1.8,
-            'bn_ls_accounts': 1.0 + 0.25 * np.tanh(slow_wave),
-            'bn_ls_top_positions': 1.0 + 0.20 * np.tanh(slow_wave),
-            'bn_taker_ratio': 1.0 - 0.15 * np.tanh(slow_wave),
-        }))
-
-        carry_df = pl.DataFrame({
-            'ts': ts_all,
-            'coin': [coin] * n_h,
-            'hl_funding': hl_f,
-            'hl_premium': hl_prem,
-            'bn_funding': bn_f_paid,
-            'bn_rate_last': bn_f_rate,
-            'bn_interval_h': np.full(n_h, 8.0),
-            'bn_premium': bn_prem,
-            'bn_close': px,
-            'bn_qvol': vlm_usd / 12.0,
-        }).sort('ts')
-        carry_df.write_parquet(carry_coins_dir / f'{coin}.parquet', compression='zstd')
-
-    verified_real = (real_candles_count >= 500 and real_funding_count >= 500)
-    source = 'real_public_api:hyperliquid_candles+funding' if verified_real else ('public_harvest+calibrated' if live_hl else 'deterministic_local_fixture')
-
-    perps_panel = pl.concat(perps_frames).sort(['ts', 'coin'])
-    perps_panel.write_parquet(perps_panel_path, compression='zstd')
-    perps_splits_path.write_text(json.dumps(contiguous_splits, indent=1), encoding='utf-8')
-    carry_splits_path.write_text(json.dumps(contiguous_splits, indent=1), encoding='utf-8')
-
-    dev_end_ms = int(datetime.fromisoformat(contiguous_splits['dev'][1]).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
-    dev_sub = perps_panel.filter(pl.col('ts') <= dev_end_ms)
-    perps_visible(dev_sub).write_parquet(perps_dev_path, compression='zstd')
-    dev_sub.select('ts', 'coin', 'lo', 'hi').write_parquet(perps_fills_path, compression='zstd')
-
-    uni_list = [{'coin': c, 'binance': f'{c}USDT'} for c, _, _, _ in PERPS_COINS]
-    (carry_root / 'universe.json').write_text(json.dumps(uni_list, indent=1), encoding='utf-8')
-
-    prov_perps = {
-        'desk': 'perps',
-        'source': source,
-        'verified_real': verified_real,
-        'real_candles_harvested': real_candles_count,
-        'real_funding_prints_harvested': real_funding_count,
-        'rows': len(perps_panel),
-        'coins': int(perps_panel['coin'].n_unique()),
-        'updated': time.time(),
-    }
-    prov_carry = {**prov_perps, 'desk': 'carry'}
-    perps_prov_path.write_text(json.dumps(prov_perps, indent=2), encoding='utf-8')
-    carry_prov_path.write_text(json.dumps(prov_carry, indent=2), encoding='utf-8')
-
-    return {
-        'perps': {**prov_perps, 'status': 'built'},
-        'carry': {**prov_carry, 'status': 'built'},
-    }
+    # carry: per-coin HL funding + Binance futures downloads; raises on any failed coin, freezes splits itself
+    fetched_at = datetime.now(timezone.utc)
+    carry_data.build_carry_data(settings)
+    cpanel = carry_data.load_panel(settings)
+    carry_prov = write_provenance(carry_root, 'carry', 'hyperliquid_fundingHistory+binance_fapi', cpanel, 'ts', 'coin',
+                                  fetched_at=fetched_at)
+    return {'perps': {**perps_prov, 'status': 'built'}, 'carry': {**carry_prov, 'status': 'built'}}
 
 
 def build_pred_store(settings, force: bool = False, try_remote: bool = True) -> dict:
-    """Build `results/v3/store/pred/panel.parquet`, `splits.json`, `provenance.json`, and `dev_panel.parquet`."""
+    """`pred/panel.parquet` from Polymarket (gamma markets + CLOB price history), frozen splits, dev view, provenance."""
+    from . import polymarket
     root = settings.store / 'pred'
-    root.mkdir(parents=True, exist_ok=True)
-    panel_path = root / 'panel.parquet'
-    dev_path = root / 'dev_panel.parquet'
-    splits_path = root / 'splits.json'
-    prov_path = root / 'provenance.json'
-
+    panel_path, dev_path, prov_path = root / 'panel.parquet', root / 'dev_panel.parquet', root / 'provenance.json'
     if panel_path.exists() and dev_path.exists() and prov_path.exists() and not force:
-        df = pl.read_parquet(panel_path)
-        prov = json.loads(prov_path.read_text(encoding='utf-8'))
-        return {
-            'desk': 'pred',
-            'status': 'cached',
-            'rows': len(df),
-            'markets': int(df['market'].n_unique()),
-            'source': prov.get('source', 'cached'),
-            'verified_real': bool(prov.get('verified_real', False)),
-        }
-
-    splits_path.write_text(json.dumps(PRED_SPLITS, indent=1), encoding='utf-8')
-
-    poly_markets = []
-    if try_remote:
-        try:
-            with httpx.Client(timeout=6.0, headers={'User-Agent': 'Mozilla/5.0'}) as client:
-                r = client.get('https://gamma-api.polymarket.com/markets?limit=24&closed=true')
-                if r.status_code == 200:
-                    poly_markets = r.json() or []
-        except Exception:
-            poly_markets = []
-
-    # Stagger every individual market's start/resolution timestamp across the split so daily returns are smooth and non-concentrated
-    split_specs = [
-        ('2025-10-15', 10, 10),  # dev: 80 staggered markets over ~115 days
-        ('2026-03-02', 8, 9),    # val: 64 staggered markets over ~82 days
-        ('2026-06-02', 6, 8),    # holdout: 48 staggered markets over ~55 days
-        ('2026-08-02', 6, 8),    # forward: 48 staggered markets over ~55 days
-    ]
-    frames = []
-    rng = np.random.default_rng(20261019)
-    for w_idx, (start_iso, n_cohorts, cohort_days) in enumerate(split_specs):
-        base_t0 = int(datetime.fromisoformat(start_iso).replace(tzinfo=timezone.utc).timestamp() * 1000)
-        for c_idx in range(n_cohorts):
-            for m_idx, (base_name, cat, outcome, _, _) in enumerate(PRED_MARKETS):
-                m_offset_h = (c_idx * 8 + m_idx) * 24
-                t0 = base_t0 + m_offset_h * HOUR
-                n_h = cohort_days * 24
-                ts = t0 + np.arange(n_h, dtype=np.int64) * HOUR
-                end_ms = int(ts[-1] + 6 * HOUR)
-                hours_to_end = (end_ms - ts) / float(HOUR)
-
-                m_id = int(10000 + (w_idx + 1) * 1000 + c_idx * 100 + m_idx)
-                is_upset = ((m_idx * 5 + c_idx * 3 + w_idx) % 6 == 2)
-                true_fav_yes = (m_idx % 2 == 0)
-                eff_outcome = (0 if true_fav_yes else 1) if is_upset else (1 if true_fav_yes else 0)
-                p_init = (0.72 + 0.015 * (m_idx % 4)) if true_fav_yes else (0.28 - 0.015 * (m_idx % 4))
-                p_term_pre = (0.85 + 0.01 * (m_idx % 3)) if true_fav_yes else (0.15 - 0.01 * (m_idx % 3))
-                if is_upset:
-                    p_term_pre = 0.56 if true_fav_yes else 0.44
-                drift = np.linspace(p_init, p_term_pre, n_h)
-                noise = np.cumsum(rng.normal(0.0, 0.0035, n_h))
-                noise = noise - np.linspace(noise[0], noise[-1], n_h)
-                p_path = np.clip(drift + noise, 0.06, 0.94)
-                frames.append(pl.DataFrame({
-                    'ts': ts,
-                    'market': np.full(n_h, m_id, dtype=np.int64),
-                    'p': p_path.astype(np.float32),
-                    'end_ms': np.full(n_h, end_ms, dtype=np.int64),
-                    'category': [cat] * n_h,
-                    'hours_to_end': hours_to_end,
-                    'outcome': np.full(n_h, eff_outcome, dtype=np.int8),
-                    'volume': np.full(n_h, 500_000.0 + m_idx * 125_000.0),
-                }))
-
-    panel = pl.concat(frames).sort(['ts', 'market'])
-    panel.write_parquet(panel_path, compression='zstd')
-
-    dev_end_ms = int(datetime.fromisoformat(PRED_SPLITS['dev'][1]).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
-    pred_visible(panel.filter(pl.col('ts') <= dev_end_ms)).write_parquet(dev_path, compression='zstd')
-
-    verified_real = len(poly_markets) > 0
-    source = f'real_public_api:polymarket_gamma({len(poly_markets)}_markets)' if verified_real else 'deterministic_local_fixture'
-    prov = {
-        'desk': 'pred',
-        'source': source,
-        'verified_real': verified_real,
-        'rows': len(panel),
-        'markets': int(panel['market'].n_unique()),
-        'updated': time.time(),
-    }
-    prov_path.write_text(json.dumps(prov, indent=2), encoding='utf-8')
+        return _cached('pred', root, panel_path, 'market', 'ts')
+    _need_remote('pred', try_remote, root)
+    root.mkdir(parents=True, exist_ok=True)
+    splits = freeze_splits(root / 'splits.json', PRED_SPLITS, 'pred')
+    fetched_at = datetime.now(timezone.utc)
+    rep = polymarket.build(settings)
+    if not panel_path.exists() or not rep or not rep.get('markets'):
+        raise StoreBuildError(f'pred: Polymarket gamma/CLOB download produced no resolved markets with price history '
+                              f'(report: {rep}). No synthetic fill.')
+    panel = pl.read_parquet(panel_path)
+    atomic_write_parquet(pred_visible(panel.filter(pl.col('ts') < _ms(splits['dev'][1]) + 86_400_000)), dev_path)
+    prov = write_provenance(root, 'pred', 'polymarket_gamma+clob_prices_history', panel, 'ts', 'market', fetched_at=fetched_at)
     return {**prov, 'status': 'built'}
 
 
