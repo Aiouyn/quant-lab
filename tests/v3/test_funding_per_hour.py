@@ -96,3 +96,54 @@ def test_engine_certifier_parity_with_gaps(res, step):
             ref = reference_backtest(df, tgt, res, cost, f)
             assert r['funding_paid'] == pytest.approx(ref['funding_paid'], rel=1e-9, abs=1e-9)
             assert certify(df, tgt, res, cost, r, funding_series=f)['ok']
+
+
+def test_series_is_clipped_to_eval_window():
+    """A print far before the window (or after it) must never be used: only [first ts - 1 h, last ts] counts."""
+    df = gap_frame()
+    cost = CostModel(**FREE)
+    tgt = np.ones(len(df))
+    old = series([-10], [9e-3])                        # 10 h before the data: outside the window
+    fut = series([7], [9e-3])                          # after the last row (hour 5 + 10 s): outside the window
+    inside = series([-1, 0, 3], [9e-3, 1e-4, 3e-4])    # hour -1 < first ts - 1 h: clipped; hours 0 and 3 kept
+    for fs in (old, fut):
+        r = backtest(df, tgt, '1s', cost, funding_series=fs)
+        assert r['funding_paid'] == 0.0
+        assert reference_backtest(df, tgt, '1s', cost, fs)['funding_paid'] == 0.0
+    r = backtest(df, tgt, '1s', cost, funding_series=inside)
+    expected = 100_000.0 * (1e-4 + 1e-4 + 3e-4 + 3e-4 + 3e-4)    # hours 1,2 -> print at 0; hours 3,4,5 -> print at 3
+    assert r['funding_paid'] == pytest.approx(expected, rel=1e-9)
+    assert certify(df, tgt, '1s', cost, r, funding_series=inside)['ok']
+
+
+def test_missing_funding_file_raises_when_funding_enabled(tmp_path):
+    from desk.data.store import FundingSeriesMissing, funding_series
+    with pytest.raises(FundingSeriesMissing, match='funding_hl.parquet'):
+        funding_series(tmp_path)
+    with pytest.raises(FundingSeriesMissing):
+        funding_series(None)
+    assert funding_series(tmp_path, required=False) is None         # funding disabled: nothing needed
+    series([1], [1e-4]).write_parquet(tmp_path / 'funding_hl.parquet')
+    h, r = funding_series(tmp_path)
+    assert h.tolist() == [T0 + H] and r.tolist() == [1e-4]
+
+
+def test_evaluate_refuses_store_without_funding(tmp_path):
+    import json
+    import types
+    from desk.data.store import FeatureStore, FundingSeriesMissing
+    from desk.lab.strategy import evaluate
+    S = types.SimpleNamespace(store=tmp_path, data_dir=tmp_path, dev_fraction=0.6, val_fraction=0.25)
+    for sub in ('1s', '10s', '1m', 'meta'):
+        (tmp_path / sub).mkdir()
+    d = '2025-11-03'
+    ts = 1_762_128_000_000 + 60_000 * np.arange(1440)
+    frame(ts).write_parquet(tmp_path / '1m' / f'{d}.parquet')
+    frame(ts).write_parquet(tmp_path / '1s' / f'{d}.parquet')
+    (tmp_path / 'splits.json').write_text(json.dumps({'created': 0, 'dev': [d], 'val': [], 'holdout': [], 'forward': []}))
+    code = "RESOLUTION='1m'\ndef signal(df, p):\n    return df['mid'] * 0 + 1\n"
+    st = FeatureStore(S, root=tmp_path, allowed=('dev',))
+    with pytest.raises(FundingSeriesMissing):
+        evaluate(code, st, [d], CostModel(), with_causality=False)
+    r = evaluate(code, st, [d], CostModel(funding=False), with_causality=False)
+    assert r['funding_paid'] == 0.0

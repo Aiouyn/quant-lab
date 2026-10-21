@@ -42,6 +42,8 @@ def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostMode
             pairs = sorted(zip(funding_series[hc].to_list(), funding_series['funding_rate'].to_list()))
         else:
             pairs = sorted(zip(list(funding_series[0]), list(funding_series[1])))
+        lo, hi = int(df['ts'].min()) - 3_600_000, int(df['ts'].max())     # evaluation window only
+        pairs = [(h, v) for h, v in pairs if lo <= h <= hi]
         series = ([int(h) for h, _ in pairs], [float(v) for _, v in pairs])
     rows = df.to_dicts()
     res_s = RES_SECONDS[resolution]

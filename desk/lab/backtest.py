@@ -120,6 +120,8 @@ def funding_rate_at(hours_ms, series):
     """Rate paid at each hour boundary in `hours_ms` from `series` = (hour_ms sorted int64, rate float64):
     the exact hour if present, else the most recent earlier print (causal), else 0."""
     sh, sr = series
+    if len(sh) == 0:
+        return np.zeros(len(hours_ms))
     j = np.searchsorted(sh, hours_ms, side='right') - 1
     return np.where(j >= 0, sr[np.clip(j, 0, None)], 0.0)
 
@@ -159,6 +161,18 @@ def as_funding_series(obj):
     h, r = obj
     o = np.argsort(np.asarray(h, np.int64), kind='stable')
     return np.asarray(h, np.int64)[o], np.asarray(r, np.float64)[o]
+
+
+def clip_funding_series(series, ts):
+    """Keep only prints inside the evaluation window [first ts - 1 h, last ts]: the print at or just before the
+    first row's hour (the asof base for the first boundary) through the last row. Nothing outside the evaluated data
+    (e.g. later val/holdout hours) is ever consulted."""
+    if series is None or len(ts) == 0:
+        return series
+    lo, hi = int(ts.min()) - HOUR_MS, int(ts.max())
+    h, r = series
+    m = (h >= lo) & (h <= hi)
+    return h[m], r[m]
 
 
 def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel, funding_series=None):
@@ -212,7 +226,7 @@ def backtest(df: pl.DataFrame, target, resolution='1s', cost: CostModel | None =
         raise ValueError(f'target length {len(target)} != data length {len(df)}')
     if not np.all(np.isfinite(target[~np.isnan(target)])):
         raise ValueError('target must be finite')
-    exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, valid, funding, slip = _arrays(df, resolution, cost, as_funding_series(funding_series))
+    exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, valid, funding, slip = _arrays(df, resolution, cost, clip_funding_series(as_funding_series(funding_series), df['ts']))
     equity, pos, fees, fund_paid, frow, fqty, fpx, fcost = _run(
         exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, np.nan_to_num(target, nan=0.0), valid, funding,
         cost.taker_bps, slip, cost.impact_mult, cost.unit_notional, cost.deadband)
