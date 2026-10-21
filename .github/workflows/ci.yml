@@ -29,7 +29,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Install bubblewrap (OS sandbox for agent code, PR #11)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bwrap needs them
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --die-with-parent --ro-bind / / true && echo "bwrap OK"
       - name: Run tests (testpaths from pytest.ini)
+        env:
+          # sandbox escape tests fail (not skip) when the jail is unavailable; no-op until PR #11 lands
+          DESK_REQUIRE_JAIL: "1"
         run: python -m pytest
 
   gitleaks:
