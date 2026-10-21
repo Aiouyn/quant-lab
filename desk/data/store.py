@@ -145,6 +145,28 @@ class FeatureStore:
         return view
 
 
+class FundingSeriesMissing(FileNotFoundError):
+    """Funding is enabled but the store has no funding_hl.parquet: refusing to backtest without funding."""
+
+
+def funding_series(root, required=True):
+    """Hourly funding prints as (hour_ms, rate) for per-hour charging across data gaps.
+
+    Missing funding_hl.parquet RAISES FundingSeriesMissing when `required` (callers pass `cost.funding`): a silently
+    funding-free backtest overstates carry-heavy strategies. Pass required=False only when funding is disabled
+    (cost.funding=False); then None is returned."""
+    if not required:
+        return None
+    if root is None:
+        raise FundingSeriesMissing('funding enabled but no store root to read funding_hl.parquet from')
+    f = Path(root) / 'funding_hl.parquet'
+    if not f.exists():
+        raise FundingSeriesMissing(f'funding enabled but {f} does not exist; build it (python -m desk data funding) '
+                                   'or run with CostModel(funding=False)')
+    from ..lab.backtest import as_funding_series
+    return as_funding_series(pl.read_parquet(f, columns=['hour', 'funding_rate']))
+
+
 def attach_funding(df: pl.DataFrame, root: Path) -> pl.DataFrame:
     """Adds `funding_rate`: the most recent PAID hourly Hyperliquid rate (causal), and
     `funding_due`: 1 on rows that sit exactly on an hourly payment boundary."""
