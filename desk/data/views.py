@@ -8,8 +8,9 @@ Where: OUTSIDE the store tree, in a configurable views root (`views_root=` / $DE
   holdout-<job>/     allowed = ['dev', 'val', 'holdout']   ONE-SHOT per evaluation identity (desk/lab/identity.py:
                      normalized strategy AST + desk.* dependency closure + eval settings + data version), checked and
                      recorded atomically in the ledger (holdout_view_claims, append-only). Torn down after the job.
-`allowed` must be a chronological prefix of (dev, val, holdout, forward). A set containing `forward` (the forward
-check) is everything, so it gets the full store root.
+  forward@<stamp>/   allowed = [..., 'forward']    post-holdout rows plus a PRE-REGISTERED warmup window before the
+                     holdout end, of length Settings.forward_warmup_days (config, never the job). Nothing earlier.
+`allowed` must be a chronological prefix of (dev, val, holdout, forward). No job ever gets the full store.
 
 Contents, pre-built so that NOTHING is written lazily inside a read-only mount:
   1s/10s/1m/tape day files  independent COPIES (reflink when supported), never hard links
@@ -69,8 +70,14 @@ def _panel_cutoff_ms(sp: dict, allowed) -> int | None:
     return _ms(sp[last][1]) + DAY
 
 
-def _view_splits(sp: dict, allowed) -> dict:
+def _view_splits(sp: dict, allowed, lo_ms=None) -> dict:
     out = {k: v for k, v in sp.items() if k not in ORDER or k in allowed}
+    if lo_ms is not None:                                   # forward view: trim every range to the warmup window
+        lo = datetime.fromtimestamp(lo_ms / 1000, timezone.utc).date().isoformat()
+        for k in ORDER:
+            r = out.get(k)
+            if isinstance(r, list) and len(r) == 2 and isinstance(r[0], str):
+                out[k] = [] if r[1] < lo else [max(r[0], lo), r[1]]
     out['view'] = {'allowed': list(allowed)}
     return out
 
@@ -112,12 +119,21 @@ def _copy(src: Path, dst: Path):
 
 
 # ---------------------------------------------------------------------------------------------- per desk
-def _feature_store(src: Path, dst: Path, allowed):
+def _feature_store(src: Path, dst: Path, allowed, warmup_days=None):
     f = src / 'splits.json'
     if not f.exists():
         return None
     sp = json.loads(_src(f).read_text())
     days = sorted(d for k in allowed for d in sp.get(k, []))
+    lo = None
+    if 'forward' in allowed:
+        h = sorted(sp.get('holdout', []))
+        if not h:
+            raise ViewError('forward view: the store has no holdout split to start after')
+        if warmup_days is None:
+            raise ViewError('forward views need the pre-registered warmup (Settings.forward_warmup_days)')
+        lo = _ms(h[-1]) + DAY - int(warmup_days) * DAY
+        days = [d for d in days if _ms(d) >= lo]
     for res in DAY_RES:
         if not (src / res).exists():
             continue
@@ -127,22 +143,28 @@ def _feature_store(src: Path, dst: Path, allowed):
             if p.exists():
                 _copy(p, dst / res / p.name)
     (dst / 'meta').mkdir(parents=True, exist_ok=True)
-    view_sp = {k: (sp.get(k, []) if k in allowed else []) for k in ORDER}
+    keep = set(days)
+    view_sp = {k: ([d for d in sp.get(k, []) if d in keep] if k in allowed else []) for k in ORDER}
     view_sp.update(created=sp.get('created'), view={'allowed': list(allowed)})
     _write_json(view_sp, dst / 'splits.json')
     cutoff = (_ms(days[-1]) + DAY) if days else None
     fh = src / 'funding_hl.parquet'
     if fh.exists() and cutoff is not None:
-        _write_parquet(pl.read_parquet(_src(fh)).filter(pl.col('hour') < cutoff), dst / 'funding_hl.parquet')
+        cond = pl.col('hour') < cutoff
+        if lo is not None:
+            cond = cond & (pl.col('hour') >= lo)
+        _write_parquet(pl.read_parquet(_src(fh)).filter(cond), dst / 'funding_hl.parquet')
     return cutoff
 
 
-def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str):
+def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str, warmup_days=None):
     src, dst = src_root / desk, dst_root / desk
     f = src / 'splits.json'
     if not f.exists():
         return None
     sp = json.loads(_src(f).read_text())
+    if 'forward' in allowed:
+        return _panel_forward(src, dst, sp, allowed, desk, warmup_days)
     cutoff = _panel_cutoff_ms(sp, allowed)
     if cutoff is None:
         return None
@@ -177,9 +199,35 @@ def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str):
     return cutoff
 
 
+def _panel_forward(src, dst, sp, allowed, desk, warmup_days):
+    """Forward view of a panel desk: rows from (holdout end - warmup) on. No upper cut (forward is the newest data)."""
+    h = sp.get('holdout') or []
+    if not (isinstance(h, list) and len(h) == 2):
+        raise ViewError(f'forward view: {desk} has no holdout range to start after')
+    if warmup_days is None:
+        raise ViewError('forward views need the pre-registered warmup (Settings.forward_warmup_days)')
+    lo = _ms(h[1]) + DAY - int(warmup_days) * DAY
+    _write_json(_view_splits(sp, allowed, lo_ms=lo), dst / 'splits.json')
+    if desk == 'carry':
+        if (src / 'universe.json').exists():
+            _write_json(json.loads((src / 'universe.json').read_text()), dst / 'universe.json')
+        for cf in sorted((src / 'coins').glob('*.parquet')):
+            _write_parquet(pl.read_parquet(_src(cf)).filter(pl.col('ts') >= lo), dst / 'coins' / cf.name)
+        return lo
+    pf = src / 'panel.parquet'
+    if pf.exists():
+        if desk == 'macro':
+            lo_date = datetime.fromtimestamp(lo / 1000, timezone.utc).date()
+            p = pl.scan_parquet(_src(pf)).filter(pl.col('date') >= lo_date).collect()
+        else:
+            p = pl.scan_parquet(_src(pf)).filter(pl.col('ts') >= lo).collect()
+        _write_parquet(p, dst / 'panel.parquet')
+    return lo
+
+
 # ---------------------------------------------------------------------------------------------- build / stamp
-def _stamp(store: Path, allowed) -> str:
-    h = hashlib.sha1(json.dumps(list(allowed)).encode())
+def _stamp(store: Path, allowed, warmup_days=None) -> str:
+    h = hashlib.sha1(json.dumps([list(allowed), warmup_days]).encode())
     for rel in ('splits.json', 'funding_hl.parquet', *(f'{d}/splits.json' for d in ('macro', 'perps', 'pred', 'carry')),
                 *(f'{d}/panel.parquet' for d in ('macro', 'perps', 'pred'))):
         p = store / rel
@@ -234,22 +282,24 @@ def remove_view(path: Path):
     shutil.rmtree(path)
 
 
-def build_view(store: Path, allowed, dest: Path) -> Path:
+def build_view(store: Path, allowed, dest: Path, warmup_days=None) -> Path:
     """Build the view for `allowed` at `dest` (temp dir + rename). If `dest` already exists with the same stamp, or
     another builder wins the rename race, the existing view is used. Returns dest."""
     store, dest = Path(store), Path(dest)
     allowed = normalize_allowed(allowed)
-    stamp = _stamp(store, allowed)
+    if 'forward' not in allowed:
+        warmup_days = None
+    stamp = _stamp(store, allowed, warmup_days)
     marker = dest / '.view.json'
     if marker.exists() and json.loads(marker.read_text()).get('stamp') == stamp:
         return dest
     tmp = dest.with_name(f'.{dest.name}.{uuid.uuid4().hex[:8]}.tmp')
     tmp.mkdir(parents=True)
     try:
-        cut = {'features': _feature_store(store, tmp, allowed)}
+        cut = {'features': _feature_store(store, tmp, allowed, warmup_days)}
         for desk in ('macro', 'perps', 'pred', 'carry'):
-            cut[desk] = _panel_desk(store, tmp, allowed, desk)
-        _write_json({'allowed': list(allowed), 'stamp': stamp, 'built_utc': datetime.now(timezone.utc).isoformat(),
+            cut[desk] = _panel_desk(store, tmp, allowed, desk, warmup_days)
+        _write_json({'allowed': list(allowed), 'stamp': stamp, 'warmup_days': warmup_days, 'built_utc': datetime.now(timezone.utc).isoformat(),
                      'cutoff_ms': cut}, tmp / '.view.json')
         _seal(tmp)
         if dest.exists():                                   # stale same-name view (one-shot rebuild): replace it
@@ -274,17 +324,17 @@ def _touch_used(root: Path, name: str):
     (d / name).touch()
 
 
-def view_for_allowed(store: Path, allowed, root=None) -> Path:
-    """Reusable view for dev or dev+val; the full store for sets containing `forward`. Holdout: one_shot_holdout."""
+def view_for_allowed(store: Path, allowed, root=None, forward_warmup_days=None) -> Path:
+    """Reusable view for dev, dev+val or forward (post-holdout + pre-registered warmup). Never the full store.
+    Holdout: one_shot_holdout. `forward_warmup_days` comes from Settings (config), never from the job."""
     allowed = normalize_allowed(allowed)
-    if 'forward' in allowed:
-        return Path(store)
-    if 'holdout' in allowed:
+    if 'holdout' in allowed and 'forward' not in allowed:
         raise ViewError('holdout views are one-shot: use one_shot_holdout(store, job, ledger)')
     r = views_root(store, root)
-    name = '+'.join(allowed)
-    dest = r / f'{name}@{_stamp(Path(store), allowed)[:12]}'
-    build_view(store, allowed, dest)
+    name = 'forward' if 'forward' in allowed else '+'.join(allowed)
+    wd = forward_warmup_days if 'forward' in allowed else None
+    dest = r / f'{name}@{_stamp(Path(store), allowed, wd)[:12]}'
+    build_view(store, allowed, dest, warmup_days=wd)
     _touch_used(r, dest.name)
     _prune(r, name, keep=dest)
     return dest
@@ -308,35 +358,38 @@ class HoldoutRefused(ViewError):
 
 @contextlib.contextmanager
 def one_shot_holdout(store: Path, job: dict, ledger, job_id: str | None = None, root=None):
-    """Build a dev+val+holdout view for ONE evaluation identity, yield (path, handle), then tear it down.
-    The claim is checked and recorded atomically in the ledger BEFORE the view exists; a resubmission with the same
-    identity (cosmetic edits included) raises HoldoutRefused. handle.infra_failed() records an infrastructure kill
-    (the job produced no result), which permits exactly one retry."""
-    from ..lab.identity import evaluation_identity
+    """Build a dev+val+holdout view for ONE holdout token, yield (path, handle), then tear it down.
+    The token is the R4 identity the pipeline claimed in the ledger's holdout_uses (Ledger.claim_holdout, BEGIN
+    IMMEDIATE) before launching the job; it travels as job['_holdout_token']. Ledger.open_holdout_view checks, in one
+    transaction, that the token was claimed for this exact code (normalized AST) and that no view was ever opened for
+    it, and records the opening (insert-only). Any second view for the token raises HoldoutRefused."""
+    from ..lab.identity import _sha, normalized_ast
     if ledger is None:
-        raise ViewError('a holdout view needs the ledger to record its one-shot claim')
+        raise ViewError('a holdout view needs the ledger to check its one-shot token')
+    token = job.get('_holdout_token')
+    if not token:
+        raise HoldoutRefused('holdout job without a ledger holdout token (claim it with Ledger.claim_holdout first)')
     job_id = job_id or uuid.uuid4().hex[:12]
-    ident, comp = evaluation_identity(job, store)
-    ok, reason = ledger.claim_holdout_view(ident, job_id, comp)
-    if not ok:
-        raise HoldoutRefused(f'{reason}: {ident[:16]}')
-    handle = types.SimpleNamespace(identity=ident, job_id=job_id, outcome='done')
-    handle.infra_failed = lambda: setattr(handle, 'outcome', 'infra_fail')
+    try:
+        ledger.open_holdout_view(token, job_id, _sha(normalized_ast(job['code'])))
+    except Exception as e:                                   # HoldoutAlreadyUsed / unknown token / code mismatch
+        raise HoldoutRefused(str(e)) from e
+    handle = types.SimpleNamespace(identity=token, job_id=job_id)
     dest = views_root(store, root) / f'holdout-{job_id}'
     try:
         build_view(store, ORDER[:3], dest)
         yield dest, handle
     finally:
         remove_view(dest)
-        ledger.mark_holdout_view(ident, job_id, handle.outcome)
 
 
 @contextlib.contextmanager
-def store_for_job(store: Path, job: dict, ledger=None, job_id: str | None = None, root=None):
+def store_for_job(store: Path, job: dict, ledger=None, job_id: str | None = None, root=None,
+                  forward_warmup_days=None):
     """(store root the harness job should get = the ONLY store path to mount read-only, holdout handle or None)."""
     allowed = normalize_allowed(job.get('allowed', ('dev',)))
     if 'holdout' in allowed and 'forward' not in allowed:
         with one_shot_holdout(store, job, ledger, job_id=job_id, root=root) as (v, h):
             yield v, h
     else:
-        yield view_for_allowed(store, allowed, root=root), None
+        yield view_for_allowed(store, allowed, root=root, forward_warmup_days=forward_warmup_days), None
