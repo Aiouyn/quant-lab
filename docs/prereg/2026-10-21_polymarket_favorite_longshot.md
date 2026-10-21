@@ -65,7 +65,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   - Lifetime volume under $250k (`MIN_VOLUME`).
 - **Additional exclusions (fixed now):**
   1. Markets whose outcomes are not literally Yes/No, for example "Team A vs Team B". With those, "YES" is arbitrary, which breaks the favorite-longshot reading. The outcome labels are not stored in the panel, so this needs a re-fetch or the raw labels: `REQUIRED-BEFORE-RUN`.
-  2. Markets with a disputed or ambiguous resolution. The source is gamma `umaResolutionStatuses` (field VERIFIED, V12): a market is excluded if its history contains more than one `proposed` entry, or any entry other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED, so this rule is written to catch any extra state. The on-chain UMA source is UNVERIFIED (V13). Original note: no field for this exists in the code: `REQUIRED-BEFORE-RUN` (a source must be identified, or the exclusion is waived with that disclosed).
+  2. Markets with a disputed or ambiguous resolution. The source is gamma `umaResolutionStatuses` (field VERIFIED, V12): a market is excluded if its history contains more than one `proposed` entry, or any entry other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED, so this rule is written to catch any extra state. The on-chain UMA source is UNVERIFIED (V13). Storing `umaResolutionStatuses` is `REQUIRED-BEFORE-RUN` (PR #10 item 5).
 - **Multi-outcome events (neg-risk groups):** each candidate in a group like "Who will win X?" arrives as a separate binary market. They are **kept** and clustered as follows.
 - **Clustering unit (fixed now):**
   1. **Primary:** the gamma event id (`events[0].id`, VERIFIED, V3).
@@ -76,7 +76,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 - **Survivorship and selection check (from the fetch logic):**
   - **Volume look-ahead:** `MIN_VOLUME` filters on **final** lifetime volume, which is a look-ahead selection on popularity (`pred.py` docstring). Popular markets may be better calibrated, so this biases toward finding *no* effect. It is disclosed, not corrected.
   - **Incremental-refresh gap:** the cursor checkpoint "may miss a market created long ago that closes later" (`fetch_markets` docstring). The val universe must come from a **full, non-incremental** re-page (`REQUIRED-BEFORE-RUN`: record the page count and market count).
-  - **Archived or delisted markets:** still **UNVERIFIED**; the `archived` filter appears to be ignored (V5). The re-page must report the count of `archived=true` among returned markets. If it is 0, the doc discloses that archived coverage is unknown. (Original note: check the API docs or compare against `archived=true`).
+  - **Archived or delisted markets:** still **UNVERIFIED**; the `archived` filter appears to be ignored (V5). The re-page must report the count of `archived=true` among returned markets. If it is 0, the doc discloses that archived coverage is unknown.
   - **Missing price history:** markets with no price history from `fetch_prices` are silently missing from the panel. The run must report counts (resolved in val ≥ $250k, against those with a snapshot). If more than 10% are missing, the run aborts.
 - **Liquidity floor (fixed now):**
   - Lifetime volume of at least $250k (as in the code), **and**
