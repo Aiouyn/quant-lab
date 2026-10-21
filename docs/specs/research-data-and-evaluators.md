@@ -78,7 +78,8 @@
 
 ### P0-C. Ledger trial-count query, after the R7a schema change (reference only)
 - **Purpose:**
-  - The n_trials floors in #4 (≥ 4), #8 (≥ 51) and #9 (≥ 15) are each combined with "ledger count if larger", and in #8 and #9 the ledger is a hard floor.
+  - The n_trials floors in #4 (≥ 4), #8 (≥ 51) and #9 (≥ 15) are each combined with the ledger figure as a **hard floor**: N = max(prereg floor, ledger trials).
+  - **Per R9 (per Validator charter, pending)** the ledger figure counts **trials per family**: ledger rows with a distinct code + config hash for that family on that desk, across splits. It does **not** count distinct strategies.
   - G6 needs a place to write trial rows.
 - **Observation from code:** `Ledger.trial_stats` (`desk/company/ledger.py`) counts `COUNT(DISTINCT code_hash)` over `trials WHERE kind IN ('dev_backtest','submission') AND days>=10`. That is firm-wide: the `trials` table has **no desk, split or family column**.
 - **Prerequisite, replacing the earlier `json_extract` proposal:** the **R7a ledger schema change** (per Validator charter, pending). It adds `desk`, `split` and `family` columns to the trials table, plus `config_hash` alongside `code_hash`.
@@ -117,20 +118,33 @@
 - **Purpose:** `desk/lab/macro.py` and `macro_data.py` state that FX spot returns exclude interest-rate carry. #8 §4 requires the daily carry r_base − r_quote (ACT/360) on every `fx` row, using rates known at close t and applied over (t+1, t+2].
 - **Inputs:**
   - US: `^IRX`, already in the macro panel (class `rate`).
-  - Non-US short rates: the series IDs are now fixed in #8 §4 (OECD MEI via FRED, monthly, lagged one month).
+  - Non-US short rates: the series IDs are now fixed in #8 §4 (OECD MEI via FRED, monthly averages; availability rule below, matching #8 at `17f4f7e`).
     - **Verified:** `IR3TIB01{EZ,GB,JP,AU,NZ,CA,CH,MX,ZA,CN}M156N`. Each FRED catalog page was checked for existence and date range covering 2014–2019; no data was downloaded.
     - **Pairs dropped in #8:** TRY=X (`IR3TIB01TRM156N` ends 2008-04), and BRL=X and INR=X (candidate IDs `IR3TIB01BRM156N` and `IR3TIB01INM156N` are **UNVERIFIED**; their FRED pages returned 404). That leaves 11 pairs.
     - **Correction to the earlier version of this spec:** `MXN=X`, `ZAR=X` and `CNY=X` are also quoted as USD/XXX, so the carry is r_USD − r_XXX for those pairs too.
   - Release timing: lag each monthly value by one month.
   - Pair mapping: from the `UNIVERSE` symbols in `macro_data.py`. Note that `JPY=X`, `CAD=X`, `CHF=X` and the other `XXX=X` symbols are quoted as USD/XXX, so the carry sign flips for them. `EURJPY=X` is a cross, so its carry is r_EUR − r_JPY.
 - **Outputs:**
-  - `results/v3/store/macro/rates.parquet` with schema `{date, ccy, rate_annual, source_id, available_from}`, plus a sha256 sidecar.
+  - **Availability rule (from #8):**
+    1. Each monthly value becomes usable from the first NYSE trading day **after its first-publication date**, taken from the ALFRED vintages (https://alfred.stlouisfed.org): `realtime_start` of the first vintage containing that month.
+    2. **Fallback**, when ALFRED has no vintage for that series and month: the value for month m is usable from the **first NYSE trading day of month m+2**.
+    3. The last usable value is **carried forward** step-wise, with no interpolation.
+    4. **Revisions are never backfilled:** a value as first published stays in force until the next month's value becomes usable. Later vintages never overwrite history.
+    - Whether ALFRED has vintages for these series is UNVERIFIED.
+    - `^IRX` is daily and usable at the close of its own date.
+  - `results/v3/store/macro/rates.parquet` with schema `{ref_month, ccy, rate_annual, source_id, vintage_date, available_from, rule ∈ {alfred_first_pub, m_plus_2}}`, plus a sha256 sidecar.
   - An engine change in `desk/lab/macro.py` that adds carry for `cls == 'fx'` rows only, behind a flag that defaults on once reviewed.
   - A currency with no reviewed series means that pair is **excluded** (G5). Nothing is imputed.
 - **Acceptance tests:**
   - **Fixture:** a constant 5% base rate and 0% quote rate on a flat price gives a daily return of 0.05/360 per calendar day, applied on the documented lag.
   - **Fixture:** the sign flips for USD/XXX quoting.
   - **No-lookahead:** a rate value dated month m only affects returns from `available_from` onwards (G2-style truncation test).
+  - **Lag-rule fixture:**
+    - A series with an ALFRED first vintage on 2015-03-17 for ref month 2015-02 gives `available_from` = the next NYSE trading day (2015-03-18).
+    - The same month with no vintage gives `available_from` = the first NYSE trading day of 2015-04 (2015-04-01).
+    - Days between updates carry the prior value forward.
+    - A later revised vintage (e.g. 2015-05-20, with a different value for 2015-02) **does not** change any carry computed for dates before the next month's value becomes usable. This checks that revisions aren't backfilled.
+    - The log records `rule` per row.
   - Non-fx rows' P&L is byte-identical before and after the change (regression hash).
   - A missing currency raises or excludes the pair; it is never filled.
   - G1, G3.
@@ -199,9 +213,19 @@
 - **Inputs:**
   - The pred panel with columns `ts, market, p, end_ms, outcome, category, volume` (`desk/lab/pred.py`), plus `event_id` and `is_yes_no` from item 4.
   - Rules fixed by #9:
-    - **Snapshot:** the last row ≤ A − 24 h, within 6 h, where A = min(endDate, closedTime, resolution); markets with closedTime < endDate are dropped and counted.
+    - **Calibration snapshot:** the last row ≤ A − 24 h, within 6 h, where A = min(endDate, closedTime, umaEndDate). Markets with closedTime < endDate are **kept** and anchored on A; dropping them would select on the outcome. Their count and share are reported.
     - **Buckets:** 14 edges.
-    - **Val membership:** both A and the snapshot fall in [2026-03-01, 2026-06-01) UTC. The sleeve trades only these markets.
+    - **Val membership:** both A and the snapshot fall in [2026-03-01, 2026-06-01) UTC. The sleeve considers only these markets.
+    - **Sleeve entry (from #9 at `55734bd`):**
+      - Entry time E = scheduled `endDate` − 24 h. The sleeve's bucket comes from the last price with `ts ≤ E`, within 6 h; otherwise the market is skipped as stale and counted.
+      - Only markets with E ≥ 2026-03-01 00:00 UTC are entered.
+      - If `closedTime` or `umaEndDate` ≤ E, the market is **skipped and counted**, with the share per bucket reported.
+      - If resolution comes after entry, the payout is booked **at resolution** (`umaEndDate`, else `closedTime`).
+      - **Sensitivity (reported, not a gate):** skipped markets are re-entered at A − 24 h, and the run is labelled not tradable.
+    - **Calibration p-value (null-centred bootstrap-t, G7 clustered form):**
+      - t_obs = m̂/ŝe and, for each draw, t* = (m* − m̂)/se*.
+      - p = (1 + #{|t*| ≥ |t_obs|}) / (1 + draws).
+      - se* comes from an inner bootstrap or a cluster-robust formula, and the method is logged.
     - **Liquidity:** at least 20 trades in the 7 days before the snapshot (from item 3's trades).
     - **Multiple testing:** Holm–Bonferroni across the 14 buckets at α = 0.05. Each bucket's p-value comes from the cluster bootstrap.
     - **Fees:** the current schedule is VERIFIED (https://docs.polymarket.com/trading/fees). Its rollout for non-crypto/sports categories on 2026-03-30 is UNVERIFIED officially (secondary sources only). #9 therefore uses all-trades fees as the conservative base case and a `feesEnabled`-only version as a secondary report.
@@ -219,6 +243,16 @@
   - **Snapshot no-lookahead:** perturbing prices after the snapshot leaves bucket assignment unchanged.
   - **Boundary:** a market ending in val with a snapshot before 2026-03-01 is excluded and counted.
   - **Holm fixture:** with known p-values, the rejection set equals a hand-computed Holm result.
+  - **Early-closed kept:** a fixture market with closedTime < endDate appears in calibration with its snapshot at A − 24 h, not at endDate − 24 h, and it is counted in the "early-closed" tally (not excluded).
+  - **Sleeve entry time:**
+    - Perturbing any price after E leaves the sleeve's bucket and entry unchanged (no-lookahead).
+    - Entry never happens at a time later than E.
+  - **Skip rule:** a fixture market with `umaEndDate` < E produces no sleeve position, increments the skip counter, and appears in the per-bucket skip share.
+  - **Payout at resolution:** a fixture market resolving at E + 3 h is closed at E + 3 h, with payout 1 or 0 and no further P&L.
+  - **Sensitivity run:** it re-enters skipped markets at A − 24 h, is labelled non-gating, and changes no pass/fail flag.
+  - **Null-centred p-value:**
+    - On the clustered null drill (calibrated outcomes), p-values are roughly uniform: the share with p < 0.05 is ≤ 5% within binomial tolerance.
+    - On a fixture where m̂ is far from 0, an uncentred version (t* = m*/se*) would give a large p, while the centred one gives a small p. This guards against the common centring bug.
   - **Cost fixture:** at p = 0.03 the tail half-spread is 1.5 cents (not capped at 0.5 × 0.03 = 0.015, which here happens to coincide; also test p = 0.01, where the engine cap would give 0.005 and the new rule must give 0.015); the fee equals C × 0.07 × p(1−p) for crypto.
   - G1: holdout is never read. The fixture puts `NaN` outcomes in holdout rows and the result stays finite.
   - G3.
