@@ -186,8 +186,11 @@ def evaluate(code, store, days, cost: CostModel | None = None, params=None, fit_
         result = outs.pop('base')
         result['variants'] = outs
     else:
-        result = backtest(df, sig, res, cost)
-        result['variants'] = {name: backtest(df, _transform(sig, tr), res, c) for name, (c, tr) in variants.items()}
+        from ..data.store import funding_series
+        fs = funding_series(getattr(store, 'root', None))
+        result = backtest(df, sig, res, cost, funding_series=fs)
+        result['variants'] = {name: backtest(df, _transform(sig, tr), res, c, funding_series=fs)
+                              for name, (c, tr) in variants.items()}
     result['resolution'] = res
     result['causality'] = causality
     result['code_hash'] = code_hash(code)

@@ -26,7 +26,23 @@ def _avg_extra_bps(size_btc, imp1, imp10, imp50, half_spread):
     return max(0.0, (worst - half_spread) / 2.0)
 
 
-def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostModel):
+def _rate_at(hour_ms, series):
+    """Funding paid at `hour_ms`: exact print if any, else the latest earlier one, else 0 (plain bisect)."""
+    import bisect
+    hours, rates = series
+    j = bisect.bisect_right(hours, hour_ms) - 1
+    return rates[j] if j >= 0 else 0.0
+
+
+def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostModel, funding_series=None):
+    series = None
+    if funding_series is not None:
+        if isinstance(funding_series, pl.DataFrame):
+            hc = 'hour' if 'hour' in funding_series.columns else 'ts'
+            pairs = sorted(zip(funding_series[hc].to_list(), funding_series['funding_rate'].to_list()))
+        else:
+            pairs = sorted(zip(list(funding_series[0]), list(funding_series[1])))
+        series = ([int(h) for h, _ in pairs], [float(v) for _, v in pairs])
     rows = df.to_dicts()
     res_s = RES_SECONDS[resolution]
     by_ts = {r['ts']: r for r in rows}
@@ -36,9 +52,12 @@ def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostMode
     prev_hour = None
     for i, r in enumerate(rows):
         hour = r['ts'] // 3_600_000
-        if cost.funding and prev_hour is not None and hour != prev_hour and pos != 0.0:
-            f = pos * r['mid'] * r.get('funding_rate', 0.0)
-            cash -= f; funding_paid += f
+        if cost.funding and prev_hour is not None and pos != 0.0:
+            # every hour boundary crossed since the previous row is paid, each at its own rate
+            for h in range(prev_hour + 1, hour + 1):
+                rate = _rate_at(h * 3_600_000, series) if series is not None else r.get('funding_rate', 0.0)
+                f = pos * r['mid'] * rate
+                cash -= f; funding_paid += f
         prev_hour = hour
         t = float(target[i])
         t = 0.0 if math.isnan(t) else max(-1.0, min(1.0, t))
@@ -69,8 +88,8 @@ def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostMode
     return {'pnl': equity[-1], 'fees': fees, 'funding_paid': funding_paid, 'equity': np.array(equity)}
 
 
-def certify(df, target, resolution, cost, engine_result, tol=1e-6):
-    ref = reference_backtest(df, target, resolution, cost)
+def certify(df, target, resolution, cost, engine_result, tol=1e-6, funding_series=None):
+    ref = reference_backtest(df, target, resolution, cost, funding_series)
     scale = max(1.0, abs(ref['pnl']), cost.unit_notional * 1e-4)
     diff = abs(ref['pnl'] - engine_result['pnl']) / scale
     return {'ok': diff < tol or abs(ref['pnl'] - engine_result['pnl']) < 1e-4 * cost.unit_notional / 100,

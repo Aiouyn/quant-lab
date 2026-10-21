@@ -3,7 +3,8 @@
 Contract: a strategy emits target[i] in [-1, 1] using data up to and including row i.
 The order is filled `latency` later at the then-current mid, crossing the half spread, plus
 depth-sweep impact (from the deep OKX book at decision time), extra slippage and taker fees.
-Hourly Hyperliquid funding is charged on open positions at each hour boundary.
+Hourly Hyperliquid funding is charged on open positions for EVERY hour boundary elapsed since the previous row
+(a multi-hour data gap pays each hour at that hour's rate, from `funding_series` when given).
 Position unit: target 1.0 == `unit_notional` USD (fixed, non-compounding -> clean daily PnL series).
 """
 from __future__ import annotations
@@ -112,7 +113,55 @@ def _run(exec_mid, mark_mid, hs_bps, bi1, bi10, bi50, ai1, ai10, ai50, target, v
     return equity, pos_out, fees, fund_paid, fill_row[:nfills], fill_qty[:nfills], fill_px[:nfills], fill_cost[:nfills]
 
 
-def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel):
+HOUR_MS = 3_600_000
+
+
+def funding_rate_at(hours_ms, series):
+    """Rate paid at each hour boundary in `hours_ms` from `series` = (hour_ms sorted int64, rate float64):
+    the exact hour if present, else the most recent earlier print (causal), else 0."""
+    sh, sr = series
+    j = np.searchsorted(sh, hours_ms, side='right') - 1
+    return np.where(j >= 0, sr[np.clip(j, 0, None)], 0.0)
+
+
+def _funding_per_row(ts, row_rate, series):
+    """Funding owed on row i (fraction of notional, charged as pos * mid[i] * f[i]) = the SUM of the rates of every
+    hour boundary H with hour(ts[i-1]) < H <= hour(ts[i]). Without a gap that is exactly one hour; across a
+    multi-hour gap every elapsed hour is charged (position held across the gap, valued at the first mid after it).
+    Rates come from `series` when given; otherwise every elapsed hour is charged at the row's own `funding_rate`."""
+    n = len(ts)
+    f = np.zeros(n)
+    if n < 2:
+        return f
+    hour = ts // HOUR_MS
+    k = np.zeros(n, np.int64)
+    k[1:] = np.maximum(hour[1:] - hour[:-1], 0)
+    if series is None:
+        return row_rate * k
+    rows = np.repeat(np.arange(n), k)
+    if not len(rows):
+        return f
+    first = np.repeat(hour[np.maximum(np.arange(n) - 1, 0)] + 1, k)
+    offs = np.arange(len(rows)) - np.repeat(np.cumsum(k) - k, k)
+    rates = funding_rate_at((first + offs) * HOUR_MS, series)
+    np.add.at(f, rows, rates)
+    return f
+
+
+def as_funding_series(obj):
+    """Accept None, a (hours, rates) tuple, or a DataFrame with `hour` (or `ts`) and `funding_rate`."""
+    if obj is None:
+        return None
+    if isinstance(obj, pl.DataFrame):
+        hcol = 'hour' if 'hour' in obj.columns else 'ts'
+        obj = obj.select(hcol, 'funding_rate').drop_nulls().sort(hcol)
+        return obj[hcol].to_numpy().astype(np.int64), obj['funding_rate'].to_numpy().astype(np.float64)
+    h, r = obj
+    o = np.argsort(np.asarray(h, np.int64), kind='stable')
+    return np.asarray(h, np.int64)[o], np.asarray(r, np.float64)[o]
+
+
+def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel, funding_series=None):
     res_s = RES_SECONDS[resolution]
     n = len(df)
     mid = df['mid'].to_numpy().astype(np.float64)
@@ -142,11 +191,9 @@ def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel):
     ai1, ai10, ai50 = col('aimp_1', 0.5), col('aimp_10', 2.0), col('aimp_50', 6.0)
     valid = (df['valid'].to_numpy() >= 0.5).astype(np.int8) if 'valid' in df.columns else np.ones(n, np.int8)
     funding = np.zeros(n)
-    if cost.funding and 'funding_rate' in df.columns:
-        hour = ts // 3_600_000
-        boundary = np.zeros(n, bool)
-        boundary[1:] = hour[1:] != hour[:-1]
-        funding[boundary] = df['funding_rate'].to_numpy()[boundary]
+    if cost.funding and ('funding_rate' in df.columns or funding_series is not None):
+        funding = _funding_per_row(ts, df['funding_rate'].to_numpy().astype(np.float64)
+                                   if 'funding_rate' in df.columns else np.zeros(n), funding_series)
     # volatility-scaled slippage: fast markets cost more than the displayed book suggests (calibrated on live fills)
     k = max(1, int(round(60 / res_s)))
     move = np.zeros(n)
@@ -155,14 +202,17 @@ def _arrays(df: pl.DataFrame, resolution: str, cost: CostModel):
     return exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, valid, funding, slip
 
 
-def backtest(df: pl.DataFrame, target, resolution='1s', cost: CostModel | None = None, keep_series=False):
+def backtest(df: pl.DataFrame, target, resolution='1s', cost: CostModel | None = None, keep_series=False,
+             funding_series=None):
+    """funding_series: optional hourly funding (DataFrame `hour`/`funding_rate` or (hours_ms, rates)) used to charge
+    every hour elapsed across data gaps at that hour's own rate (see _funding_per_row)."""
     cost = cost or CostModel()
     target = np.asarray(target, dtype=np.float64)
     if len(target) != len(df):
         raise ValueError(f'target length {len(target)} != data length {len(df)}')
     if not np.all(np.isfinite(target[~np.isnan(target)])):
         raise ValueError('target must be finite')
-    exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, valid, funding, slip = _arrays(df, resolution, cost)
+    exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, valid, funding, slip = _arrays(df, resolution, cost, as_funding_series(funding_series))
     equity, pos, fees, fund_paid, frow, fqty, fpx, fcost = _run(
         exec_mid, mid, hs, bi1, bi10, bi50, ai1, ai10, ai50, np.nan_to_num(target, nan=0.0), valid, funding,
         cost.taker_bps, slip, cost.impact_mult, cost.unit_notional, cost.deadband)

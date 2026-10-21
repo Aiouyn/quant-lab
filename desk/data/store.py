@@ -145,6 +145,17 @@ class FeatureStore:
         return view
 
 
+def funding_series(root):
+    """Hourly funding prints as (hour_ms, rate) for per-hour charging across data gaps, or None."""
+    if root is None:
+        return None
+    f = Path(root) / 'funding_hl.parquet'
+    if not f.exists():
+        return None
+    from ..lab.backtest import as_funding_series
+    return as_funding_series(pl.read_parquet(f, columns=['hour', 'funding_rate']))
+
+
 def attach_funding(df: pl.DataFrame, root: Path) -> pl.DataFrame:
     """Adds `funding_rate`: the most recent PAID hourly Hyperliquid rate (causal), and
     `funding_due`: 1 on rows that sit exactly on an hourly payment boundary."""
