@@ -27,7 +27,7 @@
 - A market whose life spans a cut-off therefore contributes price rows to two splits.
 
 **Rule used in this test (stricter than the engine, and fixed now).**
-- **Anchor time:** A = min(endDate, closedTime, resolution time), all in UTC. `closedTime` and the resolution timestamp are **not stored** by the current fetcher; see the spec (PR #10, items 3–4). Both are `REQUIRED-BEFORE-RUN`.
+- **Anchor time:** A = min(`endDate`, `closedTime`, `umaEndDate`), all in UTC. The gamma field names are VERIFIED (Appendix V1); `umaEndDate` is the resolution timestamp, but that meaning is inferred (V2). `closedTime` must be parsed from its non-ISO format. The current fetcher **doesn't store** `closedTime` or `umaEndDate` (spec PR #10, item 3): `REQUIRED-BEFORE-RUN`.
 - **Early-closed markets:** markets with closedTime < endDate are **dropped and counted**. They are typically markets resolved early, where the scheduled end isn't the real end.
 - **Val membership:** a market belongs to val if and only if **both** A **and** its snapshot time (A − 24 h, §3) fall inside [2026-03-01 00:00, 2026-06-01 00:00) UTC. Markets with A in val but the snapshot before 2026-03-01 are dropped and counted.
 - **Sleeve:** the trading sleeve (§6) trades **only** markets selected by this rule, from the start of val.
@@ -65,23 +65,24 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   - Lifetime volume under $250k (`MIN_VOLUME`).
 - **Additional exclusions (fixed now):**
   1. Markets whose outcomes are not literally Yes/No, for example "Team A vs Team B". With those, "YES" is arbitrary, which breaks the favorite-longshot reading. The outcome labels are not stored in the panel, so this needs a re-fetch or the raw labels: `REQUIRED-BEFORE-RUN`.
-  2. Markets with a disputed or ambiguous resolution (UMA dispute or clarification). No field for this exists in the code: `REQUIRED-BEFORE-RUN` (a source must be identified, or the exclusion is waived with that disclosed).
+  2. Markets with a disputed or ambiguous resolution. The source is gamma `umaResolutionStatuses` (field VERIFIED, V12): a market is excluded if its history contains more than one `proposed` entry, or any entry other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED, so this rule is written to catch any extra state. The on-chain UMA source is UNVERIFIED (V13). Original note: no field for this exists in the code: `REQUIRED-BEFORE-RUN` (a source must be identified, or the exclusion is waived with that disclosed).
 - **Multi-outcome events (neg-risk groups):** each candidate in a group like "Who will win X?" arrives as a separate binary market. They are **kept** and clustered as follows.
 - **Clustering unit (fixed now):**
-  1. **Primary:** the gamma event id (`events[0].id`).
+  1. **Primary:** the gamma event id (`events[0].id`, VERIFIED, V3).
   2. **Fallback 1:** if there is no event id, `negRiskMarketID`.
   3. **Fallback 2:** if neither exists, the pair (`category`, UTC date of A).
-  - Neither id is stored by the current fetcher (`REQUIRED-BEFORE-RUN`; PR #10 item 4). The field names come from the gamma API and are **UNVERIFIED** against live responses.
+  - Neither id is stored by the current fetcher (`REQUIRED-BEFORE-RUN`; PR #10 item 4). The field names are VERIFIED (V1, V3).
   - If more than 20% of val markets need Fallback 2, the calibration result is labeled **exploratory** and can't PASS.
 - **Survivorship and selection check (from the fetch logic):**
   - **Volume look-ahead:** `MIN_VOLUME` filters on **final** lifetime volume, which is a look-ahead selection on popularity (`pred.py` docstring). Popular markets may be better calibrated, so this biases toward finding *no* effect. It is disclosed, not corrected.
   - **Incremental-refresh gap:** the cursor checkpoint "may miss a market created long ago that closes later" (`fetch_markets` docstring). The val universe must come from a **full, non-incremental** re-page (`REQUIRED-BEFORE-RUN`: record the page count and market count).
-  - **Archived or delisted markets:** whether gamma `closed=true` returns archived or delisted markets is **unknown** from the code: `REQUIRED-BEFORE-RUN` (check the API docs or compare against `archived=true`).
+  - **Archived or delisted markets:** still **UNVERIFIED**; the `archived` filter appears to be ignored (V5). The re-page must report the count of `archived=true` among returned markets. If it is 0, the doc discloses that archived coverage is unknown. (Original note: check the API docs or compare against `archived=true`).
   - **Missing price history:** markets with no price history from `fetch_prices` are silently missing from the panel. The run must report counts (resolved in val ≥ $250k, against those with a snapshot). If more than 10% are missing, the run aborts.
 - **Liquidity floor (fixed now):**
   - Lifetime volume of at least $250k (as in the code), **and**
   - at least **20 trades in the 7 days before the snapshot** (a trade-count floor).
-  - Trades are **not stored** by the current fetcher. The candidate source is Polymarket's public trades endpoint (data-api), which is **UNVERIFIED**. It is added to the spec (PR #10 item 3). `REQUIRED-BEFORE-RUN`.
+  - Trades are **not stored** by the current fetcher. The source is the data-api `GET /trades`, with `market=<conditionId>`, `start`/`end` set to the window, and `takerOnly=true` (the default; it counts taker fills). The endpoint and its params are VERIFIED (V6), and it returns March 2026 trades (V7).
+  - Because offsets are capped at 10,000, the count must be paged inside `start`/`end` windows. Fetching is in PR #10 item 3: `REQUIRED-BEFORE-RUN`.
   - If no trade source is verified, the test can't run as pre-registered. There is **no** fallback to price-print counts.
 
 ## 5. Calibration test (val)
@@ -118,11 +119,12 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 - **Reporting:** all 14 bucket results and the sleeve are reported, with every metric and each stress. Nothing is selected afterwards. A FAIL is final; any change counts as a new trial and a new pre-registration. A PASS only makes the strategy a forward-paper candidate. Deployment needs forward results and human approval.
 
 ## 7. Costs: fees, spread, and why they're likely optimistic
-- **Taker fees (source: Polymarket help center, "Trading Fees", dated 2026-07-10, https://help.polymarket.com/en/articles/13364478-trading-fees; also https://docs.polymarket.com/trading/fees):**
-  - The formula is fee = C × feeRate × p × (1 − p), where C is the number of shares and p the share price. Makers pay nothing.
-  - Taker rates by category: Crypto 0.07; Sports, Economics, Culture, Weather and Other 0.05; Finance, Politics, Mentions and Tech 0.04; Geopolitics 0.
-  - **UNVERIFIED for the val period:** whether this schedule (or any taker fee) applied in March–May 2026. As the base case, the schedule above is applied conservatively to every val trade by its `category`. A category that can't be mapped uses 0.07.
-  - Taker rebates are ignored. Polymarket US (a separate CFTC venue with Θ = 0.0695) is out of scope.
+- **Taker fees:**
+  - The formula `fee = C × feeRate × p × (1−p)` and the current category rates are VERIFIED (V8, https://docs.polymarket.com/trading/fees).
+  - **History:** fees applied to Crypto from January 2026 and Sports from 2026-02-18, and expanded to the other categories for markets deployed from **2026-03-30**. This is UNVERIFIED officially and corroborated only by secondary sources (V9). It falls **inside val**, and rates before 2026-03-30 are UNVERIFIED.
+  - **Base case (conservative):** apply the current category rate to **every** val trade that isn't Geopolitics, regardless of date or `feesEnabled`. Unmapped categories use 0.07.
+  - **Secondary (reported, not a gate):** apply fees only where the market's `feesEnabled` is true (V10), using the current rates.
+  - Taker rebates are ignored. Polymarket US (a separate CFTC venue) is out of scope.
 - **Spread:**
   - The base case models a **3-cent full spread (1.5-cent half-spread) in the tail buckets (p < 10 cents or p ≥ 90 cents)**, uncapped. That is above the engine default because books are thin and one-sided there.
   - The mid buckets use 1 cent (`PredCost.half_spread`).
@@ -145,4 +147,23 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 12. The ledger's pred val trial count (hard floor) and `trial_sr_std`.
 13. Sign-off from QL Validator that eval gating is fixed.
 
-**UNVERIFIED:** the gamma field names (`events[].id`, `negRiskMarketID`, `closedTime`, resolution time); the trades endpoint; whether the fee schedule applied during val.
+**Still UNVERIFIED (see Appendix V):** what `umaEndDate` means (V2); archived coverage (V5); the official fee-history dates and the rates before 2026-03-30 (V9); whether `feesEnabled` is historical (V10); the dispute token in `umaResolutionStatuses` (V12); the UMA on-chain source (V13).
+
+## Appendix V. Polymarket API and fee verification (2026-10-21)
+Method: public docs, plus a handful of single-record API responses (gamma market `613835`, and data-api `/trades` with `limit=1`). No datasets were downloaded or saved.
+
+| # | Fact | Status | Source |
+|---|---|---|---|
+| V1 | The gamma market object has `endDate` (ISO), `closedTime` (note the non-ISO format, e.g. `2026-03-16 06:41:45+00`), `umaEndDate` (ISO), `umaResolutionStatus` (e.g. `resolved`), `umaResolutionStatuses` (a JSON-string history, e.g. `["proposed", "resolved"]`), `negRisk`, `negRiskMarketID`, `negRiskRequestID`, `outcomes` (a JSON string, e.g. `["Yes","No"]`), `conditionId`, `questionID`, `archived`, `closed`, `automaticallyResolved`, `resolvedBy`, `feesEnabled`, `feeType`, and `events[]` with `events[].id` | **VERIFIED** (field names) | https://gamma-api.polymarket.com/markets/613835 ; https://docs.polymarket.com/market-data/market-details.md |
+| V2 | `umaEndDate` is the resolution timestamp. In the sample it equals `closedTime`, 2026-03-16 06:41:45 UTC, a day after `endDate` | field **VERIFIED**; meaning **inferred / UNVERIFIED** (not defined in the docs) | same |
+| V3 | Event id = `events[0].id` (sample `50251`) | **VERIFIED** | same |
+| V4 | `archived` means "archived and read-only: no trading, no resolution updates" | **VERIFIED** | https://docs.polymarket.com/market-data/market-details.md |
+| V5 | Whether `closed=true` returns archived markets | **UNVERIFIED**. An `archived=true` query parameter appeared to be ignored (it returned markets with `archived=false`), so archived coverage can't be confirmed by filtering. Mitigation: the full re-page records the count of `archived=true` among returned markets | https://gamma-api.polymarket.com/markets?archived=true&limit=2 |
+| V6 | data-api `GET /trades`: params `market` (comma-separated conditionIds) or `eventId`, `limit` ≤ 10000, `offset` ≤ 10000 (a 400 past that; page inside `start`/`end` windows to go deeper), `start`/`end` epoch seconds, `takerOnly` (default true), `side`. Market-scoped history has a floor of about 3 years. A v2 route `/v2/trades` exists | **VERIFIED** | https://docs.polymarket.com/api-reference/core/get-trades-for-a-user-or-markets |
+| V7 | Trades for a market closed in March 2026 are returned (one `limit=1` record, timestamp 2026-03-16 UTC). Offset 10001 returns `{"error":"max historical trades offset of 10000 exceeded"}` | **VERIFIED** | https://data-api.polymarket.com/trades?market=0x66af911f31ceabb5f9a3ef9203a73f0b23d18aa81bbba7888dec440c622c2528&limit=1 |
+| V8 | Fee formula `fee = C × feeRate × p × (1−p)`, takers only. Current rates: Crypto 0.07; Sports, Economics, Culture, Weather and Other 0.05; Finance, Politics, Mentions and Tech 0.04; Geopolitics 0; Combos 0.05 | **VERIFIED** (current schedule) | https://docs.polymarket.com/trading/fees |
+| V9 | Fee history: taker fees on Crypto from January 2026 and on Sports from 2026-02-18; expanded to Finance, Politics, Economics, Culture, Weather, Tech, Mentions and Other from **2026-03-30**, for markets **deployed** from that date | **UNVERIFIED from an official changelog**. It is corroborated only by secondary sources (Coincu, MEXC/BEN, Galaxy research, an r/Polymarket post). Rates before 2026-03-30 differed (Galaxy cites a lower crypto peak), and their exact values are UNVERIFIED. The Wayback Machine was rate-limited (HTTP 429) and couldn't be checked | https://coincu.com/news/polymarket-fee-expansion-march-30-2026 ; https://www.galaxy.com/insights/research/weekly-top-stories-03-27-26 ; https://www.reddit.com/r/Polymarket/comments/1s1xo9l/ |
+| V10 | Per-market flag `feesEnabled`. The sample market (Oscars 2026, closed in March 2026) has `feesEnabled=false`, `feeType=null`, consistent with V9 | field **VERIFIED**; whether it reflects the historical flag at trade time is **UNVERIFIED** | https://gamma-api.polymarket.com/markets/613835 |
+| V11 | Resolution uses the UMA Optimistic Oracle: proposal, a 2-hour challenge period, and a dispute that leads to a second proposal; a second dispute goes to a DVM vote | **VERIFIED** | https://docs.polymarket.com/concepts/resolution.md |
+| V12 | A dispute is detectable from the Polymarket side via `umaResolutionStatuses` (history list) | field **VERIFIED**. The exact token used for a dispute (e.g. `"disputed"`) is **UNVERIFIED** (not documented, and not seen in the one sample) | V1 sources |
+| V13 | UMA Optimistic Oracle on-chain dispute events (e.g. a `DisputePrice` event via the UMA subgraph) as an independent source | **UNVERIFIED** (not checked) | — |
