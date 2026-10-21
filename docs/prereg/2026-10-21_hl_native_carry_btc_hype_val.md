@@ -5,6 +5,8 @@
 - **Desk:** carry.
 - **Reviewers:** QL Validator, QL Safety.
 
+> **BLOCKED:** blocked until `desk/lab/stats.py` ships a G7-compliant bootstrap (assigned separately). The pin for that implementation (commit + SHA-256) is `REQUIRED-BEFORE-RUN`. Every bootstrap bound in this document follows the PR #10 spec rule G7.
+
 ## 0. Disclosure: this is NOT a clean out-of-sample test
 - The carry **val window has already been seen.** Spot cash-and-carry (short HL perp, long Binance spot) was evaluated on carry val on 2026-10-03: +7.1% maker / +5.4% taker (`RESEARCH_LOG_2026-10-03.md`, row 5). The funding regime in val is therefore known to the researchers.
 - The always-on BTC/HYPE result in the research log was computed over 2023-06..2026-10, which **includes val and holdout**.
@@ -43,7 +45,8 @@ How to fill these placeholders: a reviewer reads **only** the panel's timestamp 
 | repo HEAD (main) | `313b185cac9e53c9d0bfcaf48774b34e79d72d34` | — |
 | `desk/lab/carry.py` (cost model reference) | last change `7c140052faccaf3e76833ad1c9c711038c2129dc` | `471d8dd1b83d5096240a4ec08f45ea691ef3fcf57b9b8ba46516b4b2ea097ab1` |
 | `desk/data/carry_data.py` (split freezing) | same | `e0f7530f530320224877ee7573cd36b8b643330b908087ae834a98ced1be6fb9` |
-| `desk/lab/stats.py` (`block_bootstrap_lower`, `dsr`) | same | `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| `desk/lab/stats.py` (`dsr`) | same | `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| G7-compliant bootstrap in `desk/lab/stats.py` (not yet shipped) | `REQUIRED-BEFORE-RUN` | `REQUIRED-BEFORE-RUN` |
 | HL-native evaluator script | `REQUIRED-BEFORE-RUN` | `REQUIRED-BEFORE-RUN` |
 
 
@@ -76,7 +79,7 @@ To **PASS**, all of the following must hold:
 1. Val return on capital is **≥ 5%/yr**.
 2. **Every val quarter is ≥ 0.**
 3. **Max drawdown < 3%** of capital.
-4. **Block-bootstrap 95% lower bound ≥ 0** on the mean daily return, using `desk/lab/stats.py::block_bootstrap_lower` (block = 5 days, n = 2000, alpha = 0.05, seed = 7, i.e. its defaults).
+4. **Block-bootstrap 95% lower bound ≥ 0** (one-sided) on the mean daily return, computed per the PR #10 spec rule **G7** (studentized or BCa interval; block size max(5, ceil(T^(1/3))); ≥ 5,000 draws; seed logged in the manifest and the ledger row; passes the null-drill false-positive check).
 5. **DSR > 0.95**, using `desk/lab/stats.py::dsr` with **n_trials = max(4, ledger count)**.
    - **Basis for 4:** these are the known evaluations of the funding-carry family on carry val: spot carry v1 maker, spot carry v1 taker (`RESEARCH_LOG_2026-10-03.md`, row 5), carry v2 HL-vs-Binance (it has a paper sleeve and a fixed entry threshold per the regime-monitor section; whether it was evaluated on val is unconfirmed, so it is counted to be conservative), and this test.
    - **Ledger count:** the number of distinct carry-desk strategies in `company.db` with a val evaluation, which is `REQUIRED-BEFORE-RUN`. If it is larger, that number is used.
