@@ -151,11 +151,25 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     jid = uuid.uuid4().hex[:12]
     jp, op = jobs / f'{jid}.json', jobs / f'{jid}.out.json'
     mem_mb = mem_mb or getattr(settings, 'job_memory_mb', 5000)
+    # per-split view holding only job['allowed'] data, outside the store tree. A holdout view is one-shot per evaluation
+    # identity (claimed atomically in the ledger) and torn down on exit. Under the OS jail (PR #14) this view root is
+    # the ONLY store path to mount read-only. The job gets no _home: it only needs its store.
+    ledger = None
+    if 'holdout' in (job.get('allowed') or ()) and 'forward' not in (job.get('allowed') or ()):
+        from ..company.ledger import Ledger
+        ledger = Ledger(settings.ledger)
+    from ..data.views import HoldoutRefused
+    try:
+        return await _run_job_in_view(job, settings, ledger, jid, jp, op, timeout_s, mem_mb, slot)
+    except HoldoutRefused as e:
+        return {'error': f'holdout_refused: {e}'}
+
+
+async def _run_job_in_view(job, settings, ledger, jid, jp, op, timeout_s, mem_mb, slot):
     from ..data.views import store_for_job
-    # per-split view holding only job['allowed'] data; a holdout view is one-shot (torn down + marked consumed on exit).
-    # Under the OS jail (PR #14) this view root is the ONLY store path to mount read-only.
-    with store_for_job(settings.store, job, job_id=jid) as store_root:
-        job = dict(job, _home=str(settings.home), _store=str(store_root))   # the harness evaluates on THIS job's view
+    with store_for_job(settings.store, job, ledger=ledger, job_id=jid,
+                       root=getattr(settings, 'views_dir', None)) as (store_root, holdout):
+        job = dict(job, _store=str(store_root))
         jp.write_text(json.dumps(job, default=str))
         env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1', POLARS_MAX_THREADS='4', NUMBA_NUM_THREADS='2')
         for secret_key in ('MIMO_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_API_KEY'):
@@ -172,6 +186,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
             if op.exists():
                 res = json.loads(op.read_text())
             else:
+                if holdout is not None and killed in ('memory', 'system_memory'):
+                    holdout.infra_failed()                     # no result produced: one retry is allowed
                 res = {'error': f'harness failed ({killed or proc.returncode})',
                        'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}
         finally:

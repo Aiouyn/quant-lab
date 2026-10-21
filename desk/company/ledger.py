@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY, name TEXT, author TEX
 CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, code_hash TEXT,
   sharpe REAL, days INT, created REAL);
 CREATE TABLE IF NOT EXISTS holdout_uses(code_hash TEXT PRIMARY KEY, strategy TEXT, created REAL, passed INT);
+CREATE TABLE IF NOT EXISTS holdout_view_claims(id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT, job_id TEXT,
+  kind TEXT, components TEXT, created REAL);
+CREATE INDEX IF NOT EXISTS ix_hvc ON holdout_view_claims(identity);
 CREATE TABLE IF NOT EXISTS lessons(id TEXT PRIMARY KEY, author TEXT, claim TEXT, evidence TEXT, confidence REAL,
   scope TEXT, tags TEXT, status TEXT DEFAULT 'active', created REAL);
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, body TEXT, created REAL);
@@ -95,6 +98,29 @@ class Ledger:
         with self.db() as db:
             cur = db.execute(sql, args)
             return cur.lastrowid
+
+    # ----------------------------------------------------------------- one-shot holdout views (append-only)
+    MAX_HOLDOUT_ATTEMPTS = 2                 # the 2nd only after an infrastructure kill (memory) of the 1st
+
+    def claim_holdout_view(self, identity, job_id, components):
+        """Atomically check-and-record a holdout view for an evaluation identity (BEGIN IMMEDIATE = write lock across
+        processes). Allowed only if never claimed, or every earlier claim ended in an infrastructure failure (the job
+        produced no result) and the attempt cap is not reached. Returns (ok, reason). Rows are only ever appended."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            rows = db.execute('SELECT kind FROM holdout_view_claims WHERE identity=? ORDER BY id', (identity,)).fetchall()
+            claims = sum(r['kind'] == 'claim' for r in rows)
+            infra = sum(r['kind'] == 'infra_fail' for r in rows)
+            if claims and (claims != infra or claims >= self.MAX_HOLDOUT_ATTEMPTS):
+                return False, f'holdout already consumed by this evaluation identity ({claims} claim(s))'
+            db.execute('INSERT INTO holdout_view_claims(identity,job_id,kind,components,created) VALUES(?,?,?,?,?)',
+                       (identity, job_id, 'claim', json.dumps(components, default=str), time.time()))
+            return True, 'claimed'
+
+    def mark_holdout_view(self, identity, job_id, kind):
+        """Append the outcome of a claimed holdout job: 'done' or 'infra_fail'."""
+        self.x('INSERT INTO holdout_view_claims(identity,job_id,kind,components,created) VALUES(?,?,?,?,?)',
+               (identity, job_id, kind, None, time.time()))
 
     # ----------------------------------------------------------------- control
     def set(self, key, value):

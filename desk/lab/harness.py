@@ -41,8 +41,8 @@ def _brief(r):
 
 def _settings(job):
     import dataclasses
-    if job.get('_home'):
-        return dataclasses.replace(SETTINGS, home=Path(job['_home']), store_dir=Path(job['_store']))
+    if job.get('_store'):                                   # run_job passes only the job's (per-split) store view
+        return dataclasses.replace(SETTINGS, store_dir=Path(job['_store']))
     return SETTINGS
 
 

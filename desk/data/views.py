@@ -1,25 +1,27 @@
 """Per-split store views: read-only, store-shaped directories that contain ONLY data up to the end of the latest
-split in a job's `allowed` set, so a jailed harness job can be given (mounted) exactly what it may see.
+split in a job's `allowed` set, so a (jailed) harness job is given exactly what it may see.
 
-Views (all under <store>/views/split/):
-  dev@<stamp>/      allowed = ['dev']           (versioned by a stamp of the sources; superseded versions pruned
-  dev+val@<stamp>/  allowed = ['dev', 'val']     after 24 h, so a running job's view is never swapped underneath it)
-  holdout-<job>/  allowed = ['dev', 'val', 'holdout']  ONE-SHOT: built for a single promotion job, torn down after
-                  it and recorded in holdout_consumed.jsonl; the same job id can never get a second holdout view.
+Where: OUTSIDE the store tree, in a configurable views root (`views_root=` / $DESK_VIEWS_ROOT, default
+`<store parent>/<store name>_views`).
+  dev@<stamp>/       allowed = ['dev']          reusable, versioned by a stamp of the sources
+  dev+val@<stamp>/   allowed = ['dev', 'val']   (superseded versions pruned 24 h after their LAST USE)
+  holdout-<job>/     allowed = ['dev', 'val', 'holdout']   ONE-SHOT per evaluation identity (desk/lab/identity.py:
+                     normalized strategy AST + desk.* dependency closure + eval settings + data version), checked and
+                     recorded atomically in the ledger (holdout_view_claims, append-only). Torn down after the job.
 `allowed` must be a chronological prefix of (dev, val, holdout, forward). A set containing `forward` (the forward
 check) is everything, so it gets the full store root.
 
-Each view is a complete store for every desk the harness reads, pre-built so that NOTHING is written lazily inside a
-read-only mount:
-  1s/10s/1m/tape day files  hard links (immutable) for days of the allowed splits; copy if linking fails
+Contents, pre-built so that NOTHING is written lazily inside a read-only mount:
+  1s/10s/1m/tape day files  independent COPIES (reflink when supported), never hard links
   splits.json               FeatureStore split with non-allowed splits emptied (keys kept)
   funding_hl.parquet        hours < cutoff
   macro|perps|pred|carry    panel rows < that desk's cutoff + splits.json without the non-allowed splits.
                             Engine-only look-ahead columns on the last allowed hour are nulled (perps lo/hi = range of
                             the NEXT hour; carry Binance bar columns close one hour after their key); pred keeps only
                             markets that resolve before the cutoff (an outcome is future information).
-Views are built in a temp dir and swapped in with a rename (atomic), files 0644; a stamp of the sources lets a
-fresh view be reused. Depends on nothing outside this module (PR #7's atomic helper is not on main yet).
+Files are 0444 and dirs 0555 (they are copies, so this never touches a store inode). Build = temp dir + rename; a
+concurrent builder that loses the rename discards its copy and uses the winner's. Symlinks are never followed when
+building (error) or tearing down (removed, not traversed).
 """
 from __future__ import annotations
 
@@ -28,7 +30,9 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import time
+import types
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,21 +79,36 @@ def _view_splits(sp: dict, allowed) -> dict:
 def _write_parquet(df: pl.DataFrame, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path, compression='zstd')
-    os.chmod(path, 0o644)
 
 
 def _write_json(obj, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=1, default=str), encoding='utf-8')
-    os.chmod(path, 0o644)
 
 
-def _link(src: Path, dst: Path):
+def _src(p: Path) -> Path:
+    """Refuse to follow symlinks out of the store: a symlinked source file or directory is an error."""
+    for q in (p, p.parent):
+        if q.is_symlink():
+            raise ViewError(f'refusing to follow symlink {q} while building a view')
+    return p
+
+
+FICLONE = 0x40049409                                       # Linux ioctl: reflink (btrfs/xfs); falls back to a copy
+
+
+def _copy(src: Path, dst: Path):
+    """Independent copy (reflink when the filesystem supports it). Never a hard link: view files get chmod 0444 and
+    a hard link would share (and change) the store file's inode."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
-        os.link(src, dst)
-    except OSError:
-        shutil.copy2(src, dst)
+        import fcntl
+        with open(_src(src), 'rb') as fi, open(dst, 'wb') as fo:
+            fcntl.ioctl(fo.fileno(), FICLONE, fi.fileno())
+        return
+    except (OSError, ImportError):
+        dst.unlink(missing_ok=True)
+    shutil.copyfile(_src(src), dst, follow_symlinks=False)
 
 
 # ---------------------------------------------------------------------------------------------- per desk
@@ -97,7 +116,7 @@ def _feature_store(src: Path, dst: Path, allowed):
     f = src / 'splits.json'
     if not f.exists():
         return None
-    sp = json.loads(f.read_text())
+    sp = json.loads(_src(f).read_text())
     days = sorted(d for k in allowed for d in sp.get(k, []))
     for res in DAY_RES:
         if not (src / res).exists():
@@ -106,7 +125,7 @@ def _feature_store(src: Path, dst: Path, allowed):
         for d in days:
             p = src / res / f'{d}.parquet'
             if p.exists():
-                _link(p, dst / res / p.name)
+                _copy(p, dst / res / p.name)
     (dst / 'meta').mkdir(parents=True, exist_ok=True)
     view_sp = {k: (sp.get(k, []) if k in allowed else []) for k in ORDER}
     view_sp.update(created=sp.get('created'), view={'allowed': list(allowed)})
@@ -114,7 +133,7 @@ def _feature_store(src: Path, dst: Path, allowed):
     cutoff = (_ms(days[-1]) + DAY) if days else None
     fh = src / 'funding_hl.parquet'
     if fh.exists() and cutoff is not None:
-        _write_parquet(pl.read_parquet(fh).filter(pl.col('hour') < cutoff), dst / 'funding_hl.parquet')
+        _write_parquet(pl.read_parquet(_src(fh)).filter(pl.col('hour') < cutoff), dst / 'funding_hl.parquet')
     return cutoff
 
 
@@ -123,7 +142,7 @@ def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str):
     f = src / 'splits.json'
     if not f.exists():
         return None
-    sp = json.loads(f.read_text())
+    sp = json.loads(_src(f).read_text())
     cutoff = _panel_cutoff_ms(sp, allowed)
     if cutoff is None:
         return None
@@ -133,7 +152,7 @@ def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str):
             _write_json(json.loads((src / 'universe.json').read_text()), dst / 'universe.json')
         from .carry_data import BAR_COLS
         for cf in sorted((src / 'coins').glob('*.parquet')):
-            p = pl.read_parquet(cf).filter(pl.col('ts') < cutoff)
+            p = pl.read_parquet(_src(cf)).filter(pl.col('ts') < cutoff)
             cols = [c for c in BAR_COLS if c in p.columns]
             if cols:
                 p = p.with_columns([pl.when(pl.col('ts') >= cutoff - HOUR).then(None).otherwise(pl.col(c)).alias(c)
@@ -145,15 +164,15 @@ def _panel_desk(src_root: Path, dst_root: Path, allowed, desk: str):
         return cutoff
     if desk == 'macro':
         cut_date = datetime.fromtimestamp(cutoff / 1000, timezone.utc).date()
-        p = pl.scan_parquet(pf).filter(pl.col('date') < cut_date).collect()
+        p = pl.scan_parquet(_src(pf)).filter(pl.col('date') < cut_date).collect()
     elif desk == 'perps':
-        p = pl.scan_parquet(pf).filter(pl.col('ts') < cutoff).collect()
+        p = pl.scan_parquet(_src(pf)).filter(pl.col('ts') < cutoff).collect()
         cols = [c for c in ('lo', 'hi') if c in p.columns]
         if cols:
             p = p.with_columns([pl.when(pl.col('ts') >= cutoff - HOUR).then(None).otherwise(pl.col(c)).alias(c)
                                 for c in cols])
     else:  # pred
-        p = pl.scan_parquet(pf).filter((pl.col('ts') < cutoff) & (pl.col('end_ms') < cutoff)).collect()
+        p = pl.scan_parquet(_src(pf)).filter((pl.col('ts') < cutoff) & (pl.col('end_ms') < cutoff)).collect()
     _write_parquet(p, dst / 'panel.parquet')
     return cutoff
 
@@ -174,8 +193,50 @@ def _stamp(store: Path, allowed) -> str:
     return h.hexdigest()
 
 
+def views_root(store: Path, root=None) -> Path:
+    """Configurable views root, never inside the store tree."""
+    store = Path(store).resolve()
+    r = Path(root or os.environ.get('DESK_VIEWS_ROOT') or store.parent / f'{store.name}_views').resolve()
+    if r == store or store in r.parents:
+        raise ViewError(f'views root {r} must be outside the store tree {store}')
+    r.mkdir(parents=True, exist_ok=True)
+    return r
+
+
+def _seal(root: Path):
+    """0444 files / 0555 dirs. Only called on our own fresh copies (nlink == 1 is asserted)."""
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False, followlinks=False):
+        for f in filenames:
+            p = os.path.join(dirpath, f)
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                raise ViewError(f'unexpected symlink in view {p}')
+            if st.st_nlink != 1:
+                raise ViewError(f'view file {p} shares an inode (nlink={st.st_nlink}); refusing to chmod it')
+            os.chmod(p, 0o444, follow_symlinks=False)
+        os.chmod(dirpath, 0o555)
+
+
+def remove_view(path: Path):
+    """Tear a view down without following symlinks and without chmodding any FILE: deleting entries only needs the
+    parent directories writable, and those directories are the view's own."""
+    path = Path(path)
+    if path.is_symlink():
+        path.unlink()
+        return
+    if not path.exists():
+        return
+    for dirpath, dirnames, filenames in os.walk(path, topdown=True, followlinks=False):
+        os.chmod(dirpath, 0o755)
+        for d in list(dirnames):
+            if os.path.islink(os.path.join(dirpath, d)):
+                dirnames.remove(d)                      # symlinked dir: never descend; rmtree unlinks the link
+    shutil.rmtree(path)
+
+
 def build_view(store: Path, allowed, dest: Path) -> Path:
-    """Build the view for `allowed` at `dest` atomically (temp dir + rename). Returns dest."""
+    """Build the view for `allowed` at `dest` (temp dir + rename). If `dest` already exists with the same stamp, or
+    another builder wins the rename race, the existing view is used. Returns dest."""
     store, dest = Path(store), Path(dest)
     allowed = normalize_allowed(allowed)
     stamp = _stamp(store, allowed)
@@ -189,84 +250,93 @@ def build_view(store: Path, allowed, dest: Path) -> Path:
         for desk in ('macro', 'perps', 'pred', 'carry'):
             cut[desk] = _panel_desk(store, tmp, allowed, desk)
         _write_json({'allowed': list(allowed), 'stamp': stamp, 'built_utc': datetime.now(timezone.utc).isoformat(),
-                     'cutoff_ms': cut, 'source': str(store)}, tmp / '.view.json')
-        old = None
-        if dest.exists():
+                     'cutoff_ms': cut}, tmp / '.view.json')
+        _seal(tmp)
+        if dest.exists():                                   # stale same-name view (one-shot rebuild): replace it
             old = dest.with_name(f'.{dest.name}.{uuid.uuid4().hex[:8]}.old')
-            os.replace(dest, old)
-        os.replace(tmp, dest)
-        if old is not None:
-            shutil.rmtree(old, ignore_errors=True)
+            os.rename(dest, old)
+            remove_view(old)
+        try:
+            os.rename(tmp, dest)                            # fails if a concurrent builder created dest meanwhile
+        except OSError:
+            if not (dest / '.view.json').exists():
+                raise
+            remove_view(tmp)                                # lost the race: the winner's view is equivalent
     except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_view(tmp)
         raise
     return dest
 
 
-def views_root(store: Path) -> Path:
-    return Path(store) / 'views' / 'split'
+def _touch_used(root: Path, name: str):
+    d = root / '.last_used'
+    d.mkdir(exist_ok=True)
+    (d / name).touch()
 
 
-def view_for_allowed(store: Path, allowed) -> Path:
-    """Reusable view for dev or dev+val; the full store for sets containing `forward`. Holdout needs one_shot_holdout."""
+def view_for_allowed(store: Path, allowed, root=None) -> Path:
+    """Reusable view for dev or dev+val; the full store for sets containing `forward`. Holdout: one_shot_holdout."""
     allowed = normalize_allowed(allowed)
     if 'forward' in allowed:
         return Path(store)
     if 'holdout' in allowed:
-        raise ViewError('holdout views are one-shot: use one_shot_holdout(store, job_id)')
-    # versioned by source stamp: a running job's view is never replaced underneath it when the store changes
+        raise ViewError('holdout views are one-shot: use one_shot_holdout(store, job, ledger)')
+    r = views_root(store, root)
     name = '+'.join(allowed)
-    dest = views_root(store) / f'{name}@{_stamp(store, allowed)[:12]}'
+    dest = r / f'{name}@{_stamp(Path(store), allowed)[:12]}'
     build_view(store, allowed, dest)
-    _prune(views_root(store), name, keep=dest)
+    _touch_used(r, dest.name)
+    _prune(r, name, keep=dest)
     return dest
 
 
-def _prune(root: Path, name: str, keep: Path, max_age_s=24 * 3600):
-    """Drop superseded versions of a reusable view once they are a day old (no job runs that long)."""
+def _prune(root: Path, name: str, keep: Path, max_idle_s=24 * 3600):
+    """Drop superseded versions of a reusable view once unused for a day (no job runs that long)."""
     for d in root.glob(f'{name}@*'):
-        if d != keep and d.is_dir() and time.time() - d.stat().st_mtime > max_age_s:
-            shutil.rmtree(d, ignore_errors=True)
+        if d == keep or d.is_symlink() or not d.is_dir():
+            continue
+        used = root / '.last_used' / d.name
+        last = used.stat().st_mtime if used.exists() else d.stat().st_mtime
+        if time.time() - last > max_idle_s:
+            remove_view(d)
+            used.unlink(missing_ok=True)
 
 
-def _consumed_log(store: Path) -> Path:
-    return views_root(store) / 'holdout_consumed.jsonl'
-
-
-def holdout_consumed(store: Path, job_id: str) -> bool:
-    f = _consumed_log(store)
-    return f.exists() and any(json.loads(l).get('job_id') == job_id for l in f.read_text().splitlines() if l.strip())
+class HoldoutRefused(ViewError):
+    pass
 
 
 @contextlib.contextmanager
-def one_shot_holdout(store: Path, job_id: str):
-    """Build a dev+val+holdout view for ONE promotion job, yield its path, then tear it down and mark it consumed
-    (even if the job fails). A job id that already consumed its holdout view is refused."""
-    store = Path(store)
-    if holdout_consumed(store, job_id):
-        raise ViewError(f'holdout view for job {job_id} was already consumed')
-    dest = views_root(store) / f'holdout-{job_id}'
-    build_view(store, ORDER[:3], dest)
+def one_shot_holdout(store: Path, job: dict, ledger, job_id: str | None = None, root=None):
+    """Build a dev+val+holdout view for ONE evaluation identity, yield (path, handle), then tear it down.
+    The claim is checked and recorded atomically in the ledger BEFORE the view exists; a resubmission with the same
+    identity (cosmetic edits included) raises HoldoutRefused. handle.infra_failed() records an infrastructure kill
+    (the job produced no result), which permits exactly one retry."""
+    from ..lab.identity import evaluation_identity
+    if ledger is None:
+        raise ViewError('a holdout view needs the ledger to record its one-shot claim')
+    job_id = job_id or uuid.uuid4().hex[:12]
+    ident, comp = evaluation_identity(job, store)
+    ok, reason = ledger.claim_holdout_view(ident, job_id, comp)
+    if not ok:
+        raise HoldoutRefused(f'{reason}: {ident[:16]}')
+    handle = types.SimpleNamespace(identity=ident, job_id=job_id, outcome='done')
+    handle.infra_failed = lambda: setattr(handle, 'outcome', 'infra_fail')
+    dest = views_root(store, root) / f'holdout-{job_id}'
     try:
-        yield dest
+        build_view(store, ORDER[:3], dest)
+        yield dest, handle
     finally:
-        for p in [dest, *sorted(dest.rglob('*'))] if dest.exists() else []:   # undo 0444/0555 left by a RO mount
-            with contextlib.suppress(OSError):
-                os.chmod(p, 0o755 if p.is_dir() else 0o644)
-        shutil.rmtree(dest, ignore_errors=True)
-        f = _consumed_log(store)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        with open(f, 'a', encoding='utf-8') as fh:
-            fh.write(json.dumps({'job_id': job_id, 'consumed_utc': datetime.now(timezone.utc).isoformat(),
-                                 'ts': time.time()}) + '\n')
+        remove_view(dest)
+        ledger.mark_holdout_view(ident, job_id, handle.outcome)
 
 
 @contextlib.contextmanager
-def store_for_job(store: Path, job: dict, job_id: str | None = None):
-    """The store root a harness job should get (and the ONLY store path to mount read-only)."""
+def store_for_job(store: Path, job: dict, ledger=None, job_id: str | None = None, root=None):
+    """(store root the harness job should get = the ONLY store path to mount read-only, holdout handle or None)."""
     allowed = normalize_allowed(job.get('allowed', ('dev',)))
     if 'holdout' in allowed and 'forward' not in allowed:
-        with one_shot_holdout(store, job_id or uuid.uuid4().hex[:12]) as v:
-            yield v
+        with one_shot_holdout(store, job, ledger, job_id=job_id, root=root) as (v, h):
+            yield v, h
     else:
-        yield view_for_allowed(store, allowed)
+        yield view_for_allowed(store, allowed, root=root), None
