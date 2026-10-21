@@ -139,11 +139,9 @@ def factor_report(df, values, resolution='1m', horizons_s=(10, 60, 300, 900, 360
 
 
 def _log_trial(kind, sharpe, days_, ident):
-    """Every backtest counts toward the firm's multiple-testing ledger (deflated Sharpe)."""
-    p = os.environ.get('DESK_TRIALS')
-    if p:
-        with open(p, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'kind': kind, 'sharpe': float(sharpe), 'days': int(days_), 'id': ident}) + chr(10))
+    """No-op inside the sandbox (charter R7c): trials are logged host-side, one per run_python call, by the tool
+    layer. Sandbox code cannot write, skip or forge ledger rows."""
+    return None
 
 
 def backtest(df, target, resolution='1m', **cost):

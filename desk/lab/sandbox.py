@@ -145,7 +145,14 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
 
 
 async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
-    """Trusted harness job in a subprocess (full store access decided by the caller)."""
+    """Trusted harness job in a subprocess (full store access decided by the caller).
+    Charter R7b: the job must carry `_ticket`, issued by the host ledger (Ledger.issue_ticket) for this exact job and
+    never used before; it is redeemed here before anything runs."""
+    from ..company.ledger import Ledger, TicketRefused
+    try:
+        Ledger(settings.ledger).redeem_ticket(job.get('_ticket'), job)
+    except TicketRefused as e:
+        return {'error': f'ticket_refused: {e}'}
     jobs = settings.home / 'jobs'
     jobs.mkdir(parents=True, exist_ok=True)
     jid = uuid.uuid4().hex[:12]

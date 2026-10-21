@@ -369,6 +369,9 @@ def factor_eval(job):
 
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
+    if not job.get('_ticket'):                                # charter R7b: only run_job (which redeems it) launches us
+        Path(sys.argv[2]).write_text(json.dumps({'error': 'ticket_refused: job has no ledger trial ticket'}))
+        return
     try:
         out = {'strategy_eval': strategy_eval, 'factor_eval': factor_eval}[job['type']](job)
     except Exception as e:
