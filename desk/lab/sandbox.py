@@ -159,7 +159,8 @@ def _trial_reader(fd, buf):
 
 
 def _write_trials(trials_path, raw, run):
-    """HOST writes the trial log: valid trial records reported by the jail + one run record per sandboxed run
+    """HOST writes the SELF-REPORT log (informational only, never counted as trials, charter R7c): records the jail
+    sent over the pipe + one run record per sandboxed run
     (written even when the code reported nothing, crashed or was killed)."""
     trials_path = Path(trials_path)
     trials_path.parent.mkdir(parents=True, exist_ok=True)
