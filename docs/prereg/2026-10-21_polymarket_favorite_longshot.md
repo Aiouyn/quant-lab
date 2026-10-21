@@ -29,7 +29,7 @@
 - A market whose life spans a cut-off therefore contributes price rows to two splits.
 
 **Rule used in this test (stricter than the engine, and fixed now).**
-- **Anchor time:** A = min(`endDate`, `closedTime`, `umaEndDate`), all in UTC. The gamma field names are VERIFIED (Appendix V1); `umaEndDate` is the resolution timestamp, but that meaning is inferred (V2). `closedTime` must be parsed from its non-ISO format. The current fetcher **doesn't store** `closedTime` or `umaEndDate` (spec PR #10, item 3): `REQUIRED-BEFORE-RUN`.
+- **Anchor time** (*disclosure: `umaEndDate` as the resolution time is UNVERIFIED, Appendix V2*): A = min(`endDate`, `closedTime`, `umaEndDate`), all in UTC. The gamma field names are VERIFIED (Appendix V1); `umaEndDate` is the resolution timestamp, but that meaning is inferred (V2). `closedTime` must be parsed from its non-ISO format. The current fetcher **doesn't store** `closedTime` or `umaEndDate` (spec PR #10, item 3): `REQUIRED-BEFORE-RUN`.
 - **Early-closed markets are KEPT:** markets with closedTime < endDate (resolved before the scheduled end) stay in the sample, because dropping them would select on the outcome. Calibration anchors them on A like every other market. Their count and share are reported.
 - **Val membership:** a market belongs to val if and only if **both** A **and** its snapshot time (A − 24 h, §3) fall inside [2026-03-01 00:00, 2026-06-01 00:00) UTC. Markets with A in val but the snapshot before 2026-03-01 are dropped and counted.
 - **Sleeve:** the trading sleeve (§6) considers **only** markets selected by this rule. It uses its own entry time (scheduled `endDate` − 24 h, §6), never A.
@@ -68,7 +68,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   - Lifetime volume under $250k (`MIN_VOLUME`).
 - **Additional exclusions (fixed now):**
   1. Markets whose outcomes are not literally Yes/No, for example "Team A vs Team B". With those, "YES" is arbitrary, which breaks the favorite-longshot reading. The outcome labels are not stored in the panel, so this needs a re-fetch or the raw labels: `REQUIRED-BEFORE-RUN`.
-  2. Markets with a disputed or ambiguous resolution. The source is gamma `umaResolutionStatuses` (field VERIFIED, V12): a market is excluded if its history contains more than one `proposed` entry, or any entry other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED, so this rule is written to catch any extra state. The on-chain UMA source is UNVERIFIED (V13). Storing `umaResolutionStatuses` is `REQUIRED-BEFORE-RUN` (PR #10 item 5).
+  2. Markets with a disputed or ambiguous resolution (*disclosure: the dispute token is UNVERIFIED, Appendix V12*). The source is gamma `umaResolutionStatuses` (field VERIFIED, V12): a market is excluded if its history contains more than one `proposed` entry, or any entry other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED, so this rule is written to catch any extra state. The on-chain UMA source is UNVERIFIED (V13). Storing `umaResolutionStatuses` is `REQUIRED-BEFORE-RUN` (PR #10 item 5).
 - **Multi-outcome events (neg-risk groups):** each candidate in a group like "Who will win X?" arrives as a separate binary market. They are **kept** and clustered as follows.
 - **Clustering unit (fixed now):**
   1. **Primary:** the gamma event id (`events[0].id`, VERIFIED, V3).
@@ -90,7 +90,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 
 ## 5. Calibration test (val)
 - **Per bucket b:** miscalibration m_b = (realized YES rate) − (mean snapshot price), with each market weighted equally.
-- **CI:** a two-sided 95% CI from a **cluster bootstrap** (clustering unit from §4) in the **G7 clustered form**: whole clusters are resampled with replacement, the interval is studentized or BCa (no percentile intervals), with ≥ 5,000 draws, the seed logged, and the clustered null-drill false-positive check (calibrated Bernoulli(p) outcomes with the cluster structure kept) passed. The two-sided p-value p_b is the **null-centred** bootstrap-t p-value: with t_obs = m̂_b / ŝe and, for each draw, t* = (m*_b − m̂_b) / se*, p_b = (1 + #{|t*| ≥ |t_obs|}) / (1 + number of draws). Here se* comes from an inner bootstrap or a cluster-robust formula within each draw (the method is logged).
+- **CI:** a two-sided 95% CI from a **cluster bootstrap** (clustering unit from §4) in the **G7 clustered form**: whole clusters are resampled with replacement, the interval is **studentized (bootstrap-t)**, with ≥ 5,000 draws, the seed logged, and the clustered null-drill false-positive check (calibrated Bernoulli(p) outcomes with the cluster structure kept) passed. The two-sided p-value p_b is the **null-centred** bootstrap-t p-value: with t_obs = m̂_b / ŝe and, for each draw, t* = (m*_b − m̂_b) / se*, p_b = (1 + #{|t*| ≥ |t_obs|}) / (1 + number of draws). **se\* method (fixed now):** within each bootstrap draw, se\* is the **cluster-robust analytic standard error**, i.e. the sandwich estimator over the clusters in that draw: for a bucket mean, se\* = sqrt(Σ_g (Σ_{i∈g}(y_i − p_i − m\*))²) / n\*, with a small-sample factor G/(G−1), where G is the number of clusters drawn. ŝe uses the same formula on the original sample. There is no nested inner bootstrap.
 - **Threshold:** τ_b = 2 × the base half-spread for that bucket (§7). That is 2 cents in the middle buckets (10–90 cents) and 3 cents in the tail buckets (0–10 and 90–100 cents).
 - **Multiple testing: Holm–Bonferroni** across the 14 buckets at family α = 0.05.
   - Sort the p-values in ascending order as p_(1) ≤ … ≤ p_(14), and reject H0_(k) while p_(k) ≤ 0.05 / (14 − k + 1). Stop at the first failure.
@@ -114,9 +114,10 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 - **Window:** only markets selected under §1, with E ≥ 2026-03-01 00:00 UTC. No position is opened in a market whose entry time falls before val.
 - **Stresses (both reported; both must pass conditions 2–4 below):** 1.5× all costs (spread and fees), and one extra row of delay (`delay_rows = 2`).
 - **Pass bar (base costs, val):**
-  1. **DSR > 0.95** (`stats.dsr` on daily P&L) with **n_trials = max(15, ledger count)**.
+  1. **DSR > 0.95** (`stats.dsr` on daily P&L) with **n_trials = max(15, ledger trials for this family)**.
      - **Basis for 15:** the 14 bucket tests in §5 (each a look at the same val outcomes, counted as trials, including insufficient ones), plus 1 sleeve configuration. The ledger count is a **hard floor**.
-     - No other pred-desk strategy is known to have been evaluated on val (`RESEARCH_LOG_2026-10-03.md` lists none). The ledger count of distinct pred strategies with a val evaluation in `company.db` is `REQUIRED-BEFORE-RUN`, and if it is larger, that number is used.
+     - No other pred-desk strategy is known to have been evaluated on val (`RESEARCH_LOG_2026-10-03.md` lists none).
+     - **Ledger floor (R9, per Validator charter, pending):** the number of **trials** (ledger rows, i.e. evaluations with distinct code + config hash; not distinct strategies) recorded for this family (Polymarket favorite-longshot) on the pred desk, across splits. It comes from the R7a schema query in PR #10 P0-C, and it is `REQUIRED-BEFORE-RUN`. It is a **hard floor**: it can only raise N.
      - `trial_sr_std` comes from the ledger: `REQUIRED-BEFORE-RUN`.
   2. **Mean excluding the top 5 days > 0** (`stats.mean_ex_top`, k = 5).
   3. **Block-bootstrap 95% lower bound ≥ 0** (one-sided) on daily P&L, computed per the PR #10 spec rule **G7** (studentized or BCa interval; block size max(5, ceil(T^(1/3))); ≥ 5,000 draws; seed logged in the manifest and the ledger row; passes the null-drill false-positive check).
@@ -154,7 +155,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 12. The ledger's pred val trial count (hard floor) and `trial_sr_std`.
 13. Sign-off from QL Validator that eval gating is fixed.
 
-**Still UNVERIFIED (see Appendix V):** what `umaEndDate` means (V2); archived coverage (V5); the official fee-history dates and the rates before 2026-03-30 (V9); whether `feesEnabled` is historical (V10); the dispute token in `umaResolutionStatuses` (V12); the UMA on-chain source (V13).
+**Still UNVERIFIED (see Appendix V).** V2 (the meaning of `umaEndDate`, which the anchor A depends on) and V12 (the dispute token, which the dispute exclusion depends on) are **explicitly UNVERIFIED**, and the rules relying on them are disclosed as such. In full: what `umaEndDate` means (V2); archived coverage (V5); the official fee-history dates and the rates before 2026-03-30 (V9); whether `feesEnabled` is historical (V10); the dispute token in `umaResolutionStatuses` (V12); the UMA on-chain source (V13).
 
 ## Appendix V. Polymarket API and fee verification (2026-10-21)
 Method: public docs, plus a handful of single-record API responses (gamma market `613835`, and data-api `/trades` with `limit=1`). No datasets were downloaded or saved.
