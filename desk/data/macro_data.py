@@ -9,7 +9,6 @@ cross-time-zone closes can never leak). Output: <store>/macro/panel.parquet. Run
 """
 from __future__ import annotations
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -95,24 +94,46 @@ def fetch(client, sym, period1=0):
     return None
 
 
-def build(settings):
-    with httpx.Client(headers=UA) as c, ThreadPoolExecutor(6) as pool:
-        frames = list(pool.map(lambda s: fetch(c, s), UNIVERSE))
-    got = [f for f in frames if f is not None and len(f)]
-    df = pl.concat(got, how='diagonal_relaxed')
+MIN_ROWS = 200
+
+
+def fetch_universe(symbols=None, workers=6) -> dict:
+    """{symbol: DataFrame | None} for every symbol, full history (period1=0 .. now) from Yahoo v8 chart."""
+    symbols = list(symbols or UNIVERSE)
+    with httpx.Client(headers=UA) as c, ThreadPoolExecutor(workers) as pool:
+        return dict(zip(symbols, pool.map(lambda s: fetch(c, s), symbols)))
+
+
+def check_complete(frames: dict, min_rows=MIN_ROWS):
+    """Raise StoreBuildError naming every symbol whose download failed or came back too short."""
+    from .provenance import StoreBuildError
+    bad = {s: (0 if f is None else len(f)) for s, f in frames.items() if f is None or len(f) < min_rows}
+    if bad:
+        today = time.strftime('%Y-%m-%d', time.gmtime())
+        detail = ', '.join(f'{s} ({n} rows)' for s, n in sorted(bad.items()))
+        raise StoreBuildError(f'macro: Yahoo Finance v8 chart download failed or insufficient (< {min_rows} daily rows) '
+                              f'for {len(bad)}/{len(frames)} symbols over 1970-01-01..{today}: {detail}. No synthetic fill.')
+
+
+def assemble(frames: dict) -> pl.DataFrame:
+    df = pl.concat([f for f in frames.values() if f is not None], how='diagonal_relaxed')
     meta = pl.DataFrame({'symbol': list(UNIVERSE), 'cls': [v[0] for v in UNIVERSE.values()],
                          'tradable': [v[1] for v in UNIVERSE.values()], 'cost_bps': [float(v[2]) for v in UNIVERSE.values()]})
-    df = df.join(meta, on='symbol', how='left').sort(['date', 'symbol'])
-    out = settings.store / 'macro' / 'panel.parquet'
-    out.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out, compression='zstd')
-    missing = sorted(set(UNIVERSE) - set(df['symbol'].unique().to_list()))
-    cov = df.group_by('symbol').agg(pl.col('date').min().alias('first'), pl.len().alias('rows'))
-    rep = {'rows': len(df), 'symbols': df['symbol'].n_unique(), 'missing': missing,
-           'first_dates': {r['symbol']: str(r['first']) for r in cov.iter_rows(named=True)}}
-    (settings.store / 'macro' / 'coverage.json').write_text(json.dumps(rep, indent=1))
-    return rep
+    return df.join(meta, on='symbol', how='left').sort(['date', 'symbol'])
 
+
+def build(settings):
+    from .provenance import atomic_write_json, atomic_write_parquet
+    frames = fetch_universe()
+    check_complete(frames)
+    df = assemble(frames)
+    out = settings.store / 'macro' / 'panel.parquet'
+    atomic_write_parquet(df, out)
+    cov = df.group_by('symbol').agg(pl.col('date').min().alias('first'), pl.len().alias('rows'))
+    rep = {'rows': len(df), 'symbols': df['symbol'].n_unique(), 'missing': [],
+           'first_dates': {r['symbol']: str(r['first']) for r in cov.iter_rows(named=True)}}
+    atomic_write_json(settings.store / 'macro' / 'coverage.json', rep)
+    return rep
 
 if __name__ == '__main__':
     from ..config import SETTINGS

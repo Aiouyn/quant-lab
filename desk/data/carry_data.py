@@ -148,7 +148,10 @@ def bn_klines_api(symbol, start_ms, client, path='/fapi/v1/klines', extra=None):
     return rows
 
 
-def build_coin(u, root: Path, start=Date(2023, 6, 1)):
+CARRY_START = Date(2023, 6, 1)
+
+
+def build_coin(u, root: Path, start=CARRY_START):
     coin, sym = u['coin'], u['binance']
     out = root / 'coins' / f'{coin}.parquet'
     if out.exists():
@@ -242,9 +245,18 @@ def build_carry_data(settings, n=30, workers=3, progress=print):
                 r = {'coin': futs[f], 'error': repr(e)[:300]}
             res.append(r)
             progress(json.dumps(r))
+    failed = [r for r in res if 'error' in r or not r.get('rows')]
+    if failed:
+        from .provenance import StoreBuildError
+        today = time.strftime('%Y-%m-%d', time.gmtime())
+        detail = '; '.join(f"{r['coin']}: {r.get('error', '0 rows')}" for r in sorted(failed, key=lambda r: r['coin']))
+        raise StoreBuildError(f'carry: Hyperliquid funding / Binance futures download failed for {len(failed)}/{len(uni)} '
+                              f'coins over {CARRY_START.isoformat()}..{today}: {detail}. Splits not frozen; no synthetic fill.')
     panel = load_panel(settings)
-    if panel is not None:
-        _freeze_splits(root, panel)
+    if panel is None or panel.is_empty():
+        from .provenance import StoreBuildError
+        raise StoreBuildError(f'carry: no coin panels under {root / "coins"} after the build')
+    _freeze_splits(root, panel)
     return res
 
 
@@ -273,17 +285,30 @@ def align_bar_close(panel):
                             + ([pl.col('bn_qvol').fill_null(0.0)] if 'bn_qvol' in cols else [])).sort(['ts', 'coin'])
 
 
-def _freeze_splits(root, panel):
-    f = root / 'splits.json'
-    if f.exists():
-        return json.loads(f.read_text())
+def compute_carry_splits(panel, frozen=None):
+    """Chronological 60/25/15 over the panel's days. Once frozen, days after the frozen holdout end are forward
+    data, so the recomputation only covers days up to that end (a grown panel must reproduce the same split)."""
     days = sorted({int(t) // 86_400_000 for t in panel['ts'].unique().to_list()})
-    a, b = int(len(days) * 0.6), int(len(days) * 0.85)
     to = lambda d: datetime.fromtimestamp(d * 86400, timezone.utc).strftime('%Y-%m-%d')
-    sp = {'created': time.time(), 'dev': [to(days[0]), to(days[a - 1])], 'val': [to(days[a]), to(days[b - 1])],
+    if frozen and frozen.get('holdout'):
+        days = [d for d in days if to(d) <= frozen['holdout'][1]]
+    if len(days) < 3:
+        from .provenance import StoreBuildError
+        raise StoreBuildError(f'carry: only {len(days)} days in the panel; cannot compute splits')
+    a, b = int(len(days) * 0.6), int(len(days) * 0.85)
+    sp = {'dev': [to(days[0]), to(days[a - 1])], 'val': [to(days[a]), to(days[b - 1])],
           'holdout': [to(days[b]), to(days[-1])], 'note': 'carry desk: chronological 60/25/15 over its own panel'}
-    f.write_text(json.dumps(sp, indent=1))
+    if frozen and 'forward' in frozen:
+        sp['forward'] = frozen['forward']
     return sp
+
+
+def _freeze_splits(root, panel):
+    """Create carry/splits.json once; never rewrite it, and raise if the panel would now split differently."""
+    from .provenance import freeze_splits
+    f = root / 'splits.json'
+    frozen = json.loads(f.read_text()) if f.exists() else None
+    return freeze_splits(f, compute_carry_splits(panel, frozen), 'carry')
 
 
 # ---------------------------------------------------------------------------------------------- Bybit hedge venue
