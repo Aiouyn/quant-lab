@@ -13,11 +13,6 @@ load_dotenv(ROOT / '.env')
 
 def _key():
     key = os.getenv('OPENCODE_API_KEY') or os.getenv('MIMO_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
-    for fname in ('opencode key.txt', 'mimo key.txt'):
-        desktop = Path.home() / 'Desktop' / fname
-        if not key and desktop.exists():
-            lines = [l.strip() for l in desktop.read_text(encoding='utf-8').splitlines() if l.strip()]
-            key = next((l for l in lines if l.startswith(('tp-', 'ttp-', 'sk-', 'oc-'))), lines[0] if lines else '')
     return key
 
 
