@@ -17,6 +17,7 @@ except ImportError:
     import json as orjson
 import polars as pl
 
+from .atomic import atomic_write_json
 from .book import GridBook, COLUMNS
 
 DAY_MS = 86_400_000
@@ -133,7 +134,7 @@ def process_day(rec, store: str, trades_dir: str | None = None, overwrite=False)
         t2.replace(store / res / f'{date}.parquet')
     q.update({'date': date, 'seconds': round(time.time() - t0, 1), 'store_version': STORE_VERSION,
               'source_size': rec['size'], 'has_trades': 'buy_sz' in df.columns})
-    meta.write_text(json.dumps(q, indent=1))
+    atomic_write_json(meta, q, indent=1)
     return q
 
 

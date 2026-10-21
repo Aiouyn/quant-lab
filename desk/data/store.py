@@ -3,16 +3,20 @@
 Splits are frozen once (store/splits.json) over the full archive inventory:
   dev (60%) -> research, val (25%) -> deterministic validation, holdout (15%) -> sealed, once per strategy,
   forward -> any day added to the archive after freezing (a rolling, never-seen holdout).
-Researcher sandboxes receive `store/views/dev`, a directory of hard links to dev files only.
+Researcher sandboxes receive `store/views/dev`, a directory of hard links to dev files only, plus a
+filtered (non-linked) copy of the funding series restricted to dev-split UTC days.
 """
 from __future__ import annotations
 
 import json
 import os
 import time
+from datetime import date as _date
 from pathlib import Path
 
 import polars as pl
+
+from .atomic import atomic_write_json, atomic_write_parquet
 
 RESOLUTIONS = ('1s', '10s', '1m')
 SPLITS = ('dev', 'val', 'holdout', 'forward')
@@ -48,7 +52,7 @@ class FeatureStore:
                 new = [d for d in self._inventory_dates() if d not in frozen and d > last]
                 if new:
                     sp['forward'] = sorted(sp['forward'] + new)
-                    f.write_text(json.dumps(sp, indent=1))
+                    atomic_write_json(f, sp, indent=1)
         else:
             if not (self.root / 'meta').exists() and not refresh:
                 raise FileNotFoundError('feature store not built yet: run `python -m desk data`')
@@ -58,7 +62,7 @@ class FeatureStore:
             b = int(n * (self.settings.dev_fraction + self.settings.val_fraction))
             sp = {'created': time.time(), 'dev': dates[:a], 'val': dates[a:b], 'holdout': dates[b:], 'forward': []}
             self.root.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(sp, indent=1))
+            atomic_write_json(f, sp, indent=1)
         ingested = {p.stem for p in (self.root / '1s').glob('*.parquet')} if (self.root / '1s').exists() else set()
         sp['summary'] = {k: {'days': len(sp[k]), 'ingested': len([d for d in sp[k] if d in ingested]),
                              'first': sp[k][0] if sp[k] else None, 'last': sp[k][-1] if sp[k] else None} for k in SPLITS}
@@ -129,20 +133,25 @@ class FeatureStore:
                     except OSError:
                         import shutil
                         shutil.copy2(src, dst)
-        for name in ('funding_hl.parquet',):
-            src = self.root / name
-            if src.exists():
-                dst = view / name
-                if dst.exists():
-                    dst.unlink()
-                try:
-                    os.link(src, dst)
-                except OSError:
-                    import shutil
-                    shutil.copy2(src, dst)
-        (view / 'splits.json').write_text(json.dumps({'created': sp['created'], 'dev': sp['dev'], 'val': [], 'holdout': [], 'forward': []}))
+        # Funding spans every split: never link it. Write a filtered copy holding only dev-day hours.
+        src = self.root / 'funding_hl.parquet'
+        dst = view / 'funding_hl.parquet'
+        if src.exists():
+            atomic_write_parquet(dev_only_funding(pl.read_parquet(src), sp['dev']), dst)
+        elif dst.exists():
+            dst.unlink()
+        atomic_write_json(view / 'splits.json', {'created': sp['created'], 'dev': sp['dev'], 'val': [], 'holdout': [], 'forward': []})
         (view / 'meta').mkdir(exist_ok=True)
         return view
+
+
+def dev_only_funding(fund: pl.DataFrame, dev_dates) -> pl.DataFrame:
+    """Rows of the hourly funding frame whose `hour` (ms, UTC) falls on a dev-split UTC date."""
+    days = sorted(set(dev_dates))
+    if not days or fund.is_empty():
+        return fund.head(0)
+    day = pl.from_epoch(pl.col('hour'), time_unit='ms').dt.date()
+    return fund.filter(day.is_in([_date.fromisoformat(d) for d in days]))
 
 
 def attach_funding(df: pl.DataFrame, root: Path) -> pl.DataFrame:

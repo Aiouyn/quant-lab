@@ -17,6 +17,8 @@ from pathlib import Path
 import httpx
 import polars as pl
 
+from .atomic import atomic_write_parquet
+
 OKX_TRADES = 'https://static.okx.com/cdn/okex/traderecords/trades/daily/{ymd}/BTC-USDT-SWAP-trades-{d}.zip'
 HL_INFO = 'https://api.hyperliquid.xyz/info'
 
@@ -119,7 +121,7 @@ def fetch_hl_funding(store: Path, start_ms: int, end_ms: int | None = None, coin
                        'premium': [float(r['premium']) for r in rows]}).unique('ts').sort('ts')
     # snap to the hour boundary the payment belongs to
     df = df.with_columns(((pl.col('ts') + 30 * 60_000) // 3_600_000 * 3_600_000).alias('hour')).unique('hour', keep='last').sort('hour')
-    df.write_parquet(store / 'funding_hl.parquet')
+    atomic_write_parquet(df, store / 'funding_hl.parquet')
     return df
 
 
@@ -139,7 +141,7 @@ def fetch_okx_funding(store: Path) -> pl.DataFrame:
             after = data[-1]['fundingTime']
             time.sleep(0.2)
     df = pl.DataFrame({'ts': [int(r['fundingTime']) for r in rows], 'okx_funding': [float(r['realizedRate'] or r['fundingRate']) for r in rows]}).unique('ts').sort('ts')
-    df.write_parquet(store / 'funding_okx.parquet')
+    atomic_write_parquet(df, store / 'funding_okx.parquet')
     return df
 
 
