@@ -60,11 +60,20 @@ CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 # Charter R4/R6: insert-only tables. holdout_uses is keyed on the R4 evaluation identity (desk/lab/identity.py) and
 # outcomes go to holdout_results as new rows. UPDATE/DELETE abort; a BEFORE INSERT trigger aborts a duplicate key so
 # INSERT OR REPLACE cannot delete-and-reinsert (recursive_triggers is also ON for every connection).
-INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results')
+INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'job_tickets', 'job_ticket_uses')
 LEDGER_CORE = """
 CREATE TABLE IF NOT EXISTS holdout_uses(identity TEXT PRIMARY KEY, strategy TEXT, created REAL, components TEXT);
 CREATE TABLE IF NOT EXISTS holdout_results(id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT, strategy TEXT,
   passed INT, created REAL);
+CREATE TABLE IF NOT EXISTS job_tickets(id TEXT PRIMARY KEY, author TEXT, kind TEXT, desk TEXT, split TEXT,
+  job_sha TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS job_ticket_uses(id TEXT PRIMARY KEY, created REAL);
+CREATE TRIGGER IF NOT EXISTS job_ticket_uses_no_dup BEFORE INSERT ON job_ticket_uses
+  WHEN EXISTS (SELECT 1 FROM job_ticket_uses WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'job ticket already used'); END;
+CREATE TRIGGER IF NOT EXISTS job_tickets_no_dup BEFORE INSERT ON job_tickets
+  WHEN EXISTS (SELECT 1 FROM job_tickets WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'job_tickets is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS holdout_uses_no_dup BEFORE INSERT ON holdout_uses
   WHEN EXISTS (SELECT 1 FROM holdout_uses WHERE identity = NEW.identity)
   BEGIN SELECT RAISE(ABORT, 'holdout_uses: identity already used (one-shot holdout)'); END;
@@ -80,6 +89,17 @@ CREATE TRIGGER IF NOT EXISTS trials_no_dup_id BEFORE INSERT ON trials
 
 class HoldoutAlreadyUsed(RuntimeError):
     pass
+
+
+class TicketRefused(RuntimeError):
+    pass
+
+
+def job_sha(job: dict) -> str:
+    """Hash of the host-built job (underscore keys are host plumbing added after issuing)."""
+    import hashlib
+    body = {k: v for k, v in job.items() if not str(k).startswith('_')}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
 
 
 def _id(prefix):
@@ -342,6 +362,30 @@ class Ledger:
                 raise HoldoutAlreadyUsed(f'holdout already used by {hit[0]} for identity {identity[:16]}')
             db.execute('INSERT INTO holdout_uses(identity,strategy,created,components) VALUES(?,?,?,?)',
                        (identity, strategy, time.time(), json.dumps(components, default=str) if components else None))
+
+    # ----------------------------------------------------------------- job tickets (charter R7b)
+    def issue_ticket(self, author, job: dict, desk='unknown') -> str:
+        """Host-only: a random 128-bit id bound to this exact job. run_job refuses any job without one."""
+        import secrets
+        tid = 'T-' + secrets.token_hex(16)
+        self.x('INSERT INTO job_tickets VALUES(?,?,?,?,?,?,?)', (tid, author, job.get('type'), desk,
+               job.get('split') or 'dev', job_sha(job), time.time()))
+        return tid
+
+    def redeem_ticket(self, tid, job: dict):
+        """Check-and-consume in ONE transaction: the id must exist, match this job, and be unused."""
+        if not tid or not isinstance(tid, str):
+            raise TicketRefused('job has no ledger trial ticket (charter R7b)')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT job_sha FROM job_tickets WHERE id=?', (tid,)).fetchone()
+            if row is None:
+                db.rollback(); raise TicketRefused('unknown job ticket')
+            if row[0] != job_sha(job):
+                db.rollback(); raise TicketRefused('job ticket was issued for a different job')
+            if db.execute('SELECT 1 FROM job_ticket_uses WHERE id=?', (tid,)).fetchone():
+                db.rollback(); raise TicketRefused('job ticket already used')
+            db.execute('INSERT INTO job_ticket_uses VALUES(?,?)', (tid, time.time()))
 
     def holdout_result(self, identity, strategy, passed):
         self.x('INSERT INTO holdout_results(identity,strategy,passed,created) VALUES(?,?,?,?)',

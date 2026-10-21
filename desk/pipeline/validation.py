@@ -127,13 +127,16 @@ class Pipeline:
 
     async def _job(self, job, timeout=5400):
         slot = self.org.job_slots if self.org else None
-        r = await run_job(job, self.s, timeout_s=timeout, slot=slot)
+        r = await run_job(self._ticketed(job), self.s, timeout_s=timeout, slot=slot)
         if str(r.get('error', '')).startswith(('harness failed (memory', 'harness failed (system_memory')):
             # our infrastructure ran out of room, not the strategy: retry once with a larger cap (the memory gate waits
             # until the machine can actually provide it)
             self.L.event('pipeline', 'EVAL_RETRY_MEMORY', {'type': job.get('type'), 'split': job.get('split')})
-            r = await run_job(job, self.s, timeout_s=timeout, slot=slot, mem_mb=8000)
+            r = await run_job(self._ticketed(job), self.s, timeout_s=timeout, slot=slot, mem_mb=8000)
         return r
+
+    def _ticketed(self, job):
+        return dict(job, _ticket=self.L.issue_ticket('pipeline', job, desk=strategy_desk(job['code'])))
 
     def _notify(self, s, text, also=()):
         for who in {s['author'], *also}:
