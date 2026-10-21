@@ -13,20 +13,6 @@ BASE_DIR = Path(__file__).resolve().parent
 env_path = BASE_DIR / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# Check Desktop key file
-desktop_key_path = Path.home() / "Desktop" / "mimo key.txt"
-if desktop_key_path.exists() and not os.getenv("MIMO_API_KEY"):
-    try:
-        raw_lines = [l.strip() for l in desktop_key_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-        tp_keys = [l for l in raw_lines if l.startswith("tp-") or l.startswith("ttp-")]
-        sk_keys = [l for l in raw_lines if l.startswith("sk-")]
-        if tp_keys:
-            os.environ["MIMO_API_KEY"] = tp_keys[0]
-        elif sk_keys:
-            os.environ["MIMO_API_KEY"] = sk_keys[0]
-    except Exception:
-        pass
-
 # API Keys & Endpoints
 OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "")
 OPENCODE_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1"))
