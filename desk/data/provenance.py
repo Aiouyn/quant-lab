@@ -37,9 +37,18 @@ def _replace_from_tmp(path: Path, write):
     tmp = Path(tmp)
     try:
         write(tmp)
+        os.chmod(tmp, 0o644)                                   # mkstemp creates 0600; sandbox users must read it
         with open(tmp, 'rb') as fh:
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        try:                                                   # persist the rename (POSIX only)
+            dfd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
