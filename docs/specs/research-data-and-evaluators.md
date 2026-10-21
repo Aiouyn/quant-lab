@@ -113,14 +113,18 @@
 
 ### (3) Full Polymarket re-fetch with archived/delisted coverage: needed by #9
 - **Purpose:** #9 §4 needs a full, non-incremental re-page, because the cursor checkpoint in `desk/data/polymarket.py::fetch_markets` "may miss a market created long ago that closes later". It also needs an answer on whether gamma `closed=true` returns archived or delisted markets, which is unknown from the code.
-- **Inputs:** gamma-api `/markets/keyset` (`closed=true`, plus an `archived=true` comparison pass if the API supports it, which needs verifying), and clob `prices-history` as now.
+- **Inputs:** gamma-api `/markets/keyset` (`closed=true`). An `archived=true` query parameter appeared to be **ignored** in a single-record check (it returned markets with `archived=false`), so archived coverage stays **UNVERIFIED**. The re-page must count the markets returned with `archived=true` (field documented at https://docs.polymarket.com/market-data/market-details.md), and clob `prices-history` as now.
 - **Additional stored fields (required by #9 r2):**
-  - `closed_time` (gamma `closedTime`) and `resolution_time` (gamma field name **UNVERIFIED**, e.g. the UMA resolution timestamp). These feed #9's anchor A = min(endDate, closedTime, resolution) and its rule dropping markets with closedTime < endDate.
-  - **Trades:** per-market trade records `{market, ts, side, price, size}` from Polymarket's public trades endpoint (data-api; endpoint and fields **UNVERIFIED**). They feed #9's floor of at least 20 trades in the 7 days before the snapshot.
+  - `closed_time` (gamma `closedTime`, VERIFIED; it has a non-ISO format such as `2026-03-16 06:41:45+00`, so parse it explicitly) and `resolution_time` (gamma `umaEndDate`, field VERIFIED, meaning inferred). These feed #9's anchor A = min(endDate, closedTime, resolution) and its rule dropping markets with closedTime < endDate.
+  - Also store `conditionId` (VERIFIED), because the trades endpoint keys on it. The current fetcher stores only the gamma `id` and `yes_token`.
+  - **Trades:** per-market records `{conditionId, timestamp, side, price, size, outcomeIndex, transactionHash}` from data-api `GET /trades?market=<conditionId>&start=&end=&takerOnly=true` (VERIFIED: https://docs.polymarket.com/api-reference/core/get-trades-for-a-user-or-markets).
+    - Constraints: offset ≤ 10,000 (a 400 past that), so page inside `start`/`end` windows. Market-scoped history only reaches back about 3 years.
+    - It returns trades for markets closed in March 2026 (one `limit=1` check).
+    - Only the 7-day window before each market's snapshot is needed. They feed #9's floor of at least 20 trades in the 7 days before the snapshot.
 - **Outputs:**
   - `results/v3/store/pred/markets_full.parquet` (same columns as now, plus `closed_time`, `resolution_time` and the item-4 fields).
   - `results/v3/store/pred/trades/<market>.parquet`, plus a sha256 manifest.
-  - `results/v3/store/pred/fetch_report.json` with schema `{pages, markets_seen, kept, dropped_by_reason: {non_binary, unresolved, low_volume, parse}, archived_pass: {supported, extra_markets}, missing_price_history}`.
+  - `results/v3/store/pred/fetch_report.json` with schema `{pages, markets_seen, kept, dropped_by_reason: {non_binary, unresolved, low_volume, parse}, archived_returned_count, missing_price_history}`.
   - A fresh cursor that is not reused.
 - **Acceptance tests:**
   - **Mocked API fixture** (pages with known markets, including one "old-created, late-closed" market placed behind a stale cursor): the full mode finds it, and incremental mode documents that it misses it.
@@ -128,6 +132,7 @@
   - The price-history missing rate is reported. #9 aborts if it is over 10% of eligible markets (the threshold lives in the prereg, not the fetcher).
   - Re-running against the same mocked responses gives an identical parquet hash (G3).
   - **Fixture:** a market with closedTime < endDate is flagged; A = min(endDate, closedTime, resolution) is computed correctly. Missing `closed_time` or `resolution_time` raises; it is never imputed.
+  - **Fixture:** a mocked `/trades` response that returns a 400 at offset > 10,000 makes the fetcher switch to splitting the `start`/`end` window, and the total count is still exact.
   - **Fixture trades:** the trade count in [snapshot − 7 d, snapshot) is correct at the window boundaries. No trades after the snapshot are counted (no-lookahead).
 - **Dependencies:** P0-A.
 - **Priority:** P1. #9 can't define its universe without it.
@@ -135,7 +140,7 @@
 
 ### (4) Stored outcome labels and event/group ids: needed by #9 (clustering: event id → negRiskMarketID → (category, date of A); more than 20% on the last fallback means exploratory)
 - **Purpose:** #9 §4 excludes non-Yes/No binaries, because `fetch_markets` currently treats the first outcome as "YES" when there is no "yes" label. #9 §5–§6 also cluster bootstraps by event.
-- **Inputs:** gamma market fields `outcomes`, `events[].id`, `negRiskMarketID` (field names taken from #9 and the gamma API; their presence must be verified against live responses).
+- **Inputs:** gamma market fields `outcomes` (a JSON string), `events[].id` and `negRiskMarketID`. All are VERIFIED on a live single-record response (https://gamma-api.polymarket.com/markets/613835) and in https://docs.polymarket.com/market-data/market-details.md. Also store `archived`, `feesEnabled` and `feeType` (VERIFIED).
 - **Outputs:** new columns in `markets_full.parquet` and the panel metadata: `outcome_labels: list[str]`, `is_yes_no: bool`, `event_id: str | null`, `neg_risk_group: str | null`. If `event_id` is null for some markets, `fetch_report.json` reports the share. #9 then falls back to the `end_ms` date plus `category` cluster, and discloses that.
 - **Acceptance tests:**
   - A fixture with outcomes `["Yes","No"]`, `["No","Yes"]` and `["Team A","Team B"]` gives `is_yes_no` = T, T, F, and the YES index is correct for the second.
@@ -147,7 +152,12 @@
 
 ### (5) Dispute / ambiguous-resolution source: needed by #9
 - **Purpose:** #9 §4 excludes disputed or ambiguous resolutions. No field for this exists in the code.
-- **Inputs:** **to be identified (REQUIRED).** Candidates are gamma market fields related to UMA resolution status, or UMA optimistic-oracle dispute events on-chain. Neither has been verified here. If no reliable source is found, the alternative is a documented waiver in #9.
+- **Inputs:**
+  - **Primary (field VERIFIED):** gamma `umaResolutionStatus` and `umaResolutionStatuses`, a JSON-string history such as `["proposed","resolved"]`.
+  - **#9 rule:** flag a market as disputed if the history has more than one `proposed` entry, or any token other than `proposed` or `resolved`. The exact dispute token is UNVERIFIED.
+  - **Background:** the dispute process (2-hour challenge period, re-proposal, DVM vote) is VERIFIED at https://docs.polymarket.com/concepts/resolution.md.
+  - **Independent check (UNVERIFIED, optional):** UMA Optimistic Oracle dispute events via the UMA subgraph.
+  - Original note: **to be identified (REQUIRED).** Candidates are gamma market fields related to UMA resolution status, or UMA optimistic-oracle dispute events on-chain. Neither has been verified here. If no reliable source is found, the alternative is a documented waiver in #9.
 - **Outputs:** `results/v3/store/pred/disputes.parquet` with schema `{market, disputed: bool, source, evidence_ref}`, plus a sha256 sidecar.
 - **Acceptance tests:**
   - On a hand-labelled fixture of known disputed and clean markets (labels with cited public references), precision and recall are reported. QL Validator sets the bar.
@@ -167,6 +177,7 @@
     - **Val membership:** both A and the snapshot fall in [2026-03-01, 2026-06-01) UTC. The sleeve trades only these markets.
     - **Liquidity:** at least 20 trades in the 7 days before the snapshot (from item 3's trades).
     - **Multiple testing:** Holm–Bonferroni across the 14 buckets at α = 0.05. Each bucket's p-value comes from the cluster bootstrap.
+    - **Fees:** the current schedule is VERIFIED (https://docs.polymarket.com/trading/fees). Its rollout for non-crypto/sports categories on 2026-03-30 is UNVERIFIED officially (secondary sources only). #9 therefore uses all-trades fees as the conservative base case and a `feesEnabled`-only version as a secondary report.
     - **Costs:** an **engine change in `desk/lab/pred.py`:** an uncapped 1.5-cent half-spread for p < 0.10 or p ≥ 0.90 (1 cent otherwise), plus a category taker fee of C × feeRate × p(1−p) (rates in #9 §7, with 0.07 for unmapped categories). Both are scaled by `fee_mult`.
     - **Minimum counts:** 30 markets and 10 events per bucket.
 - **Outputs:**
