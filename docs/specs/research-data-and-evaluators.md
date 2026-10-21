@@ -86,11 +86,14 @@
 - **Priority:** P1. #4's forward paper (day 30, about 2026-11-02) is the stronger evidence and doesn't need this, but the val check does.
 - **Size:** M (about 2–3 days).
 
-### (2) FX-carry engine change and 13 rate series: needed by #8
+### (2) FX-carry engine change and rate series (10 verified, 3 pairs dropped): needed by #8
 - **Purpose:** `desk/lab/macro.py` and `macro_data.py` state that FX spot returns exclude interest-rate carry. #8 §4 requires the daily carry r_base − r_quote (ACT/360) on every `fx` row, using rates known at close t and applied over (t+1, t+2].
 - **Inputs:**
   - US: `^IRX`, already in the macro panel (class `rate`).
-  - Non-US short rates for EUR, GBP, JPY, AUD, NZD, CAD, CHF, MXN, BRL, ZAR, TRY, INR, CNY. The proposed source is OECD/FRED 3-month interbank `IR3TIB01xxM156N` (monthly). **The series IDs per currency are not verified here:** `REQUIRED`, and QL Validator must confirm them.
+  - Non-US short rates: the series IDs are now fixed in #8 §4 (OECD MEI via FRED, monthly, lagged one month).
+    - **Verified:** `IR3TIB01{EZ,GB,JP,AU,NZ,CA,CH,MX,ZA,CN}M156N`. Each FRED catalog page was checked for existence and date range covering 2014–2019; no data was downloaded.
+    - **Pairs dropped in #8:** TRY=X (`IR3TIB01TRM156N` ends 2008-04), and BRL=X and INR=X (candidate IDs `IR3TIB01BRM156N` and `IR3TIB01INM156N` are **UNVERIFIED**; their FRED pages returned 404). That leaves 11 pairs.
+    - **Correction to the earlier version of this spec:** `MXN=X`, `ZAR=X` and `CNY=X` are also quoted as USD/XXX, so the carry is r_USD − r_XXX for those pairs too.
   - Release timing: lag each monthly value by one month.
   - Pair mapping: from the `UNIVERSE` symbols in `macro_data.py`. Note that `JPY=X`, `CAD=X`, `CHF=X` and the other `XXX=X` symbols are quoted as USD/XXX, so the carry sign flips for them. `EURJPY=X` is a cross, so its carry is r_EUR − r_JPY.
 - **Outputs:**
@@ -111,8 +114,12 @@
 ### (3) Full Polymarket re-fetch with archived/delisted coverage: needed by #9
 - **Purpose:** #9 §4 needs a full, non-incremental re-page, because the cursor checkpoint in `desk/data/polymarket.py::fetch_markets` "may miss a market created long ago that closes later". It also needs an answer on whether gamma `closed=true` returns archived or delisted markets, which is unknown from the code.
 - **Inputs:** gamma-api `/markets/keyset` (`closed=true`, plus an `archived=true` comparison pass if the API supports it, which needs verifying), and clob `prices-history` as now.
+- **Additional stored fields (required by #9 r2):**
+  - `closed_time` (gamma `closedTime`) and `resolution_time` (gamma field name **UNVERIFIED**, e.g. the UMA resolution timestamp). These feed #9's anchor A = min(endDate, closedTime, resolution) and its rule dropping markets with closedTime < endDate.
+  - **Trades:** per-market trade records `{market, ts, side, price, size}` from Polymarket's public trades endpoint (data-api; endpoint and fields **UNVERIFIED**). They feed #9's floor of at least 20 trades in the 7 days before the snapshot.
 - **Outputs:**
-  - `results/v3/store/pred/markets_full.parquet` (same columns as now, plus the fields from item 4).
+  - `results/v3/store/pred/markets_full.parquet` (same columns as now, plus `closed_time`, `resolution_time` and the item-4 fields).
+  - `results/v3/store/pred/trades/<market>.parquet`, plus a sha256 manifest.
   - `results/v3/store/pred/fetch_report.json` with schema `{pages, markets_seen, kept, dropped_by_reason: {non_binary, unresolved, low_volume, parse}, archived_pass: {supported, extra_markets}, missing_price_history}`.
   - A fresh cursor that is not reused.
 - **Acceptance tests:**
@@ -120,11 +127,13 @@
   - The drop-reason counts equal the fixture's known counts.
   - The price-history missing rate is reported. #9 aborts if it is over 10% of eligible markets (the threshold lives in the prereg, not the fetcher).
   - Re-running against the same mocked responses gives an identical parquet hash (G3).
+  - **Fixture:** a market with closedTime < endDate is flagged; A = min(endDate, closedTime, resolution) is computed correctly. Missing `closed_time` or `resolution_time` raises; it is never imputed.
+  - **Fixture trades:** the trade count in [snapshot − 7 d, snapshot) is correct at the window boundaries. No trades after the snapshot are counted (no-lookahead).
 - **Dependencies:** P0-A.
 - **Priority:** P1. #9 can't define its universe without it.
 - **Size:** M (about 2 days, plus run time).
 
-### (4) Stored outcome labels and event/group ids: needed by #9
+### (4) Stored outcome labels and event/group ids: needed by #9 (clustering: event id → negRiskMarketID → (category, date of A); more than 20% on the last fallback means exploratory)
 - **Purpose:** #9 §4 excludes non-Yes/No binaries, because `fetch_markets` currently treats the first outcome as "YES" when there is no "yes" label. #9 §5–§6 also cluster bootstraps by event.
 - **Inputs:** gamma market fields `outcomes`, `events[].id`, `negRiskMarketID` (field names taken from #9 and the gamma API; their presence must be verified against live responses).
 - **Outputs:** new columns in `markets_full.parquet` and the panel metadata: `outcome_labels: list[str]`, `is_yes_no: bool`, `event_id: str | null`, `neg_risk_group: str | null`. If `event_id` is null for some markets, `fetch_report.json` reports the share. #9 then falls back to the `end_ms` date plus `category` cluster, and discloses that.
@@ -153,10 +162,12 @@
 - **Inputs:**
   - The pred panel with columns `ts, market, p, end_ms, outcome, category, volume` (`desk/lab/pred.py`), plus `event_id` and `is_yes_no` from item 4.
   - Rules fixed by #9:
-    - **Snapshot:** the last row ≤ `end_ms` − 24 h, within 6 h.
+    - **Snapshot:** the last row ≤ A − 24 h, within 6 h, where A = min(endDate, closedTime, resolution); markets with closedTime < endDate are dropped and counted.
     - **Buckets:** 14 edges.
-    - **Val membership:** both `end_ms` and the snapshot fall in [2026-03-01, 2026-06-01) UTC.
-    - **Liquidity:** at least 12 non-empty prints in the 48 h before the snapshot.
+    - **Val membership:** both A and the snapshot fall in [2026-03-01, 2026-06-01) UTC. The sleeve trades only these markets.
+    - **Liquidity:** at least 20 trades in the 7 days before the snapshot (from item 3's trades).
+    - **Multiple testing:** Holm–Bonferroni across the 14 buckets at α = 0.05. Each bucket's p-value comes from the cluster bootstrap.
+    - **Costs:** an **engine change in `desk/lab/pred.py`:** an uncapped 1.5-cent half-spread for p < 0.10 or p ≥ 0.90 (1 cent otherwise), plus a category taker fee of C × feeRate × p(1−p) (rates in #9 §7, with 0.07 for unmapped categories). Both are scaled by `fee_mult`.
     - **Minimum counts:** 30 markets and 10 events per bucket.
 - **Outputs:**
   - `results/v3/prereg/pred_flb/calibration.json`: per bucket `{n_markets, n_events, mean_price, yes_rate, miscal, ci95_lo, ci95_hi, pass}`. The bootstrap resamples events, 10,000 draws, seed 7.
@@ -169,11 +180,27 @@
   - **Clustering:** duplicating one event 50 times widens the CI compared with treating the copies as independent markets.
   - **Snapshot no-lookahead:** perturbing prices after the snapshot leaves bucket assignment unchanged.
   - **Boundary:** a market ending in val with a snapshot before 2026-03-01 is excluded and counted.
+  - **Holm fixture:** with known p-values, the rejection set equals a hand-computed Holm result.
+  - **Cost fixture:** at p = 0.03 the tail half-spread is 1.5 cents (not capped at 0.5 × 0.03 = 0.015, which here happens to coincide; also test p = 0.01, where the engine cap would give 0.005 and the new rule must give 0.015); the fee equals C × 0.07 × p(1−p) for crypto.
   - G1: holdout is never read. The fixture puts `NaN` outcomes in holdout rows and the result stays finite.
   - G3.
 - **Dependencies:** item (4) (event ids). Item (3) is needed for the real run but not for the fixture tests.
 - **Priority:** P1. It can be built in parallel against fixtures right away.
 - **Size:** M (about 2–3 days).
+
+### (7) Macro trading-day calendar and annualization fix: needed by #8
+- **Purpose:** macro panel rows are calendar days whenever any symbol trades. Crypto trades on weekends, while `desk/lab/macro.py::summarize` annualizes with 252 (`sharpe(daily, periods=252)`, `years = len(daily)/252`), so a daily series that includes weekends is mis-annualized. #8 r2 drops BTC-USD and ETH-USD and evaluates on **NYSE trading days (dates where SPY has a row) at 252**.
+- **Inputs:** the macro panel `date` and `symbol` columns, plus the #8 universe (crypto excluded).
+- **Outputs:** an evaluator option (or wrapper) that restricts the simulation to the SPY-date calendar. Returns over a gap are close-to-close, and FX carry accrues ACT/360 over the gap. It must **assert** that every evaluation date is a SPY date and not a weekend.
+- **Acceptance tests:**
+  - **Fixture:** a panel with weekend crypto rows and weekday ETF rows. After the filter, no evaluation date is a weekend, and annualized Sharpe uses √252.
+  - **Fixture:** a known constant daily return r on 252 trading days gives `ann_return` = 252·r.
+  - Including a crypto symbol in the #8 universe raises.
+  - The P&L of non-crypto symbols matches the unfiltered engine on SPY dates (regression).
+  - G1 and G3.
+- **Dependencies:** P0-A.
+- **Priority:** P1. It blocks #8, and it is small.
+- **Size:** S (about 0.5–1 day).
 
 ## Dependency graph
 ```mermaid
@@ -181,7 +208,9 @@ graph TD
   A[P0-A store_builder fix + provenance] --> B[P0-B splits.json hashing + metadata]
   A --> I3[(3) Polymarket full re-fetch]
   B --> I1[(1) HL-native carry evaluator]
-  B --> I2[(2) FX carry engine + 13 rate series]
+  B --> I2[(2) FX carry engine + 10 verified rate series]
+  A --> I7[(7) macro trading-day calendar]
+  I7 --> P8
   I3 --> I4[(4) outcome labels + event ids]
   I3 --> I5[(5) dispute source]
   I4 --> I6[(6) bucket/cluster evaluator + sleeve]
@@ -205,7 +234,8 @@ graph TD
 4. **(6) against fixtures** and **(3)**, in parallel. Item (6) needs no real data to build and test.
 5. **(4):** in the same fetch as (3).
 6. **(1):** HL-native carry evaluator. Its timing can follow the #4 forward verdict around 2026-11-02.
-7. **(2):** FX carry and rates. The sourcing has the longest lead time, so start it early if capacity allows.
-8. **(5):** dispute source, or a decision to waive it.
+7. **(7):** macro calendar fix (small; it can go earlier).
+8. **(2):** FX carry and rates. The sourcing has the longest lead time, so start it early if capacity allows.
+9. **(5):** dispute source, or a decision to waive it.
 
 Nothing on this list authorises running any prereg. Each still needs its own REQUIRED-BEFORE-RUN items filled and the gating sign-off.
