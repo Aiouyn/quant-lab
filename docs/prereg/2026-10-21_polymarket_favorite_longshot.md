@@ -4,6 +4,8 @@
 - **Desk:** pred.
 - **Reviewers:** QL Validator, QL Safety.
 
+> **BLOCKED:** blocked until `desk/lab/stats.py` ships a G7-compliant bootstrap (assigned separately). The pin for that implementation (commit + SHA-256) is `REQUIRED-BEFORE-RUN`. Every bootstrap bound in this document follows the PR #10 spec rule G7.
+
 ## 0. Run conditions (binding)
 - This test runs **once, on val only, and never on holdout.** The holdout is suspect (`JOURNEY.md` §5.1/§7.3, PR #3).
 - It runs only after both of these are signed off by QL Validator:
@@ -41,7 +43,8 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 | repo HEAD (origin/main) | `313b185cac9e53c9d0bfcaf48774b34e79d72d34` |
 | `desk/lab/pred.py`, last changed `7c140052faccaf3e76833ad1c9c711038c2129dc` | SHA-256 `df51ddfc82ac037458e1212b77d19067ae5e473e6e6da2150cead6cf3b8498a3` |
 | `desk/data/polymarket.py`, last changed `7c140052faccaf3e76833ad1c9c711038c2129dc` | SHA-256 `ed66be282113d4d12aa1394cc023b1995345aa5184463ce7570309a923345872` |
-| `desk/lab/stats.py` (`dsr`, `block_bootstrap_lower`, `mean_ex_top`) | SHA-256 `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| `desk/lab/stats.py` (`dsr`, `mean_ex_top`) | SHA-256 `8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c` |
+| G7-compliant bootstrap in `desk/lab/stats.py` (not yet shipped) | `REQUIRED-BEFORE-RUN` (commit + SHA-256) |
 | `results/v3/store/pred/splits.json` | SHA-256 `REQUIRED-BEFORE-RUN` (must equal §1) |
 | Calibration evaluator (bucket and event-clustered bootstrap; not in repo) | `REQUIRED-BEFORE-RUN` (commit + SHA-256) |
 | Sleeve strategy file | `REQUIRED-BEFORE-RUN` (commit + SHA-256) |
@@ -87,7 +90,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 
 ## 5. Calibration test (val)
 - **Per bucket b:** miscalibration m_b = (realized YES rate) − (mean snapshot price), with each market weighted equally.
-- **CI:** 95% percentile CI from a **cluster bootstrap** (clustering unit from §4): resample clusters with replacement, 10,000 draws, seed 7. The two-sided p-value is p_b = 2·min(share of draws with m* ≤ 0, share with m* ≥ 0), floored at 1/10,000.
+- **CI:** a two-sided 95% CI from a **cluster bootstrap** (clustering unit from §4) in the **G7 clustered form**: whole clusters are resampled with replacement, the interval is studentized or BCa (no percentile intervals), with ≥ 5,000 draws, the seed logged, and the clustered null-drill false-positive check (calibrated Bernoulli(p) outcomes with the cluster structure kept) passed. The two-sided p-value p_b is the bootstrap-t p-value for H0: m_b = 0, floored at 1/(number of draws).
 - **Threshold:** τ_b = 2 × the base half-spread for that bucket (§7). That is 2 cents in the middle buckets (10–90 cents) and 3 cents in the tail buckets (0–10 and 90–100 cents).
 - **Multiple testing: Holm–Bonferroni** across the 14 buckets at family α = 0.05.
   - Sort the p-values in ascending order as p_(1) ≤ … ≤ p_(14), and reject H0_(k) while p_(k) ≤ 0.05 / (14 − k + 1). Stop at the first failure.
@@ -112,10 +115,10 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
      - No other pred-desk strategy is known to have been evaluated on val (`RESEARCH_LOG_2026-10-03.md` lists none). The ledger count of distinct pred strategies with a val evaluation in `company.db` is `REQUIRED-BEFORE-RUN`, and if it is larger, that number is used.
      - `trial_sr_std` comes from the ledger: `REQUIRED-BEFORE-RUN`.
   2. **Mean excluding the top 5 days > 0** (`stats.mean_ex_top`, k = 5).
-  3. **Block-bootstrap 95% lower bound ≥ 0** on daily P&L (`stats.block_bootstrap_lower`, defaults: block 5, n 2000, alpha 0.05, seed 7).
+  3. **Block-bootstrap 95% lower bound ≥ 0** (one-sided) on daily P&L, computed per the PR #10 spec rule **G7** (studentized or BCa interval; block size max(5, ceil(T^(1/3))); ≥ 5,000 draws; seed logged in the manifest and the ledger row; passes the null-drill false-positive check).
   4. **Net P&L > 0**, and both val halves (2026-03-01..04-15, 2026-04-16..05-31) have positive net P&L.
 
-  Also required: event-clustered bootstrap of the sleeve's per-market P&L, with the 95% lower bound ≥ 0, so that a single large event can't carry the result.
+  Also required: an event-clustered bootstrap (G7 clustered form) of the sleeve's per-market P&L, with a one-sided 95% lower bound ≥ 0, so that a single large event can't carry the result.
 - **Reporting:** all 14 bucket results and the sleeve are reported, with every metric and each stress. Nothing is selected afterwards. A FAIL is final; any change counts as a new trial and a new pre-registration. A PASS only makes the strategy a forward-paper candidate. Deployment needs forward results and human approval.
 
 ## 7. Costs: fees, spread, and why they're likely optimistic
