@@ -261,6 +261,47 @@ def _job_env():
     return env
 
 
+def _commit_factor_values(job, out_dir, store_root, res):
+    """HOST side: move ONLY this job's own factor values (file name derived from the host's job['factor_id'], never
+    from what the jail wrote) into the shared cache after validating them; record provenance in a manifest keyed by
+    sha256(code) + the data-view name. Anything else the jail left in its output dir is discarded."""
+    import hashlib
+    import numpy as np
+    import polars as pl
+    fid = str(job.get('factor_id') or '')
+    if not fid or not all(c.isalnum() or c in '-_' for c in fid):
+        return False
+    vdir = Path(job['values_dir'])
+    desk = job.get('desk')
+    name = f'{fid}.parquet' if desk in ('perps', 'macro', 'pred') else f"{fid}_{job.get('resolution', '1m')}.npy"
+    src = Path(out_dir) / name
+    if not src.is_file() or src.is_symlink():
+        return False
+    try:
+        if name.endswith('.parquet'):
+            df = pl.read_parquet(src)
+            v = df['lv'].to_numpy() if 'lv' in df.columns else None
+        else:
+            v = np.load(src, allow_pickle=False)
+        if v is None or v.ndim != 1 or not np.issubdtype(v.dtype, np.number):
+            raise ValueError('bad shape/dtype')
+    except Exception as e:
+        return False
+    tmp = vdir / f'.{name}.{uuid.uuid4().hex[:6]}.tmp'
+    import shutil
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, vdir / name)
+    man = vdir / '_manifest.json'
+    m = json.loads(man.read_text()) if man.exists() else {}
+    m[name] = {'factor_id': fid, 'code_sha256': hashlib.sha256(str(job.get('code', '')).encode()).hexdigest(),
+               'view': Path(store_root).name, 'file_sha256': hashlib.sha256((vdir / name).read_bytes()).hexdigest(),
+               'committed': time.time()}
+    tmpm = vdir / f'._manifest.{uuid.uuid4().hex[:6]}.tmp'
+    tmpm.write_text(json.dumps(m, indent=1))
+    os.replace(tmpm, man)
+    return True
+
+
 async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
     """Harness job (it executes agent strategy/factor modules) in the OS jail.
 
@@ -283,9 +324,14 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
             job = dict(job, _home=str(settings.home), _store=str(store_root))   # the harness evaluates on THIS view
             jp.write_text(json.dumps(job, default=str))
             rw = [jdir.resolve()]
-            if job.get('values_dir'):
-                rw.append(Path(job['values_dir']).resolve())
             ro = [Path(store_root).resolve()]           # ONLY the job's split view; no artifacts/, no full store
+            if job.get('values_dir'):
+                # shared factor cache: READ-ONLY in the jail; the job writes its own values to a private dir and
+                # the host validates + commits them (_commit_factor_values)
+                Path(job['values_dir']).mkdir(parents=True, exist_ok=True)
+                ro.append(Path(job['values_dir']).resolve())
+                job['_out_values'] = str((jdir / 'values').resolve())
+                jp.write_text(json.dumps(job, default=str))
             argv, pre = jail.python_cmd([str(Path(__file__).resolve().parent / '_harness_entry.py'), str(jp.resolve()),
                                          str(op.resolve())], rw=rw, ro=ro, cwd=ROOT,
                                         lim=jail.limits(timeout_s=timeout_s, mem_mb=mem_mb))
@@ -300,6 +346,8 @@ async def run_job(job: dict, settings, timeout_s=3600, mem_mb=None, slot=None):
                 killed, _ = await watcher
             if op.exists():
                 res = json.loads(op.read_text())
+                if job.get('values_dir') and 'error' not in res:
+                    _commit_factor_values(job, jdir / 'values', store_root, res)
             else:
                 res = {'error': f'harness failed ({killed or proc.returncode})',
                        'stderr': _clip(err.decode('utf-8', 'replace'), 800, 2500)}

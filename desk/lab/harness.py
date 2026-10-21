@@ -316,8 +316,9 @@ def panel_factor_eval(job):
     out = evaluate(job['code'], panel, desk, lib)
     vals = out.pop('_values')
     if job.get('factor_id'):
-        vdir.mkdir(parents=True, exist_ok=True)
-        vals.write_parquet(vdir / f"{job['factor_id']}.parquet", compression='zstd')
+        odir = Path(job.get('_out_values') or vdir)      # jailed: private per-job dir; the host commits it to the cache
+        odir.mkdir(parents=True, exist_ok=True)
+        vals.write_parquet(odir / f"{job['factor_id']}.parquet", compression='zstd')
     return out
 
 
@@ -353,7 +354,6 @@ def factor_eval(job):
     if bad:
         report['causality_issue'] = f'{bad} values changed when future rows were removed'
     cache = Path(job['values_dir'])
-    cache.mkdir(parents=True, exist_ok=True)
     key = f"{job['factor_id']}_{res}.npy"
     lib = {}
     for p in cache.glob(f'*_{res}.npy'):
@@ -362,7 +362,9 @@ def factor_eval(job):
             if len(v) == len(vals):
                 lib[p.name.rsplit('_', 1)[0]] = v
     report['novelty'] = novelty(vals, lib)
-    np.save(cache / key, vals.astype(np.float32))
+    odir = Path(job.get('_out_values') or cache)         # jailed: private per-job dir; the host commits it to the cache
+    odir.mkdir(parents=True, exist_ok=True)
+    np.save(odir / key, vals.astype(np.float32))
     report['benchmark_days'] = len(days)
     return report
 
