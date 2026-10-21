@@ -26,7 +26,11 @@
 - `end_ms` is the market's **scheduled end date** (`endDate`, falling back to `closedTime`; see `polymarket.py::fetch_markets`). It is not the UMA resolution timestamp.
 - A market whose life spans a cut-off therefore contributes price rows to two splits.
 
-**Rule used in this test (stricter than the engine, and fixed now).** A market belongs to val if and only if **both** its `end_ms` **and** its snapshot time (§3) fall inside [2026-03-01 00:00, 2026-06-01 00:00) UTC. Markets that end in val but have their snapshot before 2026-03-01 are dropped and counted.
+**Rule used in this test (stricter than the engine, and fixed now).**
+- **Anchor time:** A = min(endDate, closedTime, resolution time), all in UTC. `closedTime` and the resolution timestamp are **not stored** by the current fetcher; see the spec (PR #10, items 3–4). Both are `REQUIRED-BEFORE-RUN`.
+- **Early-closed markets:** markets with closedTime < endDate are **dropped and counted**. They are typically markets resolved early, where the scheduled end isn't the real end.
+- **Val membership:** a market belongs to val if and only if **both** A **and** its snapshot time (A − 24 h, §3) fall inside [2026-03-01 00:00, 2026-06-01 00:00) UTC. Markets with A in val but the snapshot before 2026-03-01 are dropped and counted.
+- **Sleeve:** the trading sleeve (§6) trades **only** markets selected by this rule, from the start of val.
 
 The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied on (PR #3). The file hash is the pin.
 
@@ -45,8 +49,8 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 **Re-pin rule:** if gating, the engine, stats, or the data fetcher changes, every row must be re-pinned in a commit before the run, and the diff disclosed.
 
 ## 3. Price snapshot and buckets (fixed now; not tuned)
-- **Snapshot:** the YES price `p` from the last panel row with `ts ≤ end_ms − 24 h`.
-  - That row must be within 6 h of `end_ms − 24 h`. Otherwise the market is dropped as stale and counted.
+- **Snapshot:** the YES price `p` from the last panel row with `ts ≤ A − 24 h`, where A is the anchor from §1.
+  - That row must be within 6 h of A − 24 h. Otherwise the market is dropped as stale and counted.
   - Panel prices are hourly (`fidelity=60`), and each hour keeps the last print (`polymarket.py::build`).
 - **Bucket edges, in cents of YES price, half-open [lo, hi) with the last bucket closed:**
   `0–2, 2–5, 5–10, 10–20, 20–30, 30–40, 40–50, 50–60, 60–70, 70–80, 80–90, 90–95, 95–98, 98–100`. That is **14 buckets**.
@@ -62,21 +66,33 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 - **Additional exclusions (fixed now):**
   1. Markets whose outcomes are not literally Yes/No, for example "Team A vs Team B". With those, "YES" is arbitrary, which breaks the favorite-longshot reading. The outcome labels are not stored in the panel, so this needs a re-fetch or the raw labels: `REQUIRED-BEFORE-RUN`.
   2. Markets with a disputed or ambiguous resolution (UMA dispute or clarification). No field for this exists in the code: `REQUIRED-BEFORE-RUN` (a source must be identified, or the exclusion is waived with that disclosed).
-- **Multi-outcome events (neg-risk groups):** each candidate in a group like "Who will win X?" arrives as a separate binary market. They are **kept**, but they are **clustered by event** in every bootstrap (§5).
-  - The event or group id (`events[].id` / `negRiskMarketID`) is **not stored** by the current fetcher: `REQUIRED-BEFORE-RUN`.
-  - If it can't be obtained, the fallback is to cluster by `end_ms` date and `category`, which is a cruder proxy. The run must disclose that.
+- **Multi-outcome events (neg-risk groups):** each candidate in a group like "Who will win X?" arrives as a separate binary market. They are **kept** and clustered as follows.
+- **Clustering unit (fixed now):**
+  1. **Primary:** the gamma event id (`events[0].id`).
+  2. **Fallback 1:** if there is no event id, `negRiskMarketID`.
+  3. **Fallback 2:** if neither exists, the pair (`category`, UTC date of A).
+  - Neither id is stored by the current fetcher (`REQUIRED-BEFORE-RUN`; PR #10 item 4). The field names come from the gamma API and are **UNVERIFIED** against live responses.
+  - If more than 20% of val markets need Fallback 2, the calibration result is labeled **exploratory** and can't PASS.
 - **Survivorship and selection check (from the fetch logic):**
   - **Volume look-ahead:** `MIN_VOLUME` filters on **final** lifetime volume, which is a look-ahead selection on popularity (`pred.py` docstring). Popular markets may be better calibrated, so this biases toward finding *no* effect. It is disclosed, not corrected.
   - **Incremental-refresh gap:** the cursor checkpoint "may miss a market created long ago that closes later" (`fetch_markets` docstring). The val universe must come from a **full, non-incremental** re-page (`REQUIRED-BEFORE-RUN`: record the page count and market count).
   - **Archived or delisted markets:** whether gamma `closed=true` returns archived or delisted markets is **unknown** from the code: `REQUIRED-BEFORE-RUN` (check the API docs or compare against `archived=true`).
   - **Missing price history:** markets with no price history from `fetch_prices` are silently missing from the panel. The run must report counts (resolved in val ≥ $250k, against those with a snapshot). If more than 10% are missing, the run aborts.
-- **Liquidity/volume floor (fixed now):** lifetime volume of at least $250k (as in the code), **and** at least 12 non-empty hourly prints in the 48 h before the snapshot. Volume at snapshot time is not available, so this print count is the liquidity proxy.
+- **Liquidity floor (fixed now):**
+  - Lifetime volume of at least $250k (as in the code), **and**
+  - at least **20 trades in the 7 days before the snapshot** (a trade-count floor).
+  - Trades are **not stored** by the current fetcher. The candidate source is Polymarket's public trades endpoint (data-api), which is **UNVERIFIED**. It is added to the spec (PR #10 item 3). `REQUIRED-BEFORE-RUN`.
+  - If no trade source is verified, the test can't run as pre-registered. There is **no** fallback to price-print counts.
 
 ## 5. Calibration test (val)
 - **Per bucket b:** miscalibration m_b = (realized YES rate) − (mean snapshot price), with each market weighted equally.
-- **CI:** 95% percentile CI from a **bootstrap clustered by event**: resample events with replacement, 10,000 draws, seed 7.
-- **Bucket passes** if |m_b| > **2 cents** (2 × the 1-cent half-spread in `PredCost.half_spread`; the uncapped value is used, which is conservative near 0 and 1) **and** the CI excludes 0.
-- **Multiple testing:** each of the 14 buckets is one trial (§6). At least 30 markets **and** at least 10 events are required per bucket. Buckets below that are reported as "insufficient" and count as not passed.
+- **CI:** 95% percentile CI from a **cluster bootstrap** (clustering unit from §4): resample clusters with replacement, 10,000 draws, seed 7. The two-sided p-value is p_b = 2·min(share of draws with m* ≤ 0, share with m* ≥ 0), floored at 1/10,000.
+- **Threshold:** τ_b = 2 × the base half-spread for that bucket (§7). That is 2 cents in the middle buckets (10–90 cents) and 3 cents in the tail buckets (0–10 and 90–100 cents).
+- **Multiple testing: Holm–Bonferroni** across the 14 buckets at family α = 0.05.
+  - Sort the p-values in ascending order as p_(1) ≤ … ≤ p_(14), and reject H0_(k) while p_(k) ≤ 0.05 / (14 − k + 1). Stop at the first failure.
+  - **Bucket passes** if and only if it is Holm-rejected **and** |m_b| > τ_b **and** the 95% CI excludes 0.
+  - Results that pass only without the Holm adjustment are labeled **exploratory** and never count as a PASS.
+- **Minimum sample:** at least 30 markets **and** at least 10 clusters per bucket. Buckets below that are "insufficient". They count as not passed but still count in the 14.
 - The calibration result is a **finding**, not a trading licence. The sleeve is judged separately (§6).
 
 ## 6. Trading sleeve (val)
@@ -85,11 +101,13 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   - **Buy favorites:** hold **YES** (+w) on markets priced in 90–95, 95–98 or 98–100 cents.
   - Hold to resolution. Each position gets equal weight w, with gross capped at `PredCost.max_gross` = 1 across open positions (engine re-scaling).
   - Targets stay constant once entered, as required by `run_pred`.
-- **Costs:** `PredCost` defaults: half-spread 1 cent (capped at half the distance to 0/1, minimum 0.1 cent), fill at the next observed price (`delay_rows = 1`), $100k unit notional.
-- **Stresses (both reported; both must pass conditions 2–4 below):** `stressed(fee_mult=1.5)` for 1.5× cost, and `stressed(fee_mult=1.0, delay_rows=1)` for one extra row of delay (two rows in total).
+- **Costs (base case; see §7):** tail-bucket half-spread of 1.5 cents (3-cent full spread), with **no** cap at half the distance to 0/1. Mid-bucket half-spread of 1 cent (`PredCost` default). Plus taker fees per §7, and a fill at the next observed price (`delay_rows = 1`). Unit notional $100k.
+  - The uncapped tail spread needs an engine change (PR #10 item 6).
+- **Window:** only markets selected under §1. Entries happen at the snapshot, starting no earlier than 2026-03-01. No position is opened in a market whose snapshot falls before val.
+- **Stresses (both reported; both must pass conditions 2–4 below):** 1.5× all costs (spread and fees), and one extra row of delay (`delay_rows = 2`).
 - **Pass bar (base costs, val):**
   1. **DSR > 0.95** (`stats.dsr` on daily P&L) with **n_trials = max(15, ledger count)**.
-     - **Basis for 15:** the 14 bucket tests in §5, which are looks at the same val outcomes, plus 1 sleeve configuration.
+     - **Basis for 15:** the 14 bucket tests in §5 (each a look at the same val outcomes, counted as trials, including insufficient ones), plus 1 sleeve configuration. The ledger count is a **hard floor**.
      - No other pred-desk strategy is known to have been evaluated on val (`RESEARCH_LOG_2026-10-03.md` lists none). The ledger count of distinct pred strategies with a val evaluation in `company.db` is `REQUIRED-BEFORE-RUN`, and if it is larger, that number is used.
      - `trial_sr_std` comes from the ledger: `REQUIRED-BEFORE-RUN`.
   2. **Mean excluding the top 5 days > 0** (`stats.mean_ex_top`, k = 5).
@@ -99,10 +117,17 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   Also required: event-clustered bootstrap of the sleeve's per-market P&L, with the 95% lower bound ≥ 0, so that a single large event can't carry the result.
 - **Reporting:** all 14 bucket results and the sleeve are reported, with every metric and each stress. Nothing is selected afterwards. A FAIL is final; any change counts as a new trial and a new pre-registration. A PASS only makes the strategy a forward-paper candidate. Deployment needs forward results and human approval.
 
-## 7. Disclosure: costs are likely optimistic
-- The 1-cent half-spread (`PredCost.half_spread`) is a flat assumption. For thin markets, and for extreme prices near 0 or 1 where books are one-sided, the real spread and depth are likely worse.
-- Fill at "the next observed price ~1 h later" is not a guaranteed fill.
-- The 1.5× stress may not be enough. If an order-book snapshot source becomes available, re-checking costs against it should come **before** any forward paper.
+## 7. Costs: fees, spread, and why they're likely optimistic
+- **Taker fees (source: Polymarket help center, "Trading Fees", dated 2026-07-10, https://help.polymarket.com/en/articles/13364478-trading-fees; also https://docs.polymarket.com/trading/fees):**
+  - The formula is fee = C × feeRate × p × (1 − p), where C is the number of shares and p the share price. Makers pay nothing.
+  - Taker rates by category: Crypto 0.07; Sports, Economics, Culture, Weather and Other 0.05; Finance, Politics, Mentions and Tech 0.04; Geopolitics 0.
+  - **UNVERIFIED for the val period:** whether this schedule (or any taker fee) applied in March–May 2026. As the base case, the schedule above is applied conservatively to every val trade by its `category`. A category that can't be mapped uses 0.07.
+  - Taker rebates are ignored. Polymarket US (a separate CFTC venue with Θ = 0.0695) is out of scope.
+- **Spread:**
+  - The base case models a **3-cent full spread (1.5-cent half-spread) in the tail buckets (p < 10 cents or p ≥ 90 cents)**, uncapped. That is above the engine default because books are thin and one-sided there.
+  - The mid buckets use 1 cent (`PredCost.half_spread`).
+  - The 1.5× stress raises these to 2.25 / 1.5 cents.
+- **Why it's likely still optimistic:** depth isn't modelled, fill at "the next observed price ~1 h later" isn't guaranteed, and the spread is likely worse in thin markets than assumed. If an order-book snapshot source becomes available, costs must be re-checked against it **before** any forward paper.
 - Capital is locked until resolution. Opportunity cost and the risk of resolution disputes are not modelled.
 
 ## 8. Open items (REQUIRED-BEFORE-RUN)
@@ -110,9 +135,14 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 2. `provenance.json` showing real Polymarket data (not the synthetic fallback).
 3. A full, non-incremental market re-page, with page and market counts recorded.
 4. Whether `closed=true` includes archived or delisted markets.
-5. Outcome labels, to exclude non-Yes/No binaries.
-6. A source for disputed or ambiguous resolutions, or a disclosed waiver.
-7. The event or neg-risk group id per market, for clustering.
-8. Evaluator and sleeve strategy commits, with SHA-256 hashes.
-9. The ledger's pred val trial count and `trial_sr_std`.
-10. Sign-off from QL Validator that eval gating is fixed.
+5. Stored `closedTime` and resolution timestamp per market (for the §1 anchor).
+6. Stored outcome labels, to exclude non-Yes/No binaries.
+7. Stored event id and `negRiskMarketID` (§4 clustering). The field names are UNVERIFIED.
+8. A trade-count source and stored trades (§4 liquidity floor). The data-api endpoint is UNVERIFIED.
+9. A source for disputed or ambiguous resolutions, or a disclosed waiver.
+10. The engine change for the uncapped tail half-spread and category taker fees (§6–§7).
+11. Evaluator (with Holm and cluster bootstrap) and sleeve strategy commits, with SHA-256 hashes.
+12. The ledger's pred val trial count (hard floor) and `trial_sr_std`.
+13. Sign-off from QL Validator that eval gating is fixed.
+
+**UNVERIFIED:** the gamma field names (`events[].id`, `negRiskMarketID`, `closedTime`, resolution time); the trades endpoint; whether the fee schedule applied during val.
