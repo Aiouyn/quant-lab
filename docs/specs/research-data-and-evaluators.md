@@ -27,17 +27,20 @@
     - Test: inject an exception mid-write. The final path is either absent or holds the previous complete version, and no `*.tmp` file is left behind (or the run fails loudly naming it).
 - **G5, nothing fabricated:** when an input is missing, the code **raises**. It never imputes or substitutes synthetic data.
 - **G6, ledger trial row (mandatory; JSON alone is not enough):**
-  - Every evaluator run, whether it passes, fails or aborts after loading data, writes **one row** to the ledger trials table with `{desk, split, family, strategy_code_sha256, config_sha256, evaluator_commit, metric summary (e.g. sharpe, days), result_json_sha256, created}`.
-  - This depends on the R7a ledger schema change (P0-C). Until R7a lands, the evaluator **refuses to run** on val. It does not fall back to JSON-only logging.
-  - Test: run an evaluator on a fixture against a temporary ledger, and assert exactly one new row with every field non-null, matching the run's hashes.
-  - Test: a second run with a changed config gives a second row with a different `config_sha256`.
-  - Test: a run that aborts on a G1 or G4 check writes **no** trial row, because no data was evaluated.
+  - Every evaluator run, whether it passes, fails or aborts after loading data, produces **one trial row** carrying the **R4 strategy identity** (per Validator charter, pending: branch `validator/gate-charter` was not on origin at the time of writing, so the exact field list must be taken from R4 when it is published). At minimum the row must carry `{desk, split, family, strategy_code_sha256, config_sha256}`, plus `evaluator_commit`, a metric summary, `result_json_sha256` and `created`.
+  - **Written host-side (R7c, per Validator charter, pending):** the evaluator process **does not write to the ledger**. It emits its result and manifest (G4). The **host-side harness** then validates them and writes the row into the **ledger core that QL Engineer is building**, which is the only sink. An evaluator with direct ledger write access fails review.
+  - This depends on R7a (P0-C). Until R7a and the ledger core land, val runs are refused. There is no JSON-only fallback.
+  - **Tests:**
+    - A fixture run through the host harness against a temporary ledger core gives exactly one new row, with every R4 identity field non-null and matching the run's hashes.
+    - A changed config gives a second row with a different `config_sha256`.
+    - A G1 or G4 abort writes **no** row.
+    - The evaluator process runs with **no** ledger credentials or handle: an attempted write from inside it raises.
 - **G7, bootstrap standard (applies to every bootstrap in every evaluator: items 1, 2 and 7 (the macro evaluator), and 6):**
   - The method is **studentized (bootstrap-t) or BCa**. Plain percentile intervals aren't allowed. The method used is logged.
   - Daily series use a stationary or circular block bootstrap with **block size = max(5, ceil(T^(1/3)))**, where T is the series length. Cluster bootstraps (#9) resample whole clusters, and the same method rule applies.
   - Use **≥ 5,000 draws**, with the seed logged in the manifest and the trial row.
   - **Null-drill check (acceptance test for every evaluator):** on 500 synthetic zero-mean series (or shuffled or sign-randomized versions of a fixture), the one-sided 95% lower bound must exclude 0 (a false positive) in **≤ 5%** of runs, with binomial tolerance: fail if the count exceeds 35 of 500. For the cluster bootstrap, use calibrated Bernoulli(p) outcomes with the cluster structure kept. On a planted-signal fixture, the bound must exclude 0 in ≥ 80% of runs, so the check also covers power.
-  - **Conflict note:** `desk/lab/stats.py::block_bootstrap_lower` (a percentile interval with block 5, n 2000 and seed 7, as defaults) does **not** meet this standard. A conforming implementation is needed; changing stats/gates belongs to Validator / RSI Architect. Preregs #4, #8 and #9 currently cite the `block_bootstrap_lower` defaults, and #9 cites a 10,000-draw percentile cluster bootstrap. **These conflict with G7 and are flagged here, not edited.** The prereg owners must amend them before running.
+  - **Conflict note:** the existing bootstrap helper in `desk/lab/stats.py` (non-studentized, fixed small block, too few draws by default) does **not** meet this standard. A G7-compliant implementation is needed; changing stats/gates belongs to Validator / RSI Architect, and it is assigned separately. Preregs #4, #8 and #9 have been amended to cite G7 and are BLOCKED until it ships.
 
 ## P0 prerequisites
 
@@ -101,7 +104,7 @@
   - Val window from P0-B.
   - Costs and rules exactly as in #4 §5–§7: 10 bps per entry, exit and re-hedge notional; re-hedge monthly or when |Δprice since last hedge| > 40%; 1.15× capital; USDC interest excluded; 1.5× stress.
 - **Outputs:** `results/v3/prereg/hl_carry/val_result.json` containing:
-  - per coin and combined: annualized return on capital, each quarter's return, max drawdown, share of hours with negative funding, `block_bootstrap_lower`, DSR inputs
+  - per coin and combined: annualized return on capital, each quarter's return, max drawdown, share of hours with negative funding, the G7 bootstrap lower bound, DSR inputs
   - the HYPE coverage rule from #4 §5: a BTC-only figure always, with HYPE excluded below 90 val days
   - a manifest per G4
 - **Acceptance tests:**
@@ -109,7 +112,7 @@
   - **Fixture 2:** a +45% price path triggers exactly one re-hedge, charged 10 bps on the re-hedged notional.
   - **Fixture 3:** negative funding gives a negative return, with the sign checked.
   - **Fixture 4:** 1.5× stress raises costs by exactly 1.5×.
-  - G1 (asked for holdout, it raises), G2, G3.
+  - G1 (asked for holdout or forward, it raises), G2, G3, G6, G7 null drill.
 - **Dependencies:** P0-A, P0-B.
 - **Priority:** P1. #4's forward paper (day 30, about 2026-11-02) is the stronger evidence and doesn't need this, but the val check does.
 - **Size:** M (about 2–3 days).
@@ -147,7 +150,7 @@
     - The log records `rule` per row.
   - Non-fx rows' P&L is byte-identical before and after the change (regression hash).
   - A missing currency raises or excludes the pair; it is never filled.
-  - G1, G3.
+  - G1 (holdout and forward blocked), G3, G6, G7 null drill.
 - **Dependencies:** P0-A (macro store real), P0-B.
 - **Priority:** P1. It blocks #8 completely, and the risk premium #8 targets is well documented, but #8 also needs the configs written.
 - **Size:** M (about 2–4 days, mostly sourcing the series and checking quoting).
@@ -232,8 +235,8 @@
     - **Costs:** an **engine change in `desk/lab/pred.py`:** an uncapped 1.5-cent half-spread for p < 0.10 or p ≥ 0.90 (1 cent otherwise), plus a category taker fee of C × feeRate × p(1−p) (rates in #9 §7, with 0.07 for unmapped categories). Both are scaled by `fee_mult`.
     - **Minimum counts:** 30 markets and 10 events per bucket.
 - **Outputs:**
-  - `results/v3/prereg/pred_flb/calibration.json`: per bucket `{n_markets, n_events, mean_price, yes_rate, miscal, ci95_lo, ci95_hi, pass}`. The bootstrap resamples events, 10,000 draws, seed 7.
-  - `sleeve.json`: base, 1.5× cost and +1 delay-row runs via `desk/lab/pred.py::run_pred` / `summarize_pred`, plus `block_bootstrap_lower`, `mean_ex_top`, results per half, an event-clustered lower bound, and DSR inputs.
+  - `results/v3/prereg/pred_flb/calibration.json`: per bucket `{n_markets, n_events, mean_price, yes_rate, miscal, ci95_lo, ci95_hi, pass}`. The bootstrap follows G7's clustered form (resamples clusters; studentized; ≥ 5,000 draws; seed logged).
+  - `sleeve.json`: base, 1.5× cost and +1 delay-row runs via `desk/lab/pred.py::run_pred` / `summarize_pred`, plus the G7 bootstrap lower bound, `mean_ex_top`, results per half, an event-clustered lower bound, and DSR inputs.
   - The strategy file `desk/strategies/pred_flb_sleeve.py`, following the `pred.py` strategy contract (path is a proposal).
   - Manifests per G4.
 - **Acceptance tests:**
@@ -254,7 +257,7 @@
     - On the clustered null drill (calibrated outcomes), p-values are roughly uniform: the share with p < 0.05 is ≤ 5% within binomial tolerance.
     - On a fixture where m̂ is far from 0, an uncentred version (t* = m*/se*) would give a large p, while the centred one gives a small p. This guards against the common centring bug.
   - **Cost fixture:** at p = 0.03 the tail half-spread is 1.5 cents (not capped at 0.5 × 0.03 = 0.015, which here happens to coincide; also test p = 0.01, where the engine cap would give 0.005 and the new rule must give 0.015); the fee equals C × 0.07 × p(1−p) for crypto.
-  - G1: holdout is never read. The fixture puts `NaN` outcomes in holdout rows and the result stays finite.
+  - G1: neither holdout nor forward is read. The fixture puts `NaN` outcomes in holdout and forward rows and the result stays finite.
   - G3.
 - **Dependencies:** item (4) (event ids). Item (3) is needed for the real run but not for the fixture tests.
 - **Priority:** P1. It can be built in parallel against fixtures right away.
@@ -269,7 +272,7 @@
   - **Fixture:** a known constant daily return r on 252 trading days gives `ann_return` = 252·r.
   - Including a crypto symbol in the #8 universe raises.
   - The P&L of non-crypto symbols matches the unfiltered engine on SPY dates (regression).
-  - G1 and G3.
+  - G1 (holdout and forward blocked), G3, G6, G7 null drill.
 - **Dependencies:** P0-A.
 - **Priority:** P1. It blocks #8, and it is small.
 - **Size:** S (about 0.5–1 day).
