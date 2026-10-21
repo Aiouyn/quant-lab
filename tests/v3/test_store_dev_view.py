@@ -85,3 +85,15 @@ def test_atomic_write_does_not_mutate_hard_links(tmp_path):
     assert pl.read_parquet(link).equals(orig)
     assert pl.read_parquet(f)['hour'].to_list() == [3]
     assert not os.path.samefile(f, link)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX permission bits')
+def test_atomic_write_is_world_readable_0644(tmp_path):
+    old = os.umask(0o022)
+    try:
+        p = atomic_write_parquet(pl.DataFrame({'a': [1]}), tmp_path / 'x.parquet')
+        j = atomic_write_json(tmp_path / 'x.json', {'a': 1})
+    finally:
+        os.umask(old)
+    assert oct(os.stat(p).st_mode & 0o777) == oct(0o644)
+    assert oct(os.stat(j).st_mode & 0o777) == oct(0o644)

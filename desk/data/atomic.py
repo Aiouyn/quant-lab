@@ -21,9 +21,25 @@ def _tmp_for(path: Path):
 
 
 def _commit(tmp: Path, path: Path):
+    os.chmod(tmp, 0o644)                    # mkstemp creates 0600; readers (e.g. a non-root sandbox user) need 0644
     with open(tmp, 'rb') as fh:
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(d: Path):
+    """Persist the rename itself (POSIX). Directories can't be opened for fsync on Windows: skip there."""
+    try:
+        fd = os.open(d, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def atomic_write_parquet(df, path, compression='zstd', **kw):

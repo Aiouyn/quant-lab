@@ -123,7 +123,7 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
     path.write_text(''.join(f + '\n' for f in fut) + PREAMBLE.format(root=str(ROOT)) + body, encoding='utf-8')
     env = _env({'DESK_STORE_ROOT': settings.store / 'views' / 'dev',
                 'DESK_LIBRARY': settings.artifacts / 'library.json',
-                'DESK_CARRY_ROOT': settings.store / 'carry',
+                'DESK_CARRY_ROOT': settings.store / 'carry' / 'views' / 'dev' / 'carry',   # dev-only view (lab.carry.write_dev_view)
                 'DESK_PERPS_DEV': settings.store / 'perps' / 'views' / 'dev.parquet',
                 'DESK_MACRO_DEV': settings.store / 'macro' / 'views' / 'dev.parquet',
                 'DESK_PERPS_DEV_FILLS': settings.store / 'perps' / 'views' / 'dev_fills.parquet',

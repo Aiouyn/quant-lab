@@ -17,7 +17,7 @@ except ImportError:
     import json as orjson
 import polars as pl
 
-from .atomic import atomic_write_json
+from .atomic import atomic_write_json, atomic_write_parquet
 from .book import GridBook, COLUMNS
 
 DAY_MS = 86_400_000
@@ -124,14 +124,9 @@ def process_day(rec, store: str, trades_dir: str | None = None, overwrite=False)
         (store / sub).mkdir(parents=True, exist_ok=True)
     f32 = [pl.col(c).cast(pl.Float32) for c in df.columns if df[c].dtype == pl.Float64 and c not in ('bid_px', 'ask_px', 'mid', 'last_px', 'vwap')]
     df = df.with_columns(f32)
-    tmp = out.with_suffix('.partial')
-    df.write_parquet(tmp, compression='zstd', compression_level=6)
-    tmp.replace(out)
+    atomic_write_parquet(df, out, compression_level=6)
     for res in ('10s', '1m'):
-        b = bars(df, res)
-        t2 = (store / res / f'{date}.parquet').with_suffix('.partial')
-        b.write_parquet(t2, compression='zstd')
-        t2.replace(store / res / f'{date}.parquet')
+        atomic_write_parquet(bars(df, res), store / res / f'{date}.parquet')
     q.update({'date': date, 'seconds': round(time.time() - t0, 1), 'store_version': STORE_VERSION,
               'source_size': rec['size'], 'has_trades': 'buy_sz' in df.columns})
     atomic_write_json(meta, q, indent=1)
@@ -175,9 +170,7 @@ def _rebuild_one(arg):
     store = Path(store)
     df = pl.read_parquet(store / '1s' / f'{d}.parquet')
     for res in ('10s', '1m'):
-        tmp = store / res / f'{d}.partial'
-        bars(df, res).write_parquet(tmp, compression='zstd')
-        tmp.replace(store / res / f'{d}.parquet')
+        atomic_write_parquet(bars(df, res), store / res / f'{d}.parquet')
 
 
 def ingest(settings, workers=10, limit=None, overwrite=False, progress=print):

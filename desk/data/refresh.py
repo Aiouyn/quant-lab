@@ -108,6 +108,11 @@ def refresh(settings):
         PredStore(settings).splits(); pred_dev_view(settings)
     except Exception as e:
         rep['pred_error'] = repr(e)[:300]
+    try:
+        from ..lab.carry import write_dev_view as carry_dev_view
+        carry_dev_view(settings)
+    except Exception as e:
+        rep['carry_view_error'] = repr(e)[:300]
     from ..lab.perps import write_dev_view, PerpsStore
     PerpsStore(settings).splits()
     write_dev_view(settings)

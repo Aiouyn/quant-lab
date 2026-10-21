@@ -22,6 +22,8 @@ from datetime import date
 import numpy as np
 import polars as pl
 
+from ..data.atomic import atomic_write_json, atomic_write_parquet
+
 SPLITS = {'dev': ['2000-01-01', '2014-12-31'], 'val': ['2015-01-01', '2019-12-31'], 'holdout': ['2020-01-01', '2025-06-30'],
           'forward': ['2025-07-01', '2099-12-31'],
           'note': 'macro desk, frozen 2026-10-06; forward grows daily (Yahoo refresh). Known history: famous episodes '
@@ -51,7 +53,7 @@ class MacroStore:
     def splits(self):
         f = self.root / 'splits.json'
         if not f.exists():
-            f.write_text(json.dumps(SPLITS, indent=1))
+            atomic_write_json(f, SPLITS, indent=1)
         return json.loads(f.read_text())
 
     def range_dates(self, split):
@@ -81,7 +83,7 @@ def write_dev_view(settings):
     p, a, b = st.load('dev', warmup_days=0)
     out = st.root / 'views' / 'dev.parquet'
     out.parent.mkdir(parents=True, exist_ok=True)
-    p.write_parquet(out, compression='zstd')
+    atomic_write_parquet(p, out)
     return out
 
 

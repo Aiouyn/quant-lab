@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 import numpy as np
 import polars as pl
 
+from ..data.atomic import atomic_write_json, atomic_write_parquet
+
 HOUR = 3_600_000
 SPLITS = {'dev': ['2020-01-01', '2026-02-28'], 'val': ['2026-03-01', '2026-05-31'], 'holdout': ['2026-06-01', '2026-07-31'],
           'forward': ['2026-08-01', '2099-12-31'],
@@ -61,7 +63,7 @@ class PredStore:
     def splits(self):
         f = self.root / 'splits.json'
         if not f.exists():
-            f.write_text(json.dumps(SPLITS, indent=1))
+            atomic_write_json(f, SPLITS, indent=1)
         return json.loads(f.read_text())
 
     def range_ms(self, split):
@@ -94,8 +96,8 @@ def write_dev_view(settings):
     p, a, b = st.load('dev')
     out = st.root / 'views' / 'dev.parquet'
     out.parent.mkdir(parents=True, exist_ok=True)
-    visible(p).write_parquet(out, compression='zstd')
-    p.select('ts', 'market', 'outcome').write_parquet(st.root / 'views' / 'dev_outcomes.parquet', compression='zstd')
+    atomic_write_parquet(visible(p), out)
+    atomic_write_parquet(p.select('ts', 'market', 'outcome'), st.root / 'views' / 'dev_outcomes.parquet')
     return out
 
 

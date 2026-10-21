@@ -27,6 +27,8 @@ import httpx
 import numpy as np
 import polars as pl
 
+from .atomic import atomic_write_json
+
 HL = 'https://api.hyperliquid.xyz/info'
 BV = 'https://data.binance.vision/data/futures/um'
 FAPI = 'https://fapi.binance.com'
@@ -282,7 +284,7 @@ def _freeze_splits(root, panel):
     to = lambda d: datetime.fromtimestamp(d * 86400, timezone.utc).strftime('%Y-%m-%d')
     sp = {'created': time.time(), 'dev': [to(days[0]), to(days[a - 1])], 'val': [to(days[a]), to(days[b - 1])],
           'holdout': [to(days[b]), to(days[-1])], 'note': 'carry desk: chronological 60/25/15 over its own panel'}
-    f.write_text(json.dumps(sp, indent=1))
+    atomic_write_json(f, sp, indent=1)
     return sp
 
 

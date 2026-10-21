@@ -92,6 +92,40 @@ class CarryStore:
         return p, a, b
 
 
+
+def dev_view_root(settings):
+    """Carry root handed to research sandboxes (DESK_CARRY_ROOT). It is named `carry` because CarryStore resolves
+    `<parent>/carry`; it holds only dev-split rows and a dev-only splits.json."""
+    return settings.store / 'carry' / 'views' / 'dev' / 'carry'
+
+
+def write_dev_view(settings):
+    """Dev-only copy of the per-coin carry panels: rows with ts < dev end; hourly bar columns (stored by bar OPEN
+    time, known at open + 1 h) are nulled on the last dev hour so nothing that closes inside val leaks."""
+    from ..data.atomic import atomic_write_json, atomic_write_parquet
+    from ..data.carry_data import BAR_COLS, carry_root
+    src = carry_root(settings)
+    sp = json.loads((src / 'splits.json').read_text())
+    a, b = sp['dev']
+    end = int(datetime.fromisoformat(b).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
+    view = dev_view_root(settings)
+    (view / 'coins').mkdir(parents=True, exist_ok=True)
+    keep = set()
+    for f in sorted((src / 'coins').glob('*.parquet')):
+        p = pl.read_parquet(f).filter(pl.col('ts') < end)
+        cols = [c for c in BAR_COLS if c in p.columns]
+        if cols:
+            p = p.with_columns([pl.when(pl.col('ts') >= end - 3_600_000).then(None).otherwise(pl.col(c)).alias(c) for c in cols])
+        atomic_write_parquet(p, view / 'coins' / f.name)
+        keep.add(f.name)
+    for f in (view / 'coins').glob('*.parquet'):
+        if f.name not in keep:
+            f.unlink()
+    atomic_write_json(view / 'splits.json', {'created': sp.get('created'), 'dev': sp['dev'],
+                                              'note': 'carry dev view: val/holdout/forward rows removed'})
+    return view
+
+
 def pivot(panel: pl.DataFrame, col):
     w = panel.pivot(on='coin', index='ts', values=col, aggregate_function='last').sort('ts')
     return w
