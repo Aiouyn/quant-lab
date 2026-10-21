@@ -66,7 +66,15 @@
 ## 4. FX carry requirement
 - **Currently missing:** the `desk/lab/macro.py` docstring says "FX spot returns exclude the interest-rate carry", and `macro_data.py` says the same for the `fx` class. Trend on FX spot without carry is biased.
 - **Required:** the engine must add the daily carry r_base − r_quote (ACT/360, from short rates known at close t, applied over (t+1, t+2]) to each `fx` row's return. That change has to be added, reviewed by QL Validator, and pinned (§2) **before** the run.
-- **Rate-differential source (series IDs fixed now).** Checked on public FRED catalog pages on 2026-10-21. "Verified" means the catalog page exists and its stated date range covers 2014-01..2019-12 (dev warm-up plus val). No observations were downloaded. All series are monthly OECD MEI 3-month interbank rates; each value is lagged one month for availability.
+- **Rate-differential source (series IDs fixed now).** Checked on public FRED catalog pages on 2026-10-21. "Verified" means the catalog page exists and its stated date range covers 2014-01..2019-12 (dev warm-up plus val). No observations were downloaded. All series are monthly OECD MEI 3-month interbank rates (monthly averages).
+
+- **Availability lag (fixed now):**
+  1. **Preferred:** use each observation's **first publication date** from ALFRED vintages (https://alfred.stlouisfed.org, same series IDs, `realtime_start` of the first vintage containing that month's value). The value becomes usable from the **first trading day after** that publication date.
+  2. **Fallback, if ALFRED has no vintage for a series or month:** the value for month m is usable from the **first NYSE trading day of month m+2**.
+     - *Why m+2:* a monthly average for m is only complete at the end of m, and OECD MEI releases typically come weeks later. Using it from the start of m+1 would leak the average of a month not yet published. The m+2 rule is conservative.
+  3. **Between updates:** the last usable value is carried forward (step-wise, no interpolation). Revisions published later are never applied backwards.
+  - Which rule was used for each series and month is logged. Whether ALFRED vintages exist for these series is **UNVERIFIED** (not checked; no data read).
+  - `^IRX` is daily, so it is usable at the close of its own date.
 
 | Ccy | Series | Status | Pairs using it |
 |---|---|---|---|
@@ -102,9 +110,9 @@
 - `commodity`: GLD SLV USO UNG DBC DBA DBB PDBC GDX
 - `real_estate`: VNQ
 - `currency`: UUP FXE FXY FXB FXA FXC FXF
-- `fx`: EURUSD=X GBPUSD=X JPY=X AUDUSD=X NZDUSD=X CAD=X CHF=X MXN=X EURJPY=X BRL=X ZAR=X TRY=X INR=X CNY=X
+- `fx` (11 pairs): EURUSD=X GBPUSD=X JPY=X AUDUSD=X NZDUSD=X CAD=X CHF=X MXN=X EURJPY=X ZAR=X CNY=X
 - ~~`crypto`: BTC-USD ETH-USD~~ **excluded** (§1a)
-- `fx` pairs TRY=X, BRL=X and INR=X are **excluded** (§4)
+- TRY=X, BRL=X and INR=X are not in the universe (no verified rate series; §4)
 
 **Risk-budget classes (fixed):** these 10 groups are merged into **5 classes**: Equity (`equity_us`, `sector`, `equity_intl`, `factor`), Bonds, Commodities (`commodity`, `real_estate`), FX (`fx`, `currency`), and Cash-like. Crypto is dropped. Cash-like is BIL and SHY, which are **excluded** from signals because they are near-zero-vol cash proxies.
 
@@ -146,11 +154,11 @@ Metrics: Sharpe (`stats.sharpe(daily, periods=252)` on the §1a trading-day cale
 
 To **PASS**, a config must meet all of the following:
 1. **Val Sharpe ≥ 0.5.**
-2. **DSR > 0.95** (`stats.dsr`) with **n_trials = max(51, ledger count)**. The ledger count is a **hard floor**: it can only raise N.
+2. **DSR > 0.95** (`stats.dsr`) with **n_trials = max(51, ledger trials for this family)**. The ledger figure is a **hard floor**: it can only raise N.
    - **Basis for 51:** 3 lookback configs × 2 vol windows (21 / 63 d) × 2 vol targets (10% / 15%) × 2 rebalance frequencies (weekly / monthly) × 2 class maps (5 classes as in §5, or 1 class per `macro_data.py` `cls`) = **48** implied forks, plus **3** for the long-only crypto TS momentum lookbacks already run on val (`RESEARCH_LOG_2026-10-03.md`, row 6).
    - Only one fork is evaluated. The others are counted because a researcher could plausibly have chosen them, so this is a conservative upper bound.
    - The vol target barely changes Sharpe while the gross cap isn't binding. It is still counted, to be conservative.
-   - The ledger count is the number of distinct macro-desk strategies with a val evaluation (query in PR #10, P0-C). It is `REQUIRED-BEFORE-RUN`.
+   - **Ledger floor (R9, per Validator charter, pending):** the number of **trials** (ledger rows, i.e. evaluations with distinct code + config hash; not distinct strategies) recorded for this family (macro cross-asset TS momentum) on the macro desk, across splits. It comes from the R7a schema query in PR #10 P0-C, and it is `REQUIRED-BEFORE-RUN`.
    - `trial_sr_std` comes from the ledger, also `REQUIRED-BEFORE-RUN`.
 3. **Both val halves (§1, trading-day count split) have positive Sharpe.**
 4. **Block-bootstrap 95% lower bound ≥ 0** (one-sided) on the daily mean, computed per the PR #10 spec rule **G7** (studentized or BCa interval; block size max(5, ceil(T^(1/3))); ≥ 5,000 draws; seed logged in the manifest and the ledger row; passes the null-drill false-positive check).
@@ -170,7 +178,7 @@ To **PASS**, a config must meet all of the following:
 4. The trading-day calendar enforcement and its assertion (§1a; PR #10 item 7).
 5. The commits and SHA-256 of the strategy files for A, B and C.
 6. The inception-date table with a source per symbol (§5), with the abort rule.
-7. The ledger's macro val trial count (hard floor) and `trial_sr_std`.
+7. The ledger's trial count for this family per R9 (hard floor) and `trial_sr_std`.
 8. Sign-off from QL Validator that eval gating is fixed.
 
 **UNVERIFIED:** `IR3TIB01BRM156N` and `IR3TIB01INM156N` (the FRED pages returned 404). Both pairs are dropped regardless.
