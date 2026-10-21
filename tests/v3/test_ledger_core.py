@@ -220,3 +220,72 @@ def test_harness_entrypoint_refuses_unticketed_job(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['h', str(jp), str(op)])
     harness.main()
     assert json.loads(op.read_text())['error'].startswith('ticket_refused')
+
+
+# ------------------------------------------------------------------ ruling (1): dev DSR N from host-attested identities
+def test_dev_n_counts_host_attested_identities_per_family(tmp_path):
+    L = Ledger(tmp_path / 'n.db')
+    L.trial('a', 'dev_backtest', 'self', 9.0, 100)                       # self-reported style: no host identity
+    L.x("INSERT INTO trials(author,kind,code_hash,sharpe,days,created,family,identity) "
+        "VALUES('a','dev_backtest','h',1,100,0,'f1','forged')")         # identity but not attested
+    assert L.trial_stats()['distinct_strategies'] == 0
+    for i in range(3):                                                   # every sandbox_run counts, even 1-day/no-sharpe
+        L.trial('a', 'sandbox_run', f'c{i}', None, None, family='f1', identity=f'id{i}')
+    L.trial('a', 'sandbox_run', 'c0', None, None, family='f1', identity='id0')   # same (identity, config): once
+    L.trial('a', 'submission', 's', 1.0, 3, family='f2', identity='idX')
+    assert L.trial_stats(family='f1')['distinct_strategies'] == 3
+    assert L.trial_stats(family='f2')['distinct_strategies'] == 1
+    assert L.trial_stats()['distinct_strategies'] == 4
+
+
+def test_pipeline_dev_n_uses_attested_count(pipe):
+    L = pipe.L
+    for i in range(4):
+        L.trial('a', 'sandbox_run', f'c{i}', None, None, family='unassigned', identity=f'id{i}')
+    L.trial('a', 'dev_backtest', 'self', 2.0, 100)                       # does not count
+    asyncio.run(pipe.process_async(_strategy(L, BASE, 'submitted')))
+    assert pipe.jobs[-1]['n_trials'] == 4
+    assert L.q("SELECT attested FROM trials WHERE kind='submission'")[0]['attested'] == 1
+
+
+# ------------------------------------------------------------------ ruling (3): infra failure burns the token
+@pytest.fixture
+def infra_pipe(pipe, monkeypatch):
+    async def failing_job(job, timeout=5400):
+        pipe.jobs.append(job)
+        return {'error': 'harness failed (memory)'}
+    monkeypatch.setattr(pipe, '_job', failing_job)
+    return pipe
+
+
+def test_infra_failure_burns_token_without_attestation(infra_pipe):
+    L = infra_pipe.L
+    sid = _strategy(L, BASE, 'holdout')
+    asyncio.run(infra_pipe.process_async(sid))
+    assert len(infra_pipe.jobs) == 1                                     # no views table here: cannot attest pre-open
+    assert L.q('SELECT pre_open FROM holdout_infra')[0]['pre_open'] == 0
+    L.update_strategy(sid, status='holdout')                             # asking again does nothing
+    asyncio.run(infra_pipe.process_async(sid))
+    assert len(infra_pipe.jobs) == 1
+    ident = L.q('SELECT identity FROM holdout_uses')[0]['identity']
+    with pytest.raises(HoldoutAlreadyUsed):
+        L.claim_holdout_retry(ident)
+
+
+def test_retry_only_on_host_attested_pre_open_failure(tmp_path):
+    L = Ledger(tmp_path / 'r.db')
+    L.x('CREATE TABLE holdout_views(identity TEXT PRIMARY KEY, job_id TEXT, created REAL)')
+    L.claim_holdout('pre', 'S-1'); L.claim_holdout('post', 'S-2')
+    with pytest.raises(HoldoutAlreadyUsed):                              # never on request
+        L.claim_holdout_retry('pre')
+    L.x("INSERT INTO holdout_views VALUES('post','j',0)")                # data was opened for this one
+    assert L.attest_holdout_infra_failure('pre', 'S-1', 'oom') is True
+    assert L.attest_holdout_infra_failure('post', 'S-2', 'oom') is False
+    assert L.attest_holdout_infra_failure('pre', 'S-1', 'again') is False   # one attestation per token
+    L.claim_holdout_retry('pre')
+    with pytest.raises(HoldoutAlreadyUsed):
+        L.claim_holdout_retry('pre')                                     # exactly one retry
+    with pytest.raises(HoldoutAlreadyUsed):
+        L.claim_holdout_retry('post')
+    with pytest.raises(sqlite3.DatabaseError):
+        L.x('DELETE FROM holdout_infra')

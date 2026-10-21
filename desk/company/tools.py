@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from ..lab.identity import strategy_desk
+from ..pipeline.validation import _host_identity
 from ..lab.sandbox import run_python, run_job
 from ..lab.strategy import code_hash, load_strategy, StrategyError
 
@@ -301,8 +302,13 @@ class Toolbox:
         # charter R7c: trials are written host-side from what the host launched. One trial per sandbox run, keyed on
         # the submitted script; nothing the sandbox writes (the old DESK_TRIALS file) is read back as a trial.
         res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots)
+        from ..lab.identity import evaluation_identity
+        try:
+            ident = evaluation_identity(code, {'kind': 'sandbox_run'}, self.s.store, desk='l2')[0]
+        except SyntaxError:                                  # unparsable script: still one attested trial
+            ident = hashlib.sha256(b'unparsable:' + code.encode()).hexdigest()
         self.L.trial(self.agent.name, 'sandbox_run', hashlib.sha256(code.encode()).hexdigest(), None, None,
-                     desk='unknown', split='dev', family='unassigned')
+                     desk='unknown', split='dev', family='unassigned', identity=ident)
         n = 1
         from .hints import hints, record_hint_resolution
         from .rsi import record_primitive_outcome
@@ -399,7 +405,8 @@ class Toolbox:
         from .rsi import record_primitive_outcome
         record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
         self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'),
-                     desk=out.get('desk') or strategy_desk(code), split='dev', family='unassigned')
+                     desk=out.get('desk') or strategy_desk(code), split='dev', family='unassigned',
+                     identity=_host_identity(code, job, self.s.store))
         self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out

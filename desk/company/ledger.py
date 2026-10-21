@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY, name TEXT, author TEX
   forward_report TEXT, paper_report TEXT, gate_reasons TEXT, created REAL, updated REAL);
 CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, code_hash TEXT,
   sharpe REAL, days INT, created REAL, desk TEXT NOT NULL DEFAULT 'unknown', split TEXT NOT NULL DEFAULT 'unknown',
-  family TEXT NOT NULL DEFAULT 'unassigned', identity TEXT);
+  family TEXT NOT NULL DEFAULT 'unassigned', identity TEXT, attested INT NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS lessons(id TEXT PRIMARY KEY, author TEXT, claim TEXT, evidence TEXT, confidence REAL,
   scope TEXT, tags TEXT, status TEXT DEFAULT 'active', created REAL);
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, body TEXT, created REAL);
@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 # Charter R4/R6: insert-only tables. holdout_uses is keyed on the R4 evaluation identity (desk/lab/identity.py) and
 # outcomes go to holdout_results as new rows. UPDATE/DELETE abort; a BEFORE INSERT trigger aborts a duplicate key so
 # INSERT OR REPLACE cannot delete-and-reinsert (recursive_triggers is also ON for every connection).
-INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'job_tickets', 'job_ticket_uses')
+INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'holdout_infra', 'holdout_retries', 'job_tickets', 'job_ticket_uses')
 LEDGER_CORE = """
 CREATE TABLE IF NOT EXISTS holdout_uses(identity TEXT PRIMARY KEY, strategy TEXT, created REAL, components TEXT);
 CREATE TABLE IF NOT EXISTS holdout_results(id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT, strategy TEXT,
@@ -74,6 +74,15 @@ CREATE TRIGGER IF NOT EXISTS job_ticket_uses_no_dup BEFORE INSERT ON job_ticket_
 CREATE TRIGGER IF NOT EXISTS job_tickets_no_dup BEFORE INSERT ON job_tickets
   WHEN EXISTS (SELECT 1 FROM job_tickets WHERE id = NEW.id)
   BEGIN SELECT RAISE(ABORT, 'job_tickets is append-only'); END;
+CREATE TABLE IF NOT EXISTS holdout_infra(identity TEXT PRIMARY KEY, strategy TEXT, reason TEXT, pre_open INT NOT NULL,
+  created REAL);
+CREATE TABLE IF NOT EXISTS holdout_retries(identity TEXT PRIMARY KEY, created REAL);
+CREATE TRIGGER IF NOT EXISTS holdout_infra_no_dup BEFORE INSERT ON holdout_infra
+  WHEN EXISTS (SELECT 1 FROM holdout_infra WHERE identity = NEW.identity)
+  BEGIN SELECT RAISE(ABORT, 'holdout infra failure already attested'); END;
+CREATE TRIGGER IF NOT EXISTS holdout_retries_no_dup BEFORE INSERT ON holdout_retries
+  WHEN EXISTS (SELECT 1 FROM holdout_retries WHERE identity = NEW.identity)
+  BEGIN SELECT RAISE(ABORT, 'holdout retry already used'); END;
 CREATE TRIGGER IF NOT EXISTS holdout_uses_no_dup BEFORE INSERT ON holdout_uses
   WHEN EXISTS (SELECT 1 FROM holdout_uses WHERE identity = NEW.identity)
   BEGIN SELECT RAISE(ABORT, 'holdout_uses: identity already used (one-shot holdout)'); END;
@@ -141,7 +150,8 @@ class Ledger:
         reuse of the same raw code, see claim_holdout)."""
         cols = {r[1] for r in db.execute('PRAGMA table_info(trials)')}
         for col, decl in (('desk', "TEXT NOT NULL DEFAULT 'unknown'"), ('split', "TEXT NOT NULL DEFAULT 'unknown'"),
-                          ('family', "TEXT NOT NULL DEFAULT 'unassigned'"), ('identity', 'TEXT')):
+                          ('family', "TEXT NOT NULL DEFAULT 'unassigned'"), ('identity', 'TEXT'),
+                          ('attested', 'INT NOT NULL DEFAULT 0')):
             if col not in cols:
                 db.execute(f'ALTER TABLE trials ADD COLUMN {col} {decl}')
         hu = {r[1] for r in db.execute('PRAGMA table_info(holdout_uses)')}
@@ -339,12 +349,13 @@ class Ledger:
     # ----------------------------------------------------------------- trials (multiple-testing ledger)
     def trial(self, author, kind, code_hash, sharpe, days, desk='unknown', split='unknown', family='unassigned',
               identity=None):
+        # attested=1: the host computed the R4 identity of an evaluation IT launched. Only such rows enter the DSR N.
         """Append one trial row. Host-side only (charter R7c): callers are the pipeline and the tool layer, from
         evaluations they launched; nothing a sandbox can write is ever turned into a trial."""
-        self.x('INSERT INTO trials(author,kind,code_hash,sharpe,days,created,desk,split,family,identity) '
-               'VALUES(?,?,?,?,?,?,?,?,?,?)',
+        self.x('INSERT INTO trials(author,kind,code_hash,sharpe,days,created,desk,split,family,identity,attested) '
+               'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                (author, kind, code_hash, sharpe, days, time.time(), desk or 'unknown', split or 'unknown',
-                family or 'unassigned', identity))
+                family or 'unassigned', identity, 1 if identity else 0))
 
     # ----------------------------------------------------------------- one-shot holdout (charter R4/R6)
     def claim_holdout(self, identity, strategy, components=None, code_hash=None):
@@ -387,13 +398,47 @@ class Ledger:
                 db.rollback(); raise TicketRefused('job ticket already used')
             db.execute('INSERT INTO job_ticket_uses VALUES(?,?)', (tid, time.time()))
 
+    def attest_holdout_infra_failure(self, identity, strategy, reason) -> bool:
+        """Host-side only (pipeline). Records that the holdout job for `identity` died of an infrastructure failure, and
+        whether that was BEFORE any holdout view was opened (ledger table holdout_views, per-split views PR). Without
+        that table nothing can attest it, so pre_open is 0 (fail closed: the token stays burnt). Returns pre_open."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT 1 FROM holdout_uses WHERE identity=?', (identity,)).fetchone() is None:
+                db.rollback(); raise HoldoutAlreadyUsed('no claimed holdout token to attest')
+            if db.execute('SELECT 1 FROM holdout_infra WHERE identity=?', (identity,)).fetchone():
+                db.rollback(); return False                  # one attestation per token, ever
+            has_views = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='holdout_views'").fetchone()
+            opened = has_views and db.execute('SELECT 1 FROM holdout_views WHERE identity=?', (identity,)).fetchone()
+            pre = 1 if (has_views and not opened) else 0
+            db.execute('INSERT INTO holdout_infra VALUES(?,?,?,?,?)', (identity, strategy, reason, pre, time.time()))
+        return bool(pre)
+
+    def claim_holdout_retry(self, identity):
+        """One retry, only on a host attestation that the failure preceded any holdout view. Never on request."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT pre_open FROM holdout_infra WHERE identity=?', (identity,)).fetchone()
+            if row is None or row[0] != 1:
+                db.rollback(); raise HoldoutAlreadyUsed('holdout token burnt: no host attestation of a pre-open failure')
+            if db.execute('SELECT 1 FROM holdout_retries WHERE identity=?', (identity,)).fetchone():
+                db.rollback(); raise HoldoutAlreadyUsed('holdout retry already used')
+            db.execute('INSERT INTO holdout_retries VALUES(?,?)', (identity, time.time()))
+
     def holdout_result(self, identity, strategy, passed):
         self.x('INSERT INTO holdout_results(identity,strategy,passed,created) VALUES(?,?,?,?)',
                (identity, strategy, None if passed is None else int(bool(passed)), time.time()))
 
-    def trial_stats(self):
-        # exploratory backtests on fewer than 10 days are too noisy to count as distinct strategy trials
-        r = self.q("SELECT COUNT(DISTINCT code_hash) AS n, COUNT(*) AS evals FROM trials WHERE kind IN ('dev_backtest','submission') AND days>=10")[0]
+    DEV_N_KINDS = ('sandbox_run', 'dev_backtest', 'submission')
+
+    def trial_stats(self, family=None):
+        """QL Validator ruling (1): the dev DSR N = number of distinct host-attested R4 identities (the identity hashes
+        the evaluation config, so this is distinct (identity, config) pairs) in the family: every sandbox_run counts
+        (>= 1 per run), plus host-launched dev evaluations and submissions. Rows without a host identity (incl. the old
+        self-reported DESK_TRIALS dev_backtest rows) never count. Only this input changes; sr_std is as before."""
+        fam, args = ('', ()) if family is None else (' AND family=?', (family,))
+        r = self.q("SELECT COUNT(DISTINCT identity) AS n, COUNT(*) AS evals FROM trials WHERE attested=1 "
+                   "AND identity IS NOT NULL AND kind IN ('sandbox_run','dev_backtest','submission')" + fam, args)[0]
         srs = [x['sharpe'] for x in self.q("SELECT sharpe FROM trials WHERE kind IN ('dev_backtest','submission') AND sharpe IS NOT NULL AND days>=10")]
         import numpy as np
         std = float(np.std(np.array(srs) / np.sqrt(365))) if len(srs) > 5 else None   # per-day Sharpe dispersion

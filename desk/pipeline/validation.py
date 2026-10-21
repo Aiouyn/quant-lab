@@ -65,6 +65,13 @@ def holdout_gates(s):
     }
 
 
+def _host_identity(code, job, store):
+    from ..lab.identity import evaluation_identity, evaluation_settings
+    s = evaluation_settings(job)
+    s.pop('n_trials', None); s.pop('trial_sr_std', None)    # the N itself must not make every evaluation distinct
+    return evaluation_identity(code, s, store)[0]
+
+
 def _gate_settings(s):
     """Gate settings that enter the R4 identity (values only; the decision logic is holdout_gates/check)."""
     return {'min_holdout_sharpe': s.min_holdout_sharpe, 'max_drawdown': s.max_drawdown}
@@ -128,7 +135,7 @@ class Pipeline:
     async def _job(self, job, timeout=5400):
         slot = self.org.job_slots if self.org else None
         r = await run_job(self._ticketed(job), self.s, timeout_s=timeout, slot=slot)
-        if str(r.get('error', '')).startswith(('harness failed (memory', 'harness failed (system_memory')):
+        if job.get('split') != 'holdout' and str(r.get('error', '')).startswith(('harness failed (memory', 'harness failed (system_memory')):
             # our infrastructure ran out of room, not the strategy: retry once with a larger cap (the memory gate waits
             # until the machine can actually provide it)
             self.L.event('pipeline', 'EVAL_RETRY_MEMORY', {'type': job.get('type'), 'split': job.get('split')})
@@ -172,10 +179,11 @@ class Pipeline:
             return
         if s['status'] in ('submitted', 'dev_eval'):
             self.L.update_strategy(sid, status='dev_eval')
-            trials = self.L.trial_stats()
-            r = await self._job({'type': 'strategy_eval', 'code': s['code'], 'split': 'dev', 'allowed': ['dev'],
-                                 'robustness': True, 'certify': True, 'cost': self.cost(),
-                                 'n_trials': max(trials['distinct_strategies'], 1), 'trial_sr_std': trials['sr_std_daily']})
+            trials = self.L.trial_stats(family='unassigned')      # no family registry yet (R9): all trials share one
+            dev_job = {'type': 'strategy_eval', 'code': s['code'], 'split': 'dev', 'allowed': ['dev'],
+                       'robustness': True, 'certify': True, 'cost': self.cost(),
+                       'n_trials': max(trials['distinct_strategies'], 1), 'trial_sr_std': trials['sr_std_daily']}
+            r = await self._job(dev_job)
             if 'error' in r:
                 if str(r['error']).startswith('harness failed'):
                     # infrastructure failure (memory/timeout/crash): NOT a verdict on the strategy and not a trial
@@ -188,7 +196,8 @@ class Pipeline:
                 self._notify(s, f'[{sid}] {s["name"]}: evaluation failed: {r["error"][:600]}')
                 return
             self.L.trial(s['author'], 'submission', r['code_hash'], r['summary']['sharpe'], r['summary']['days'],
-                         desk=r.get('desk') or strategy_desk(s['code']), split='dev', family='unassigned')
+                         desk=r.get('desk') or strategy_desk(s['code']), split='dev', family='unassigned',
+                         identity=_host_identity(s['code'], dev_job, self.s.store))
             failed = check(DEV_GATES, r)
             if failed:
                 self.L.update_strategy(sid, status='rejected_dev', dev_report=r, gate_reasons=failed)
@@ -238,6 +247,15 @@ class Pipeline:
                 self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_identical_code'])
                 return
             r = await self._job(job)
+            if str(r.get('error', '')).startswith('harness failed'):
+                # QL Validator ruling (3): an infra failure burns the token. The host attests (ledger row) whether the
+                # failure happened before any holdout view was opened; only then is ONE automatic retry allowed.
+                if self.L.attest_holdout_infra_failure(ident, sid, str(r['error'])[:200]):
+                    try:
+                        self.L.claim_holdout_retry(ident)
+                        r = await self._job(job)
+                    except HoldoutAlreadyUsed:
+                        pass
             if 'error' in r:
                 self.L.holdout_result(ident, sid, None)
                 self.L.update_strategy(sid, status='error', holdout_report=r, gate_reasons=['holdout_error'])
