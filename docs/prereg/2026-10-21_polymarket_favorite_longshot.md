@@ -30,9 +30,9 @@
 
 **Rule used in this test (stricter than the engine, and fixed now).**
 - **Anchor time:** A = min(`endDate`, `closedTime`, `umaEndDate`), all in UTC. The gamma field names are VERIFIED (Appendix V1); `umaEndDate` is the resolution timestamp, but that meaning is inferred (V2). `closedTime` must be parsed from its non-ISO format. The current fetcher **doesn't store** `closedTime` or `umaEndDate` (spec PR #10, item 3): `REQUIRED-BEFORE-RUN`.
-- **Early-closed markets:** markets with closedTime < endDate are **dropped and counted**. They are typically markets resolved early, where the scheduled end isn't the real end.
+- **Early-closed markets are KEPT:** markets with closedTime < endDate (resolved before the scheduled end) stay in the sample, because dropping them would select on the outcome. Calibration anchors them on A like every other market. Their count and share are reported.
 - **Val membership:** a market belongs to val if and only if **both** A **and** its snapshot time (A − 24 h, §3) fall inside [2026-03-01 00:00, 2026-06-01 00:00) UTC. Markets with A in val but the snapshot before 2026-03-01 are dropped and counted.
-- **Sleeve:** the trading sleeve (§6) trades **only** markets selected by this rule, from the start of val.
+- **Sleeve:** the trading sleeve (§6) considers **only** markets selected by this rule. It uses its own entry time (scheduled `endDate` − 24 h, §6), never A.
 
 The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied on (PR #3). The file hash is the pin.
 
@@ -90,7 +90,7 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
 
 ## 5. Calibration test (val)
 - **Per bucket b:** miscalibration m_b = (realized YES rate) − (mean snapshot price), with each market weighted equally.
-- **CI:** a two-sided 95% CI from a **cluster bootstrap** (clustering unit from §4) in the **G7 clustered form**: whole clusters are resampled with replacement, the interval is studentized or BCa (no percentile intervals), with ≥ 5,000 draws, the seed logged, and the clustered null-drill false-positive check (calibrated Bernoulli(p) outcomes with the cluster structure kept) passed. The two-sided p-value p_b is the bootstrap-t p-value for H0: m_b = 0, floored at 1/(number of draws).
+- **CI:** a two-sided 95% CI from a **cluster bootstrap** (clustering unit from §4) in the **G7 clustered form**: whole clusters are resampled with replacement, the interval is studentized or BCa (no percentile intervals), with ≥ 5,000 draws, the seed logged, and the clustered null-drill false-positive check (calibrated Bernoulli(p) outcomes with the cluster structure kept) passed. The two-sided p-value p_b is the **null-centred** bootstrap-t p-value: with t_obs = m̂_b / ŝe and, for each draw, t* = (m*_b − m̂_b) / se*, p_b = (1 + #{|t*| ≥ |t_obs|}) / (1 + number of draws). Here se* comes from an inner bootstrap or a cluster-robust formula within each draw (the method is logged).
 - **Threshold:** τ_b = 2 × the base half-spread for that bucket (§7). That is 2 cents in the middle buckets (10–90 cents) and 3 cents in the tail buckets (0–10 and 90–100 cents).
 - **Multiple testing: Holm–Bonferroni** across the 14 buckets at family α = 0.05.
   - Sort the p-values in ascending order as p_(1) ≤ … ≤ p_(14), and reject H0_(k) while p_(k) ≤ 0.05 / (14 − k + 1). Stop at the first failure.
@@ -107,7 +107,11 @@ The `pred.py` note calls the split "frozen 2026-10-06". That claim is not relied
   - Targets stay constant once entered, as required by `run_pred`.
 - **Costs (base case; see §7):** tail-bucket half-spread of 1.5 cents (3-cent full spread), with **no** cap at half the distance to 0/1. Mid-bucket half-spread of 1 cent (`PredCost` default). Plus taker fees per §7, and a fill at the next observed price (`delay_rows = 1`). Unit notional $100k.
   - The uncapped tail spread needs an engine change (PR #10 item 6).
-- **Window:** only markets selected under §1. Entries happen at the snapshot, starting no earlier than 2026-03-01. No position is opened in a market whose snapshot falls before val.
+- **Entry time (sleeve):** E = scheduled `endDate` − 24 h, a time known in advance, so entry never depends on later information. The bucket for the sleeve is taken from the last panel price with `ts ≤ E`, within 6 h; otherwise the market is skipped as stale and counted.
+- **Markets resolved before entry:** if `closedTime` or `umaEndDate` ≤ E, the sleeve **can't enter**. The market is **skipped and counted**, and the share of such markets in each sleeve bucket is reported.
+- **Sensitivity check (reported, not a gate):** the sleeve is re-run with those skipped markets entered at A − 24 h, the calibration anchor. This shows how much early resolution matters. It isn't tradable as stated, because A isn't known in advance.
+- **Early resolution after entry:** the payout is received at resolution (`umaEndDate`, else `closedTime`), and the position is closed then.
+- **Window:** only markets selected under §1, with E ≥ 2026-03-01 00:00 UTC. No position is opened in a market whose entry time falls before val.
 - **Stresses (both reported; both must pass conditions 2–4 below):** 1.5× all costs (spread and fees), and one extra row of delay (`delay_rows = 2`).
 - **Pass bar (base costs, val):**
   1. **DSR > 0.95** (`stats.dsr` on daily P&L) with **n_trials = max(15, ledger count)**.
