@@ -27,6 +27,8 @@ import httpx
 import numpy as np
 import polars as pl
 
+from .atomic import atomic_write_json
+
 from ..lab.macro import SPLITS as MACRO_SPLITS
 from ..lab.perps import SPLITS as PERPS_SPLITS, HOUR, visible as perps_visible
 from ..lab.pred import SPLITS as PRED_SPLITS, visible as pred_visible
@@ -215,7 +217,7 @@ def build_macro_store(settings, force: bool = False, try_remote: bool = True) ->
         }
 
     if not splits_path.exists() or force:
-        splits_path.write_text(json.dumps(MACRO_SPLITS, indent=1), encoding='utf-8')
+        atomic_write_json(splits_path, MACRO_SPLITS, indent=1)
 
     yahoo_frames = _fetch_yahoo_daily_panel(MACRO_UNIVERSE) if try_remote else []
     if len(yahoo_frames) >= 6:
@@ -462,8 +464,8 @@ def build_perps_and_carry_stores(settings, force: bool = False, try_remote: bool
 
     perps_panel = pl.concat(perps_frames).sort(['ts', 'coin'])
     perps_panel.write_parquet(perps_panel_path, compression='zstd')
-    perps_splits_path.write_text(json.dumps(contiguous_splits, indent=1), encoding='utf-8')
-    carry_splits_path.write_text(json.dumps(contiguous_splits, indent=1), encoding='utf-8')
+    atomic_write_json(perps_splits_path, contiguous_splits, indent=1)
+    atomic_write_json(carry_splits_path, contiguous_splits, indent=1)
 
     dev_end_ms = int(datetime.fromisoformat(contiguous_splits['dev'][1]).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000
     dev_sub = perps_panel.filter(pl.col('ts') <= dev_end_ms)
@@ -514,7 +516,7 @@ def build_pred_store(settings, force: bool = False, try_remote: bool = True) -> 
             'verified_real': bool(prov.get('verified_real', False)),
         }
 
-    splits_path.write_text(json.dumps(PRED_SPLITS, indent=1), encoding='utf-8')
+    atomic_write_json(splits_path, PRED_SPLITS, indent=1)
 
     poly_markets = []
     if try_remote:

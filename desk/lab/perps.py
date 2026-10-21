@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 import numpy as np
 import polars as pl
 
+from ..data.atomic import atomic_write_json, atomic_write_parquet
+
 HOUR = 3_600_000
 SPLITS = {'dev': ['2023-06-01', '2025-05-31'], 'val': ['2025-06-01', '2026-04-01'], 'holdout': ['2026-04-02', '2026-10-01'],
           'forward': ['2026-10-02', '2099-12-31'],
@@ -68,7 +70,7 @@ class PerpsStore:
         f = self.root / 'splits.json'
         if not f.exists():
             self.root.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(SPLITS, indent=1))
+            atomic_write_json(f, SPLITS, indent=1)
         return json.loads(f.read_text())
 
     def range_ms(self, split):
@@ -98,11 +100,11 @@ def write_dev_view(settings):
     p, a, b = st.load('dev', warmup_days=0)
     if 'lo' in p.columns:                                             # fill ranges for research maker backtests
         (st.root / 'views').mkdir(parents=True, exist_ok=True)
-        p.select('ts', 'coin', 'lo', 'hi').write_parquet(st.root / 'views' / 'dev_fills.parquet', compression='zstd')
+        atomic_write_parquet(p.select('ts', 'coin', 'lo', 'hi'), st.root / 'views' / 'dev_fills.parquet')
     p = visible(p)
     out = st.root / 'views' / 'dev.parquet'
     out.parent.mkdir(parents=True, exist_ok=True)
-    p.write_parquet(out, compression='zstd')
+    atomic_write_parquet(p, out)
     return out
 
 
