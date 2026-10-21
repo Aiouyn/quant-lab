@@ -165,3 +165,58 @@ def test_sandbox_cannot_write_trials(tmp_path):
     from desk.company import tools
     src = inspect.getsource(tools.Toolbox.t_run_python)
     assert 'extra_env' not in src and '_collect_trials' not in inspect.getsource(tools)
+
+
+# ------------------------------------------------------------------ R7b: job tickets
+def _settings(tmp_path):
+    import dataclasses
+    return dataclasses.replace(SETTINGS, home=tmp_path / 'home', store_dir=tmp_path / 'store')
+
+
+@pytest.mark.parametrize('case', ['missing', 'unknown', 'reused', 'other_job'])
+def test_run_job_refuses_bad_ticket(tmp_path, case, monkeypatch):
+    from desk.lab import sandbox
+    s = _settings(tmp_path)
+    (s.home).mkdir(parents=True)
+    L = Ledger(s.ledger)
+    job = {'type': 'strategy_eval', 'code': BASE, 'split': 'dev', 'allowed': ['dev']}
+    launched = []
+
+    async def fake_exec(*a, **k):
+        launched.append(a)
+        raise RuntimeError('launched')
+    monkeypatch.setattr(sandbox.asyncio, 'create_subprocess_exec', fake_exec)
+    if case == 'missing':
+        j = job
+    elif case == 'unknown':
+        j = dict(job, _ticket='T-' + '0' * 32)
+    elif case == 'other_job':
+        j = dict(job, code=CONST, _ticket=L.issue_ticket('a', job))
+    else:
+        t = L.issue_ticket('a', job)
+        L.redeem_ticket(t, job)
+        j = dict(job, _ticket=t)
+    r = asyncio.run(sandbox.run_job(j, s))
+    assert r['error'].startswith('ticket_refused') and not launched
+
+
+def test_valid_ticket_redeems_once(tmp_path):
+    from desk.company.ledger import TicketRefused
+    L = Ledger(tmp_path / 'c.db')
+    job = {'type': 'strategy_eval', 'code': BASE, 'split': 'dev'}
+    t = L.issue_ticket('a', job)
+    L.redeem_ticket(t, dict(job, _ticket=t, _store='/x'))           # host plumbing keys don't change the binding
+    with pytest.raises(TicketRefused, match='already used'):
+        L.redeem_ticket(t, job)
+    with pytest.raises(sqlite3.DatabaseError):
+        L.x('DELETE FROM job_ticket_uses')
+
+
+def test_harness_entrypoint_refuses_unticketed_job(tmp_path, monkeypatch):
+    import json, sys
+    from desk.lab import harness
+    jp, op = tmp_path / 'j.json', tmp_path / 'o.json'
+    jp.write_text(json.dumps({'type': 'strategy_eval', 'code': BASE}))
+    monkeypatch.setattr(sys, 'argv', ['h', str(jp), str(op)])
+    harness.main()
+    assert json.loads(op.read_text())['error'].startswith('ticket_refused')

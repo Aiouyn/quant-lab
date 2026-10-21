@@ -293,6 +293,10 @@ class Toolbox:
         return {'ok': True}
 
     # ------------------------------------------------------------ research
+    def _ticketed(self, job):
+        """Charter R7b: every harness job carries a host-ledger ticket bound to it."""
+        return dict(job, _ticket=self.L.issue_ticket(self.agent.name, job, desk=job.get('desk') or 'unknown'))
+
     async def t_run_python(self, code, timeout_s=300):
         # charter R7c: trials are written host-side from what the host launched. One trial per sandbox run, keyed on
         # the submitted script; nothing the sandbox writes (the old DESK_TRIALS file) is read back as a trial.
@@ -332,8 +336,8 @@ class Toolbox:
         if 'def factor' not in code:
             return {'error': 'factor module must define factor(df, params)'}
         fid = self.L.add_factor(name, self.agent.name, self.agent.pod, code, res, description)
-        out = await run_job({'type': 'factor_eval', 'code': code, 'resolution': res, 'factor_id': fid,
-                             'values_dir': str(self.s.artifacts / 'factor_values')}, self.s, timeout_s=1200,
+        out = await run_job(self._ticketed({'type': 'factor_eval', 'code': code, 'resolution': res, 'factor_id': fid,
+                             'values_dir': str(self.s.artifacts / 'factor_values')}), self.s, timeout_s=1200,
                             slot=self.org.job_slots)
         if 'error' in out:
             self.L.factor_report(fid, out, 0.0, 'failed')
@@ -361,8 +365,8 @@ class Toolbox:
             return {'error': 'factor module must define factor(panel, params) -> array aligned to panel rows'}
         fid = self.L.add_factor(name, self.agent.name, self.agent.pod, code, desk, description)
         lib = [r['id'] for r in self.L.q("SELECT id FROM factors WHERE resolution=? AND status='active'", (desk,))]
-        out = await run_job({'type': 'factor_eval', 'desk': desk, 'code': code, 'factor_id': fid, 'library_ids': lib,
-                             'values_dir': str(self.s.artifacts / 'factor_values')}, self.s, timeout_s=1800,
+        out = await run_job(self._ticketed({'type': 'factor_eval', 'desk': desk, 'code': code, 'factor_id': fid, 'library_ids': lib,
+                             'values_dir': str(self.s.artifacts / 'factor_values')}), self.s, timeout_s=1800,
                             slot=self.org.job_slots)
         if 'error' in out:
             self.L.factor_report(fid, out, 0.0, 'failed')
@@ -388,7 +392,7 @@ class Toolbox:
                'max_days': None if all else 60, 'robustness': bool(robustness), 'cost': self.org.cost_params()}
         if 'RESOLUTION' in code and re.search(r"RESOLUTION\s*=\s*['\"]1s", code) and not all:
             job['max_days'] = 15
-        out = await run_job(job, self.s, timeout_s=3600, slot=self.org.job_slots)
+        out = await run_job(self._ticketed(job), self.s, timeout_s=3600, slot=self.org.job_slots)
         if 'error' in out:
             return out
         sr = out['summary'].get('sharpe')
