@@ -249,8 +249,10 @@ def strategy_eval(job):
         from .certify import certify
         k = min(len(df), {'1s': 2 * 86400, '10s': 4 * 8640, '1m': 10 * 1440}[res])
         sub, s2 = df.head(k), sig[:k]
-        er = backtest(sub, s2, res, cost)
-        out['certification'] = certify(sub, s2, res, cost, er)
+        from ..data.store import funding_series
+        fs = funding_series(getattr(store, 'root', None), required=cost.funding)
+        er = backtest(sub, s2, res, cost, funding_series=fs)
+        out['certification'] = certify(sub, s2, res, cost, er, funding_series=fs)
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
