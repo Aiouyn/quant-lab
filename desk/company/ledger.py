@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY, name TEXT, author TEX
   resolution TEXT, thesis TEXT, status TEXT, dev_report TEXT, review TEXT, val_report TEXT, holdout_report TEXT,
   forward_report TEXT, paper_report TEXT, gate_reasons TEXT, created REAL, updated REAL);
 CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, code_hash TEXT,
-  sharpe REAL, days INT, created REAL);
-CREATE TABLE IF NOT EXISTS holdout_uses(code_hash TEXT PRIMARY KEY, strategy TEXT, created REAL, passed INT);
+  sharpe REAL, days INT, created REAL, desk TEXT NOT NULL DEFAULT 'unknown', split TEXT NOT NULL DEFAULT 'unknown',
+  family TEXT NOT NULL DEFAULT 'unassigned', identity TEXT);
 CREATE TABLE IF NOT EXISTS lessons(id TEXT PRIMARY KEY, author TEXT, claim TEXT, evidence TEXT, confidence REAL,
   scope TEXT, tags TEXT, status TEXT DEFAULT 'active', created REAL);
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, body TEXT, created REAL);
@@ -57,6 +57,55 @@ CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 '''
 
 
+# Charter R4/R6: insert-only tables. holdout_uses is keyed on the R4 evaluation identity (desk/lab/identity.py) and
+# outcomes go to holdout_results as new rows. UPDATE/DELETE abort; a BEFORE INSERT trigger aborts a duplicate key so
+# INSERT OR REPLACE cannot delete-and-reinsert (recursive_triggers is also ON for every connection).
+INSERT_ONLY = ('trials', 'holdout_uses', 'holdout_results', 'holdout_views', 'job_tickets', 'job_ticket_uses')
+LEDGER_CORE = """
+CREATE TABLE IF NOT EXISTS holdout_uses(identity TEXT PRIMARY KEY, strategy TEXT, created REAL, components TEXT);
+CREATE TABLE IF NOT EXISTS holdout_results(id INTEGER PRIMARY KEY AUTOINCREMENT, identity TEXT, strategy TEXT,
+  passed INT, created REAL);
+CREATE TABLE IF NOT EXISTS job_tickets(id TEXT PRIMARY KEY, author TEXT, kind TEXT, desk TEXT, split TEXT,
+  job_sha TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS job_ticket_uses(id TEXT PRIMARY KEY, created REAL);
+CREATE TRIGGER IF NOT EXISTS job_ticket_uses_no_dup BEFORE INSERT ON job_ticket_uses
+  WHEN EXISTS (SELECT 1 FROM job_ticket_uses WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'job ticket already used'); END;
+CREATE TRIGGER IF NOT EXISTS job_tickets_no_dup BEFORE INSERT ON job_tickets
+  WHEN EXISTS (SELECT 1 FROM job_tickets WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'job_tickets is append-only'); END;
+CREATE TABLE IF NOT EXISTS holdout_views(identity TEXT PRIMARY KEY, job_id TEXT, created REAL);
+CREATE TRIGGER IF NOT EXISTS holdout_views_no_dup BEFORE INSERT ON holdout_views
+  WHEN EXISTS (SELECT 1 FROM holdout_views WHERE identity = NEW.identity)
+  BEGIN SELECT RAISE(ABORT, 'holdout view already opened for this identity'); END;
+CREATE TRIGGER IF NOT EXISTS holdout_uses_no_dup BEFORE INSERT ON holdout_uses
+  WHEN EXISTS (SELECT 1 FROM holdout_uses WHERE identity = NEW.identity)
+  BEGIN SELECT RAISE(ABORT, 'holdout_uses: identity already used (one-shot holdout)'); END;
+""" + "".join(f"""
+CREATE TRIGGER IF NOT EXISTS {t}_no_update BEFORE UPDATE ON {t} BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS {t}_no_delete BEFORE DELETE ON {t} BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;
+""" for t in INSERT_ONLY) + """
+CREATE TRIGGER IF NOT EXISTS trials_no_dup_id BEFORE INSERT ON trials
+  WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM trials WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'trials is append-only'); END;
+"""
+
+
+class HoldoutAlreadyUsed(RuntimeError):
+    pass
+
+
+class TicketRefused(RuntimeError):
+    pass
+
+
+def job_sha(job: dict) -> str:
+    """Hash of the host-built job (underscore keys are host plumbing added after issuing)."""
+    import hashlib
+    body = {k: v for k, v in job.items() if not str(k).startswith('_')}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
+
+
 def _id(prefix):
     return f'{prefix}-{uuid.uuid4().hex[:6]}'
 
@@ -68,6 +117,8 @@ class Ledger:
         self._lock = threading.RLock()
         with self.db() as db:
             db.executescript(SCHEMA)
+            self._migrate_ledger_core(db)
+            db.executescript(LEDGER_CORE)
             for table, col in (('llm_requests', 'model TEXT'), ('agents', 'model TEXT')):
                 try:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {col}')
@@ -80,12 +131,26 @@ class Ledger:
         con.row_factory = sqlite3.Row
         con.execute('PRAGMA journal_mode=WAL')
         con.execute('PRAGMA synchronous=NORMAL')
+        con.execute('PRAGMA recursive_triggers=ON')
         try:
             with self._lock:
                 yield con
                 con.commit()
         finally:
             con.close()
+
+    @staticmethod
+    def _migrate_ledger_core(db):
+        """Older ledgers: add the R7a trial columns; move a code_hash-keyed holdout_uses aside (its rows still block
+        reuse of the same raw code, see claim_holdout)."""
+        cols = {r[1] for r in db.execute('PRAGMA table_info(trials)')}
+        for col, decl in (('desk', "TEXT NOT NULL DEFAULT 'unknown'"), ('split', "TEXT NOT NULL DEFAULT 'unknown'"),
+                          ('family', "TEXT NOT NULL DEFAULT 'unassigned'"), ('identity', 'TEXT')):
+            if col not in cols:
+                db.execute(f'ALTER TABLE trials ADD COLUMN {col} {decl}')
+        hu = {r[1] for r in db.execute('PRAGMA table_info(holdout_uses)')}
+        if hu and 'identity' not in hu:
+            db.execute('ALTER TABLE holdout_uses RENAME TO holdout_uses_legacy')
 
     def q(self, sql, args=()):
         with self.db() as db:
@@ -276,9 +341,74 @@ class Ledger:
         return self.q(sql, args + [limit])
 
     # ----------------------------------------------------------------- trials (multiple-testing ledger)
-    def trial(self, author, kind, code_hash, sharpe, days):
-        self.x('INSERT INTO trials(author,kind,code_hash,sharpe,days,created) VALUES(?,?,?,?,?,?)',
-               (author, kind, code_hash, sharpe, days, time.time()))
+    def trial(self, author, kind, code_hash, sharpe, days, desk='unknown', split='unknown', family='unassigned',
+              identity=None):
+        """Append one trial row. Host-side only (charter R7c): callers are the pipeline and the tool layer, from
+        evaluations they launched; nothing a sandbox can write is ever turned into a trial."""
+        self.x('INSERT INTO trials(author,kind,code_hash,sharpe,days,created,desk,split,family,identity) '
+               'VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (author, kind, code_hash, sharpe, days, time.time(), desk or 'unknown', split or 'unknown',
+                family or 'unassigned', identity))
+
+    # ----------------------------------------------------------------- one-shot holdout (charter R4/R6)
+    def claim_holdout(self, identity, strategy, components=None, code_hash=None):
+        """Check-and-record the holdout token for an R4 identity in ONE transaction (BEGIN IMMEDIATE takes the write
+        lock, so concurrent claimers serialize). Raises HoldoutAlreadyUsed if the identity (or, for rows from older
+        ledgers, the same raw code_hash) was already used, whatever the strategy id, name or status."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            hit = db.execute('SELECT strategy FROM holdout_uses WHERE identity=?', (identity,)).fetchone()
+            if hit is None and code_hash and db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='holdout_uses_legacy'").fetchone():
+                hit = db.execute('SELECT strategy FROM holdout_uses_legacy WHERE code_hash=?', (code_hash,)).fetchone()
+            if hit is not None:
+                db.rollback()
+                raise HoldoutAlreadyUsed(f'holdout already used by {hit[0]} for identity {identity[:16]}')
+            db.execute('INSERT INTO holdout_uses(identity,strategy,created,components) VALUES(?,?,?,?)',
+                       (identity, strategy, time.time(), json.dumps(components, default=str) if components else None))
+
+    # ----------------------------------------------------------------- job tickets (charter R7b)
+    def issue_ticket(self, author, job: dict, desk='unknown') -> str:
+        """Host-only: a random 128-bit id bound to this exact job. run_job refuses any job without one."""
+        import secrets
+        tid = 'T-' + secrets.token_hex(16)
+        self.x('INSERT INTO job_tickets VALUES(?,?,?,?,?,?,?)', (tid, author, job.get('type'), desk,
+               job.get('split') or 'dev', job_sha(job), time.time()))
+        return tid
+
+    def redeem_ticket(self, tid, job: dict):
+        """Check-and-consume in ONE transaction: the id must exist, match this job, and be unused."""
+        if not tid or not isinstance(tid, str):
+            raise TicketRefused('job has no ledger trial ticket (charter R7b)')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT job_sha FROM job_tickets WHERE id=?', (tid,)).fetchone()
+            if row is None:
+                db.rollback(); raise TicketRefused('unknown job ticket')
+            if row[0] != job_sha(job):
+                db.rollback(); raise TicketRefused('job ticket was issued for a different job')
+            if db.execute('SELECT 1 FROM job_ticket_uses WHERE id=?', (tid,)).fetchone():
+                db.rollback(); raise TicketRefused('job ticket already used')
+            db.execute('INSERT INTO job_ticket_uses VALUES(?,?)', (tid, time.time()))
+
+    def open_holdout_view(self, identity, job_id, ast_sha):
+        """Bind a holdout view to its R4 token (one transaction): the token must be a claimed holdout_uses row whose
+        recorded normalized-AST hash equals the job's code, and no view may ever have been opened for it."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT components FROM holdout_uses WHERE identity=?', (identity,)).fetchone()
+            if row is None:
+                db.rollback(); raise HoldoutAlreadyUsed('holdout token is not a claimed holdout_uses identity')
+            comp = json.loads(row[0]) if row[0] else {}
+            if comp.get('ast') != ast_sha:
+                db.rollback(); raise HoldoutAlreadyUsed('holdout token was claimed for different code')
+            if db.execute('SELECT 1 FROM holdout_views WHERE identity=?', (identity,)).fetchone():
+                db.rollback(); raise HoldoutAlreadyUsed('holdout view already opened for this token')
+            db.execute('INSERT INTO holdout_views VALUES(?,?,?)', (identity, job_id, time.time()))
+
+    def holdout_result(self, identity, strategy, passed):
+        self.x('INSERT INTO holdout_results(identity,strategy,passed,created) VALUES(?,?,?,?)',
+               (identity, strategy, None if passed is None else int(bool(passed)), time.time()))
 
     def trial_stats(self):
         # exploratory backtests on fewer than 10 days are too noisy to count as distinct strategy trials

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
 from pathlib import Path
 
+from ..lab.identity import strategy_desk
 from ..lab.sandbox import run_python, run_job
 from ..lab.strategy import code_hash, load_strategy, StrategyError
 
@@ -291,14 +293,17 @@ class Toolbox:
         return {'ok': True}
 
     # ------------------------------------------------------------ research
+    def _ticketed(self, job):
+        """Charter R7b: every harness job carries a host-ledger ticket bound to it."""
+        return dict(job, _ticket=self.L.issue_ticket(self.agent.name, job, desk=job.get('desk') or 'unknown'))
+
     async def t_run_python(self, code, timeout_s=300):
-        trials = self.agent.workspace / 'trials.jsonl'
-        trials.unlink(missing_ok=True)
-        res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots,
-                               extra_env={'DESK_TRIALS': trials})
-        n = self._collect_trials(trials)
-        if n:
-            res['trials_logged'] = n
+        # charter R7c: trials are written host-side from what the host launched. One trial per sandbox run, keyed on
+        # the submitted script; nothing the sandbox writes (the old DESK_TRIALS file) is read back as a trial.
+        res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots)
+        self.L.trial(self.agent.name, 'sandbox_run', hashlib.sha256(code.encode()).hexdigest(), None, None,
+                     desk='unknown', split='dev', family='unassigned')
+        n = 1
         from .hints import hints, record_hint_resolution
         from .rsi import record_primitive_outcome
         ok = (res['status'] == 'ok')
@@ -316,20 +321,6 @@ class Toolbox:
                                                      'error': err_line})
         return res
 
-    def _collect_trials(self, path):
-        if not path.exists():
-            return 0
-        n = 0
-        for line in path.read_text(encoding='utf-8').splitlines():
-            try:
-                t = json.loads(line)
-                self.L.trial(self.agent.name, t['kind'], t['id'], t['sharpe'], t['days'])
-                n += 1
-            except Exception:
-                pass
-        path.unlink(missing_ok=True)
-        return n
-
     async def t_register_factor(self, name, code, description):
         dm = re.search(r"^DESK\s*=\s*['\"](perps|macro|pred)['\"]", code, re.M)
         if dm:
@@ -345,8 +336,8 @@ class Toolbox:
         if 'def factor' not in code:
             return {'error': 'factor module must define factor(df, params)'}
         fid = self.L.add_factor(name, self.agent.name, self.agent.pod, code, res, description)
-        out = await run_job({'type': 'factor_eval', 'code': code, 'resolution': res, 'factor_id': fid,
-                             'values_dir': str(self.s.artifacts / 'factor_values')}, self.s, timeout_s=1200,
+        out = await run_job(self._ticketed({'type': 'factor_eval', 'code': code, 'resolution': res, 'factor_id': fid,
+                             'values_dir': str(self.s.artifacts / 'factor_values')}), self.s, timeout_s=1200,
                             slot=self.org.job_slots)
         if 'error' in out:
             self.L.factor_report(fid, out, 0.0, 'failed')
@@ -374,8 +365,8 @@ class Toolbox:
             return {'error': 'factor module must define factor(panel, params) -> array aligned to panel rows'}
         fid = self.L.add_factor(name, self.agent.name, self.agent.pod, code, desk, description)
         lib = [r['id'] for r in self.L.q("SELECT id FROM factors WHERE resolution=? AND status='active'", (desk,))]
-        out = await run_job({'type': 'factor_eval', 'desk': desk, 'code': code, 'factor_id': fid, 'library_ids': lib,
-                             'values_dir': str(self.s.artifacts / 'factor_values')}, self.s, timeout_s=1800,
+        out = await run_job(self._ticketed({'type': 'factor_eval', 'desk': desk, 'code': code, 'factor_id': fid, 'library_ids': lib,
+                             'values_dir': str(self.s.artifacts / 'factor_values')}), self.s, timeout_s=1800,
                             slot=self.org.job_slots)
         if 'error' in out:
             self.L.factor_report(fid, out, 0.0, 'failed')
@@ -401,13 +392,14 @@ class Toolbox:
                'max_days': None if all else 60, 'robustness': bool(robustness), 'cost': self.org.cost_params()}
         if 'RESOLUTION' in code and re.search(r"RESOLUTION\s*=\s*['\"]1s", code) and not all:
             job['max_days'] = 15
-        out = await run_job(job, self.s, timeout_s=3600, slot=self.org.job_slots)
+        out = await run_job(self._ticketed(job), self.s, timeout_s=3600, slot=self.org.job_slots)
         if 'error' in out:
             return out
         sr = out['summary'].get('sharpe')
         from .rsi import record_primitive_outcome
         record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
-        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'))
+        self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'),
+                     desk=out.get('desk') or strategy_desk(code), split='dev', family='unassigned')
         self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out
