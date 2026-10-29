@@ -42,14 +42,16 @@ def reference_backtest(df: pl.DataFrame, target, resolution: str, cost: CostMode
         prev_hour = hour
         t = float(target[i])
         t = 0.0 if math.isnan(t) else max(-1.0, min(1.0, t))
-        # fill price: mid observed `latency` later (1s data) or next bar's first mid (bars)
+        # fill price: mid observed `latency` later (1s data) or next bar's first mid (bars); the FILL row must be valid
         if res_s == 1:
             nxt = by_ts.get(r['ts'] + 1000 * max(1, cost.latency_s))
-            p = nxt['mid'] if nxt is not None else None
+            p = nxt['mid'] if nxt is not None and nxt.get('valid', 1) >= 0.5 else None
         else:
             extra = max(0, int(round((cost.latency_s - 1) / res_s)))
             j = i + 1 + extra
-            p = rows[j].get('open', rows[j]['mid']) if j < len(rows) and rows[j]['ts'] - r['ts'] <= (1 + extra) * res_s * 1000 + 5000 else None
+            ok = j < len(rows) and rows[j]['ts'] - r['ts'] <= (1 + extra) * res_s * 1000 + 5000 and rows[j].get('valid', 1) >= 0.5
+            p = rows[j].get('open', rows[j]['mid']) if ok else None
+        # p is None -> the order is dropped: invalid/forward-filled fill row or a time gap (same contract as the engine)
         if p is not None and r.get('valid', 1) >= 0.5:
             want = t * cost.unit_notional / p
             delta = want - pos
