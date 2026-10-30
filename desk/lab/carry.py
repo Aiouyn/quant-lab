@@ -199,12 +199,15 @@ def evaluate_carry(code, cstore, split='dev', cost=None, params=None, variants=N
     mod = load_strategy(code)
     cost = cost or CarryCost()
     panel, a, b = cstore.load(split, warmup_days=int(getattr(mod, 'WARMUP_DAYS', 30)))
+    from .asof import asof_guard
     pos = carry_signal(mod, panel, params)
+    causality = asof_guard(lambda v: carry_signal(mod, v, params), panel, 'ts', n_cuts=8 if with_causality else 3,
+                           label=f'carry {split}')
     res = run_carry(panel, pos, cost, trade_from_ms=a)
     out = summarize_carry(res, cost, a, b)
     out['code_hash'] = code_hash(code)
     out['resolution'] = '1h'
-    out['causality'] = carry_causality(mod, panel) if with_causality else None
+    out['causality'] = causality if with_causality else None
     out['variants'] = {}
     for name, (c, tr) in (variants or {}).items():
         pp = pos if tr is None else (np.clip(pos, 0, 1) if tr == 'long_only' else np.clip(pos, -1, 0))

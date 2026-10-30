@@ -198,11 +198,16 @@ def evaluate_macro(code, store: MacroStore, split='dev', cost=None, params=None,
     from .strategy import load_strategy, code_hash
     mod = load_strategy(code)
     cost = cost or MacroCost()
+    from .asof import LookAheadError, asof_guard
+    if cost.delay_d < 1:
+        raise LookAheadError('macro: execution must be at least one close after the decision (delay_d >= 1)')
     panel, a, b = store.load(split, warmup_days=int(getattr(mod, 'WARMUP_DAYS', 300)))
     w = macro_signal(mod, panel, params)
+    causality = asof_guard(lambda v: macro_signal(mod, v, params), panel, 'date', n_cuts=12 if with_causality else 4,
+                           label=f'macro {split}')
     out = summarize_macro(run_macro(panel, w, cost, trade_from=a), cost, a, b)
     out['code_hash'] = code_hash(code)
-    out['causality'] = macro_causality(mod, panel) if with_causality else None
+    out['causality'] = causality if with_causality else None
     out['variants'] = {}
     for name, (c, side) in (variants or {}).items():
         out['variants'][name] = summarize_macro(run_macro(panel, w, c, trade_from=a, side=side), c, a, b)

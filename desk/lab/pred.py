@@ -252,8 +252,13 @@ def evaluate_pred(code, store: PredStore, split='dev', cost=None, params=None, v
     # the empty years as flat days diluted every Sharpe and failed month/half-sample gates for every strategy
     if len(panel):
         a = max(a, int(panel['ts'].min()) // 86_400_000 * 86_400_000)
+    from .asof import LookAheadError, asof_guard
+    if cost.delay_rows < 1:
+        raise LookAheadError('pred: execution must be at least one row after the decision (delay_rows >= 1)')
     w = pred_signal(mod, panel, params)
-    causal = pred_causality(mod, panel) if with_causality else None
+    causal = asof_guard(lambda v: pred_signal(mod, v, params), panel, 'ts', n_cuts=6 if with_causality else 2,
+                        label=f'pred {split}')
+    causal = causal if with_causality else None
     # memory: only markets the strategy ever trades need simulating (15M+ panel rows otherwise, per variant)
     keep = panel.select('market').with_columns(pl.Series('w', w)).filter(pl.col('w') != 0).select('market').unique()
     mask = panel.select(pl.col('market').is_in(keep['market'].implode())).to_series().to_numpy()

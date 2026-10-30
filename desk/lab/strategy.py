@@ -188,6 +188,9 @@ def evaluate(code, store, days, cost: CostModel | None = None, params=None, fit_
     else:
         result = backtest(df, sig, res, cost)
         result['variants'] = {name: backtest(df, _transform(sig, tr), res, c) for name, (c, tr) in variants.items()}
+    if causality is not None and not causality.get('ok'):
+        from .asof import LookAheadError
+        raise LookAheadError('l2: look-ahead detected. ' + ' | '.join(causality.get('issues', [])[:3]))
     result['resolution'] = res
     result['causality'] = causality
     result['code_hash'] = code_hash(code)

@@ -248,11 +248,16 @@ def evaluate_perps(code, store: PerpsStore, split='dev', cost=None, params=None,
     if getattr(mod, 'PERPS_EXECUTION', 'taker') == 'maker':
         from dataclasses import replace
         cost = replace(cost, execution='maker')
+    from .asof import LookAheadError, asof_guard
+    if cost.delay_h < 0:
+        raise LookAheadError('perps: negative execution delay')
     panel, a, b = store.load(split, warmup_days=int(getattr(mod, 'WARMUP_DAYS', 30)))
     w = perps_signal(mod, panel, params)
+    causality = asof_guard(lambda v: perps_signal(mod, v, params), panel, 'ts', n_cuts=8 if with_causality else 3,
+                           label=f'perps {split}')
     out = summarize_perps(run_perps(panel, w, cost, trade_from_ms=a), cost, a, b)
     out['code_hash'] = code_hash(code)
-    out['causality'] = perps_causality(mod, panel) if with_causality else None
+    out['causality'] = causality if with_causality else None
     out['variants'] = {}
     for name, (c, side) in (variants or {}).items():
         if cost.execution == 'maker' and name != 'taker_execution' and c.execution == 'taker':

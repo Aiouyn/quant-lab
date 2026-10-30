@@ -176,7 +176,9 @@ class Pipeline:
                                     'infrastructure problem, not a rejection; operators were alerted. Do not resubmit as is.')
                     self.L.event('pipeline', 'EVAL_INFRA_ERROR', {'id': sid, 'error': str(r['error'])[:200]})
                     return
-                self.L.update_strategy(sid, status='rejected_dev', dev_report=r, gate_reasons=['evaluation_error'])
+                look = str(r['error']).startswith('LookAheadError')
+                self.L.update_strategy(sid, status='rejected_dev', dev_report=r,
+                                       gate_reasons=['look_ahead'] if look else ['evaluation_error'])
                 self._notify(s, f'[{sid}] {s["name"]}: evaluation failed: {r["error"][:600]}')
                 return
             self.L.trial(s['author'], 'submission', r['code_hash'], r['summary']['sharpe'], r['summary']['days'])
@@ -205,6 +207,9 @@ class Pipeline:
             r = await self._job(job)
             if 'error' not in r:
                 self.L.record_eval_trials(s['code'], r, 'pipeline_val')
+            if 'error' in r and str(r['error']).startswith('LookAheadError'):
+                self.L.update_strategy(sid, status='rejected_val', val_report=r, gate_reasons=['look_ahead'])
+                return
             if 'error' in r:
                 self.L.update_strategy(sid, status='error', val_report=r, gate_reasons=['validation_error'])
                 self._notify(s, f'[{sid}] validation run failed with an error (see officer).')

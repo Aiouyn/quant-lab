@@ -191,6 +191,8 @@ def perps_eval(job):
 
 
 def strategy_eval(job):
+    from .canary import canary_selfcheck
+    canary_selfcheck()                    # raises HarnessCompromised unless the planted look-ahead canary is rejected
     if load_strategy(job['code']).DESK in ('perps', 'macro', 'pred'):
         return panel_desk_eval(job, load_strategy(job['code']).DESK)
     if load_strategy(job['code']).DESK == 'carry':
