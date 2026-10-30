@@ -1572,7 +1572,8 @@ def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_t
     s_cfg = settings or SETTINGS
     if split == 'holdout':
         # the ONLY way to look at holdout data is with this strategy's claimed one-shot family key (ledger.claim_holdout_shot)
-        from ..lab.holdout import HoldoutLocked
+        from ..lab.holdout import HoldoutLocked, assert_holdout_allowed
+        assert_holdout_allowed(sid)
         if not holdout_family or ledger is None or not ledger.q(
                 'SELECT 1 FROM holdout_shots WHERE family=? AND strategy=?', (holdout_family, sid)):
             raise HoldoutLocked(f'{sid}: holdout evaluation requires a claimed holdout shot for this strategy')
@@ -1717,8 +1718,10 @@ def validate_and_promote_population(ledger, settings=None, desk: str | None = No
         # Stage 3: One-Shot HOLDOUT Gate (Gate C) + Frozen Bundle Export
         h_hash = row.get('code_hash') or code_hash(code)
         from ..lab.holdout import HoldoutAlreadyUsed, HoldoutLocked, assert_holdout_open, desk_holdout_window
-        if not allow_holdout:                     # seeding / tests: never spend a holdout shot
-            ledger.event(author, 'HOLDOUT_SKIPPED', {'id': sid, 'desk': s_desk, 'reason': 'allow_holdout=False'})
+        from ..lab.holdout import holdout_forbidden_reason
+        if not allow_holdout or holdout_forbidden_reason():     # seeding / tests: never spend a holdout shot
+            ledger.event(author, 'HOLDOUT_SKIPPED', {'id': sid, 'desk': s_desk,
+                                                     'reason': holdout_forbidden_reason() or 'allow_holdout=False'})
             evaluated.append({'id': sid, 'desk': s_desk, 'status': 'holdout', 'val_sharpe': val_sr, 'failed': []})
             continue
         try:
@@ -4063,7 +4066,7 @@ _DAEMON_STATE: dict = {
 
 def run_rsi_campaign(ledger, settings=None, generations: int = 3,
                      desks: list[str] | None = None, max_children_per_gen: int = 2,
-                     use_llm: bool = True, llm_fn=None) -> dict:
+                     use_llm: bool = True, llm_fn=None, allow_holdout: bool = True) -> dict:
     """Execute a closed-loop multi-generation Recursive Self-Improvement campaign across desks:
     For each generation g = 1 .. generations:
       1. Ensure multi-desk store panels (`macro`, `perps`, `carry`, `pred`) are built.
@@ -4129,6 +4132,7 @@ def run_rsi_campaign(ledger, settings=None, generations: int = 3,
             desk=None,
             max_candidates=max(3, len(bred_children) + 2),
             author=f'rsi-gate-gen{gen_num}',
+            allow_holdout=allow_holdout,
         )
 
         cand_charter = propose_charter_patch(ledger, role='researcher', pod=target_desks[0] if len(target_desks) == 1 else 'all')
@@ -4957,6 +4961,14 @@ def rsi_snapshot(ledger, settings=None) -> dict:
 
 
 def ensure_seeded(settings, ledger=None):
+    """Seed demo state. Seeding NEVER consumes a holdout shot or evaluates holdout data: everything it reaches runs
+    inside holdout_forbidden(), and run_rsi_campaign gets allow_holdout=False explicitly."""
+    from ..lab.holdout import holdout_forbidden
+    with holdout_forbidden('ensure_seeded'):
+        return _ensure_seeded(settings, ledger)
+
+
+def _ensure_seeded(settings, ledger=None):
     """Ensure the SQLite ledger has baseline organizational state, lessons, factors, strategies, store panels, Truth Machine promotions, and ERC portfolio."""
     from .ledger import Ledger
     from .roles import PODS
@@ -5156,7 +5168,8 @@ def factor(df, params):
         evaluate_rsi_drill(L, settings=settings, charter_id=cand['id'])
 
     if L.q("SELECT COUNT(*) AS n FROM rsi_runs WHERE kind='campaign_gen'")[0]['n'] == 0:
-        run_rsi_campaign(L, settings=settings, generations=2, desks=['macro', 'perps', 'carry', 'pred'], max_children_per_gen=1, use_llm=False)
+        run_rsi_campaign(L, settings=settings, generations=2, desks=['macro', 'perps', 'carry', 'pred'], max_children_per_gen=1, use_llm=False,
+                         allow_holdout=False)
 
     approved_pods = {r['pod'] for r in L.q("SELECT DISTINCT pod FROM strategies WHERE status IN ('approved', 'paper')")}
     if len(approved_pods) < 3:

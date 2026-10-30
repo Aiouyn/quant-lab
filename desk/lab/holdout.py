@@ -59,6 +59,7 @@ def window_bounds(window) -> tuple[date, date]:
 
 
 def assert_holdout_open(desk: str, window) -> tuple[date, date]:
+    assert_holdout_allowed(f'{desk} holdout')          # no-holdout scope (ensure_seeded) wins over any window
     a, b = window_bounds(window)
     if (str(a), str(b)) in {(x, y) for x, y in BURNED.get(desk, [])}:
         raise HoldoutLocked(f'{desk} holdout {a}..{b} is burned (pre-lock window, already looked at)')
@@ -183,3 +184,31 @@ def similar(a_tokens, b_tokens) -> float:
     if not a_tokens or not b_tokens:
         return 0.0
     return difflib.SequenceMatcher(None, a_tokens, b_tokens, autojunk=False).ratio()
+
+
+# ---------------------------------------------------------------------------------------------- no-holdout scopes
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+_FORBIDDEN = _contextvars.ContextVar('holdout_forbidden', default=None)
+
+
+@_contextlib.contextmanager
+def holdout_forbidden(reason):
+    """Inside this scope (seeding, demos, tests) no holdout shot can be claimed and no holdout data evaluated,
+    whatever code path is reached: Ledger.claim_holdout_shot and the RSI holdout evaluation both refuse."""
+    tok = _FORBIDDEN.set(reason)
+    try:
+        yield
+    finally:
+        _FORBIDDEN.reset(tok)
+
+
+def holdout_forbidden_reason():
+    return _FORBIDDEN.get()
+
+
+def assert_holdout_allowed(what='holdout'):
+    r = _FORBIDDEN.get()
+    if r:
+        raise HoldoutLocked(f'{what}: holdout is forbidden in this scope ({r})')

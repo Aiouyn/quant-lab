@@ -175,6 +175,8 @@ class Ledger:
     def claim_holdout_shot(self, sid, code, code_hash_, window=None):
         """Atomically take this family's one holdout shot or raise HoldoutAlreadyUsed. Returns the family key."""
         from ..lab.holdout import FAMILY_SIMILARITY, HoldoutAlreadyUsed, similar
+        from ..lab.holdout import assert_holdout_allowed
+        assert_holdout_allowed(sid)                     # e.g. ensure_seeded: never consumes a shot
         desk, keys, sk = self._family_rows(code, code_hash_, self.parent_codes(sid))
         toks = sk.split() if sk else []
         with self.db() as db:
