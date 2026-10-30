@@ -207,7 +207,7 @@ def drill_report(settings, kind):
     approved = st.get('approved', 0) + st.get('paper', 0)
     if kind == 'null':
         out['false_discoveries'] = approved
-        out['passed_validation_falsely'] = approved + st.get('rejected_holdout', 0)
+        out['passed_validation_falsely'] = approved + st.get('rejected_holdout', 0) + st.get('holdout_locked', 0)
         out['verdict'] = 'PASS (no false discoveries)' if approved == 0 else 'FAIL (false discoveries approved)'
         return out
     # planted: how well do registered factors / approved strategies track the hidden signal?

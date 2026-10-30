@@ -215,3 +215,19 @@ def test_unsealed_splits_are_a_hard_error(tmp_path):
     from desk.data.provenance import seal_splits
     seal_splits(f)
     assert read_splits(f)['dev'][0] == '2020-01-01'
+
+
+# ------------------------------------------------------------------------------------------- RSI choke point
+def test_rsi_holdout_eval_requires_a_claimed_shot(tmp_path, monkeypatch):
+    from desk.company import rsi
+    from desk.data import store_builder
+    s = _settings(tmp_path)
+    L = Ledger(tmp_path / 'l.sqlite3')
+    monkeypatch.setattr(store_builder, 'ensure_store_panels',
+                        lambda *a, **k: pytest.fail('holdout data path reached without a claimed shot'))
+    for kw in ({}, {'ledger': L}, {'ledger': L, 'holdout_family': 'sk:not-claimed'}):
+        with pytest.raises(HoldoutLocked):
+            rsi._evaluate_truth_machine_split(CODE, 'S-1', 'holdout', s, **kw)
+    fam = L.claim_holdout_shot('S-1', CODE, code_hash(CODE), FORWARD)
+    with pytest.raises(HoldoutLocked):                       # someone else's claim does not unlock it either
+        rsi._evaluate_truth_machine_split(CODE, 'S-2', 'holdout', s, ledger=L, holdout_family=fam)

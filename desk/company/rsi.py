@@ -1560,7 +1560,8 @@ def operator_bandit_leaderboard(ledger, desk: str | None = None) -> list[dict]:
     return out
 
 
-def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_trials: int = 1, ledger=None) -> dict:
+def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_trials: int = 1, ledger=None,
+                                  holdout_family: str | None = None) -> dict:
     """Evaluate strategy `code` on `split` (`dev`, `val`, `holdout`, or `forward`) using the canonical
     `strategy_eval` backtest harness on verified desk stores (`macro`, `perps`, `carry`, `pred`).
     Zero synthetic return blending — 100% pure store backtest math."""
@@ -1569,6 +1570,12 @@ def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_t
     from ..lab.harness import strategy_eval
 
     s_cfg = settings or SETTINGS
+    if split == 'holdout':
+        # the ONLY way to look at holdout data is with this strategy's claimed one-shot family key (ledger.claim_holdout_shot)
+        from ..lab.holdout import HoldoutLocked
+        if not holdout_family or ledger is None or not ledger.q(
+                'SELECT 1 FROM holdout_shots WHERE family=? AND strategy=?', (holdout_family, sid)):
+            raise HoldoutLocked(f'{sid}: holdout evaluation requires a claimed holdout shot for this strategy')
     ensure_store_panels(s_cfg, force=False, try_remote=False)
 
     mod = load_strategy(code)
@@ -1728,7 +1735,8 @@ def validate_and_promote_population(ledger, settings=None, desk: str | None = No
             rejected.append({'id': sid, 'stage': 'holdout', 'failed': failed_hold_dup})
             continue
 
-        hold_rep = _evaluate_truth_machine_split(code, sid, 'holdout', s_cfg, n_trials=1)
+        hold_rep = _evaluate_truth_machine_split(code, sid, 'holdout', s_cfg, n_trials=1, ledger=ledger,
+                                                 holdout_family=family)
         failed_hold = check(holdout_gates(s_cfg), hold_rep)
         ledger.record_holdout_result(family, sid, not failed_hold)
         hold_sr = float(hold_rep['summary']['sharpe'])
@@ -2702,7 +2710,7 @@ def run_adversarial_redteam_and_cross_pollinate(ledger, settings=None, use_llm: 
         else:
             d_imm = _evaluate_truth_machine_split(imm_code, f"{recip_sid}-imm", 'dev', s_cfg, n_trials=4)
             v_imm = _evaluate_truth_machine_split(imm_code, f"{recip_sid}-imm", 'val', s_cfg, n_trials=4)
-            h_imm = _evaluate_truth_machine_split(imm_code, f"{recip_sid}-imm", 'holdout', s_cfg, n_trials=4)
+            h_imm = {}       # no holdout peek here: the child goes through the one-shot truth machine like any other
             f_imm = _evaluate_truth_machine_split(imm_code, f"{recip_sid}-imm", 'forward', s_cfg, n_trials=4)
             cname = f"RSI Cross-Desk Immunized ({recip_sid}) [cross_desk_tail_immunizer_v1]"
             thesis = (
@@ -2712,10 +2720,9 @@ def run_adversarial_redteam_and_cross_pollinate(ledger, settings=None, use_llm: 
             imm_sid = ledger.add_strategy(cname, author, recip_desk, imm_code, imm_hash, '1d' if recip_desk == 'macro' else '1h', thesis)
             ledger.update_strategy(
                 imm_sid,
-                status='approved',
+                status='holdout',          # awaits validate_and_promote_population's family-keyed holdout shot
                 dev_report=d_imm,
                 val_report=v_imm,
-                holdout_report=h_imm,
                 forward_report=f_imm,
                 gate_reasons=[],
             )
