@@ -1601,6 +1601,9 @@ def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_t
     }
     if ledger is not None and split in ('dev', 'val'):
         job['trials'] = ledger.trial_moments(code)
+    if split == 'val':                                   # val_gates include PBO / CPCV: the grid must be evaluated
+        from ..pipeline.validation import overfit_job
+        job['overfit'] = overfit_job(s_cfg)
     ev = strategy_eval(job)
     if ledger is not None and split in ('dev', 'val') and 'error' not in ev:
         ev.setdefault('split', split)

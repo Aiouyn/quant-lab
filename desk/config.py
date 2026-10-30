@@ -112,6 +112,13 @@ class Settings:
     max_drawdown: float = 0.20
     max_top5_day_share: float = 0.5
     min_holdout_sharpe: float = 0.5
+    # overfitting gates (validation): PBO = max(CSCV, CPCV) over {submitted params} + the +/-20% parameter grid
+    max_pbo: float = 0.50               # reject when PBO > 0.50 (selected config does worse than the median OOS)
+    pbo_fail_closed: bool = True        # strict default: no grid (no numeric params) / too few days -> PBO undefined -> reject
+    cpcv_groups: int = 6
+    cpcv_test_groups: int = 2
+    cpcv_purge: int = 5                 # bars purged on both sides of each test group
+    cpcv_embargo_frac: float = 0.01     # embargo after each test group, fraction of T (ceil)
     # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1` + `deepseek-v4.1-flash`)
     provider: str = field(default_factory=_provider)
     model: str = field(default_factory=_default_model)

@@ -53,7 +53,31 @@ def val_gates(s):
         'stress_profitable': lambda r: r['stress']['pnl'] > 0,
         'mean_ex_top5_days>0': lambda r: r['stats'].get('mean_ex_top5_days_bps', 1.0) > 0,
         'causal': lambda r: bool(r.get('causality') and r['causality'].get('ok')),
+        'pbo<=%.2f' % s.max_pbo: lambda r: _pbo_ok(r, s),
+        'cpcv_oos_sharpe>0': lambda r: _cpcv_ok(r, s),
     }
+
+
+def overfit_job(s):
+    """Job block that makes the harness evaluate the parameter grid and report PBO / CPCV."""
+    return {'n_groups': s.cpcv_groups, 'k_test': s.cpcv_test_groups, 'purge': s.cpcv_purge,
+            'embargo_frac': s.cpcv_embargo_frac}
+
+
+def _pbo_ok(r, s):
+    import math
+    p = (r.get('overfit') or {}).get('pbo')
+    if p is None or not math.isfinite(p):
+        return not s.pbo_fail_closed
+    return p <= s.max_pbo
+
+
+def _cpcv_ok(r, s):
+    import math
+    v = ((r.get('overfit') or {}).get('cpcv') or {}).get('oos_sharpe_median')
+    if v is None or not math.isfinite(v):
+        return not s.pbo_fail_closed
+    return v > 0
 
 
 def holdout_gates(s):
@@ -203,7 +227,8 @@ class Pipeline:
             # the number of validation evaluations (dev-side search is what validation itself tests). Null SR noise.
             n_val = self.L.q("SELECT COUNT(*) n FROM strategies WHERE val_report IS NOT NULL")[0]['n'] + 1
             job = {'type': 'strategy_eval', 'code': s['code'], 'split': 'val', 'allowed': ['dev', 'val'], 'cost': self.cost(),
-                   'return_daily': True, 'stress': True, 'n_trials': n_val, 'trials': self.L.trial_moments(s['code'])}
+                   'return_daily': True, 'stress': True, 'n_trials': n_val, 'trials': self.L.trial_moments(s['code']),
+                   'overfit': overfit_job(self.s)}
             r = await self._job(job)
             if 'error' not in r:
                 self.L.record_eval_trials(s['code'], r, 'pipeline_val')

@@ -100,6 +100,9 @@ def carry_eval(job):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    if job.get('overfit'):
+        out['overfit'] = overfit_block(job, base, lambda pp: evaluate_carry(job['code'], cs, split, cost, params=pp,
+                                                                          with_causality=False), 365)
     _finish_trials(out, daily, job, base, var, 365)
     out['seconds'] = round(time.time() - t0, 1)
     return out
@@ -181,9 +184,41 @@ def panel_desk_eval(job, desk):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    if job.get('overfit'):
+        out['overfit'] = overfit_block(job, base, lambda pp: evaluate_fn(job['code'], st, split, cost, params=pp,
+                                                                       with_causality=False), periods)
     _finish_trials(out, daily, job, base, var, periods)
     out['seconds'] = round(time.time() - t0, 1)
     return out
+
+
+# ---------------------------------------------------------------------------------------------- overfitting (PBO)
+def param_grid(code):
+    """The submitted parameters plus +/-20% on each of the first four numeric parameters."""
+    p0 = dict(load_strategy(code).PARAMS)
+    grid = []
+    for k, v in [(k, v) for k, v in p0.items() if isinstance(v, (int, float)) and not isinstance(v, bool) and v != 0][:4]:
+        for f in (0.8, 1.2):
+            pp = dict(p0)
+            pp[k] = type(v)(v * f) if isinstance(v, float) else max(1, int(round(v * f)))
+            if pp[k] != v:
+                grid.append((k, pp))
+    return grid
+
+
+def overfit_block(job, base, run, periods):
+    """job['overfit'] = {n_groups, k_test, purge, embargo_frac}: evaluate the parameter grid on the same split and
+    report PBO (CSCV and CPCV with purge + embargo) over {submitted config} + grid."""
+    cfg = dict(job.get('overfit') or {})
+    series, configs = [(base['daily']['day'], base['daily']['ret'])], []
+    for k, pp in param_grid(job['code']):
+        r = run(pp)
+        series.append((r['daily']['day'], r['daily']['ret']))
+        configs.append({'param': k, 'value': pp[k], 'sharpe': round(float(r['sharpe']), 3), 'params': pp})
+    rep = stats.overfit_report(series, periods, **{k: cfg[k] for k in ('n_groups', 'k_test', 'purge', 'embargo_frac')
+                                                  if k in cfg})
+    rep['configs'] = configs
+    return rep
 
 
 def perps_eval(job):
@@ -246,6 +281,9 @@ def strategy_eval(job):
         sub, s2 = df.head(k), sig[:k]
         er = backtest(sub, s2, res, cost)
         out['certification'] = certify(sub, s2, res, cost, er)
+    if job.get('overfit'):
+        out['overfit'] = overfit_block(job, base, lambda pp: evaluate(job['code'], store, days, cost, params=pp,
+                                                                    fit_days=fit_pool, with_causality=False), 365)
     _finish_trials(out, daily, job, base, var, 365)
     out['seconds'] = round(time.time() - t0, 1)
     return out
@@ -311,6 +349,9 @@ def trial_log(code, base, var, out, periods):
             pp = dict(p0, **{x['param']: x['value']})
             log.append({'variant': f"param:{x['param']}={x['value']}", 'params_hash': _phash(pp, 'base'),
                         'sharpe': float(x['sharpe']), 'n_obs': n_obs, 'periods': periods})
+    for x in (out.get('overfit') or {}).get('configs') or []:
+        log.append({'variant': f"grid:{x['param']}={x['value']}", 'params_hash': _phash(x['params'], 'base'),
+                    'sharpe': float(x['sharpe']), 'n_obs': n_obs, 'periods': periods})
     return log
 
 
