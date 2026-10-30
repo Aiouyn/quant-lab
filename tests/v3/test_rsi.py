@@ -112,6 +112,7 @@ def signal(df, params):
     assert caus['ok'], caus
 
 
+@pytest.mark.needs_real_store
 def test_multi_desk_factor_crossover_and_evolve_population(tmp_path):
     from desk.config import SETTINGS
     import dataclasses
@@ -171,6 +172,7 @@ def test_opencode_deepseek_v4_1_flash_provider_config(monkeypatch):
     assert sid.startswith('ses_') and len(sid) == 30
 
 
+@pytest.mark.needs_real_store
 def test_store_builder_and_multi_desk_panels(tmp_path):
     import dataclasses
     from desk.config import SETTINGS
@@ -181,7 +183,8 @@ def test_store_builder_and_multi_desk_panels(tmp_path):
     from desk.lab.pred import PredStore
 
     s = dataclasses.replace(SETTINGS, home=tmp_path)
-    built = ensure_store_panels(s, force=True, try_remote=False)
+    # #12 removed the offline synthetic build; this now exercises the real remote build (opt-in).
+    built = ensure_store_panels(s, force=True, try_remote=True)
     assert set(built.keys()) == {'macro', 'perps', 'carry', 'pred'}
 
     status = store_panel_status(s)
@@ -195,6 +198,7 @@ def test_store_builder_and_multi_desk_panels(tmp_path):
     assert len(m_dev) > 100 and len(p_dev) > 100 and len(c_dev) > 100 and len(pr_dev) > 100
 
 
+@pytest.mark.needs_real_store
 def test_llm_breed_strategy_deepseek_v4_1_flash_free(tmp_path):
     import dataclasses
     from desk.config import SETTINGS
@@ -248,6 +252,7 @@ def test_autonomous_toolsmith_evolve_primitives(tmp_path):
     assert 'sparse_extreme_trigger' in names or 'xs_rank_orthogonalize' in names
 
 
+@pytest.mark.needs_real_store
 def test_multi_generation_rsi_campaign(tmp_path):
     import dataclasses
     from desk.config import SETTINGS
@@ -306,6 +311,7 @@ def test_no_fabricated_bandit_or_drill_defaults(tmp_path):
     assert snap['kpis']['hint_resolution_rate'] is None
 
 
+@pytest.mark.needs_real_store
 def test_forward_missing_is_not_run(tmp_path):
     import dataclasses
     import time
@@ -374,6 +380,7 @@ def test_process_drills_catch_adversarial_reports():
     assert len(check(DEV_GATES, junk)) > 0
 
 
+@pytest.mark.needs_real_store
 def test_truth_machine_gate_and_erc_master_portfolio(tmp_path):
     import dataclasses
     from desk.config import SETTINGS
@@ -400,6 +407,7 @@ def test_truth_machine_gate_and_erc_master_portfolio(tmp_path):
     assert len(snap['latest_portfolio']['members']) >= 1
 
 
+@pytest.mark.needs_real_store
 def test_continuous_rsi_daemon_lifecycle(tmp_path):
     import dataclasses
     import time
@@ -444,6 +452,7 @@ def signal(df, params):
     assert caus['ok'], caus
 
 
+@pytest.mark.needs_real_store
 def test_50_agent_tournament_funnel_effective_trials_and_multi_desk_survival(tmp_path):
     import dataclasses
     from desk.config import SETTINGS
