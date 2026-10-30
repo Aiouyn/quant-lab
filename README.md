@@ -70,7 +70,8 @@ How the agents stay coordinated:
 3. **Officer review.** Approve, revise or reject.
 4. **Sealed validation (25%).** All of these must hold:
    - net Sharpe ≥ 1
-   - deflated Sharpe ≥ 0.95 against all trials the firm has run
+   - deflated Sharpe ≥ 0.95 against all trials the firm has run (every backtest and variant in the insert-only
+     trial ledger, per strategy family and across families, with the variance of trial Sharpes)
    - bootstrap lower bound > 0
    - ≥ 55% positive weeks, ≥ 40 trades
    - top 5 days < 50% of PnL

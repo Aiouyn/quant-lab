@@ -324,6 +324,8 @@ class Toolbox:
             try:
                 t = json.loads(line)
                 self.L.trial(self.agent.name, t['kind'], t['id'], t['sharpe'], t['days'])
+                self.L.record_eval_trial(f"sandbox:{t['id']}", t.get('desk'), 'dev', t['kind'], t['sharpe'], t['days'],
+                                         t.get('periods') or 365, 'sandbox', t['id'])
                 n += 1
             except Exception:
                 pass
@@ -408,6 +410,7 @@ class Toolbox:
         from .rsi import record_primitive_outcome
         record_primitive_outcome(self.L, code, self.agent.name, 'strategy', ref_id=out['code_hash'], success=True, metric_val=sr)
         self.L.trial(self.agent.name, 'dev_backtest', out['code_hash'], sr, out['summary'].get('days'))
+        self.L.record_eval_trials(code, out, 'agent_dev_backtest')
         self.L.event(self.agent.name, 'DEV_BACKTEST', {'hash': out['code_hash'], 'sharpe': sr,
                                                        'days': out['summary'].get('days'), 'pnl': out['summary'].get('pnl')})
         return out

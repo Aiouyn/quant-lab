@@ -166,7 +166,8 @@ class Pipeline:
             trials = self.L.trial_stats()
             r = await self._job({'type': 'strategy_eval', 'code': s['code'], 'split': 'dev', 'allowed': ['dev'],
                                  'robustness': True, 'certify': True, 'cost': self.cost(),
-                                 'n_trials': max(trials['distinct_strategies'], 1), 'trial_sr_std': trials['sr_std_daily']})
+                                 'n_trials': max(trials['distinct_strategies'], 1), 'trial_sr_std': trials['sr_std_daily'],
+                                 'trials': self.L.trial_moments(s['code'])})
             if 'error' in r:
                 if str(r['error']).startswith('harness failed'):
                     # infrastructure failure (memory/timeout/crash): NOT a verdict on the strategy and not a trial
@@ -179,6 +180,7 @@ class Pipeline:
                 self._notify(s, f'[{sid}] {s["name"]}: evaluation failed: {r["error"][:600]}')
                 return
             self.L.trial(s['author'], 'submission', r['code_hash'], r['summary']['sharpe'], r['summary']['days'])
+            self.L.record_eval_trials(s['code'], r, 'pipeline_dev')
             failed = check(DEV_GATES, r)
             if failed:
                 self.L.update_strategy(sid, status='rejected_dev', dev_report=r, gate_reasons=failed)
@@ -199,8 +201,10 @@ class Pipeline:
             # the number of validation evaluations (dev-side search is what validation itself tests). Null SR noise.
             n_val = self.L.q("SELECT COUNT(*) n FROM strategies WHERE val_report IS NOT NULL")[0]['n'] + 1
             job = {'type': 'strategy_eval', 'code': s['code'], 'split': 'val', 'allowed': ['dev', 'val'], 'cost': self.cost(),
-                   'return_daily': True, 'stress': True, 'n_trials': n_val}
+                   'return_daily': True, 'stress': True, 'n_trials': n_val, 'trials': self.L.trial_moments(s['code'])}
             r = await self._job(job)
+            if 'error' not in r:
+                self.L.record_eval_trials(s['code'], r, 'pipeline_val')
             if 'error' in r:
                 self.L.update_strategy(sid, status='error', val_report=r, gate_reasons=['validation_error'])
                 self._notify(s, f'[{sid}] validation run failed with an error (see officer).')

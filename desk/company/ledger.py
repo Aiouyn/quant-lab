@@ -68,7 +68,14 @@ CREATE TRIGGER IF NOT EXISTS holdout_shots_no_dup BEFORE INSERT ON holdout_shots
   WHEN EXISTS (SELECT 1 FROM holdout_shots WHERE family = NEW.family)
   BEGIN SELECT RAISE(ABORT, 'holdout_shots is insert-only: family already used its holdout shot'); END;
 '''
-INSERT_ONLY_TABLES = ('holdout_shots', 'holdout_results', 'holdout_uses')
+# Trial ledger (cycle 1b): every backtest run (dev/val, any variant) appends one row; the deflated Sharpe counts them.
+HOLDOUT_LOCK_SQL += '''
+CREATE TABLE IF NOT EXISTS eval_trials(id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT, params_hash TEXT,
+  code_hash TEXT, desk TEXT, split TEXT, variant TEXT, sharpe REAL, n_obs INT, periods INT, sr_pp REAL, source TEXT,
+  created REAL);
+CREATE INDEX IF NOT EXISTS ix_eval_trials_family ON eval_trials(family);
+'''
+INSERT_ONLY_TABLES = ('holdout_shots', 'holdout_results', 'holdout_uses', 'eval_trials')
 for _t in INSERT_ONLY_TABLES:
     HOLDOUT_LOCK_SQL += (f"CREATE TRIGGER IF NOT EXISTS {_t}_no_update BEFORE UPDATE ON {_t} "
                          f"BEGIN SELECT RAISE(ABORT, '{_t} is insert-only'); END;\n"
@@ -385,6 +392,43 @@ class Ledger:
     def trial(self, author, kind, code_hash, sharpe, days):
         self.x('INSERT INTO trials(author,kind,code_hash,sharpe,days,created) VALUES(?,?,?,?,?,?)',
                (author, kind, code_hash, sharpe, days, time.time()))
+
+    @staticmethod
+    def family_of(code, code_hash_=None):
+        from ..lab.holdout import structural_family
+        try:
+            return structural_family(code)
+        except (SyntaxError, ValueError, TypeError):
+            return f'unknown:{code_hash_}'
+
+    def record_eval_trial(self, family, desk, split, variant, sharpe, n_obs, periods, source, code_hash_=None,
+                          params_hash=None):
+        import math
+        if sharpe is None or not math.isfinite(float(sharpe)):
+            return
+        periods = int(periods or 365)
+        self.x('INSERT INTO eval_trials(family,params_hash,code_hash,desk,split,variant,sharpe,n_obs,periods,sr_pp,'
+               'source,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+               (family, params_hash, code_hash_, desk, split, variant, float(sharpe), int(n_obs or 0), periods,
+                float(sharpe) / math.sqrt(periods), source, time.time()))
+
+    def record_eval_trials(self, code, out, source):
+        """Append every row of a harness `trial_log` (base + variants + parameter neighbours)."""
+        fam = self.family_of(code, out.get('code_hash'))
+        desk = out.get('desk') or 'l2'
+        for r in out.get('trial_log') or []:
+            self.record_eval_trial(fam, desk, out.get('split'), r.get('variant'), r.get('sharpe'), r.get('n_obs'),
+                                   r.get('periods'), source, out.get('code_hash'), r.get('params_hash'))
+
+    def trial_moments(self, code=None):
+        """Cumulative per-period Sharpe moments {n, sum, sumsq} for the code's family and across all families."""
+        def m(where='', args=()):
+            r = self.q(f'SELECT COUNT(sr_pp) n, TOTAL(sr_pp) s, TOTAL(sr_pp*sr_pp) ss FROM eval_trials {where}', args)[0]
+            return {'n': int(r['n'] or 0), 'sum': float(r['s'] or 0.0), 'sumsq': float(r['ss'] or 0.0)}
+        out = {'global': m()}
+        if code is not None:
+            out['family'] = m('WHERE family=?', (self.family_of(code),))
+        return out
 
     def trial_stats(self):
         # exploratory backtests on fewer than 10 days are too noisy to count as distinct strategy trials

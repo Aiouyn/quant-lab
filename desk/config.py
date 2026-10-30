@@ -107,7 +107,7 @@ class Settings:
     # validation gates
     min_val_trades: int = 40
     min_val_sharpe: float = 1.0         # annualized, net
-    min_dsr: float = 0.80               # deflated vs. #strategies evaluated on validation; plus bootstrap > 0
+    min_dsr: float = 0.95               # deflated vs. the cumulative trial ledger (per family and global); plus bootstrap > 0
     min_positive_weeks: float = 0.55
     max_drawdown: float = 0.20
     max_top5_day_share: float = 0.5

@@ -1241,6 +1241,8 @@ def evolve_population(ledger, settings=None, desk: str | None = None,
                 }
                 ledger.update_strategy(sid, status='dev_eval', dev_report=dev_rep, gate_reasons=[])
                 ledger.trial(author, 'dev_backtest', h, est_sr, dev_rep['summary']['days'])
+                ledger.record_eval_trial(ledger.family_of(crossed['code'], h), mod.DESK, 'dev', 'rsi_crossover', est_sr,
+                                         dev_rep['summary']['days'], 252 if mod.DESK == 'macro' else 365, 'rsi', h)
                 record_prims = record_primitive_outcome(ledger, crossed['code'], author, 'strategy', ref_id=sid, success=True, metric_val=est_sr)
                 delta = round(est_sr - 1.10, 2)
                 ledger.add_lineage(sid, 'strategy', [p['id'] for p in parents], crossed['operator'], mod.DESK, delta)
@@ -1338,6 +1340,8 @@ def evolve_population(ledger, settings=None, desk: str | None = None,
             }
             ledger.update_strategy(sid, status='dev_eval', dev_report=child_rep, gate_reasons=[])
             ledger.trial(author, 'dev_backtest', h, new_sr, child_rep['summary']['days'])
+            ledger.record_eval_trial(ledger.family_of(mut['code'], h), child_mod.DESK, 'dev', 'rsi_mutation', new_sr,
+                                     child_rep['summary']['days'], 252 if child_mod.DESK == 'macro' else 365, 'rsi', h)
             record_prims = record_primitive_outcome(ledger, mut['code'], author, 'strategy', ref_id=sid, success=True, metric_val=new_sr)
             ledger.add_lineage(sid, 'strategy', [s['id']], mut['operator'], child_mod.DESK, round(new_sr - parent_sr, 2))
             children.append({
@@ -1556,7 +1560,7 @@ def operator_bandit_leaderboard(ledger, desk: str | None = None) -> list[dict]:
     return out
 
 
-def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_trials: int = 1) -> dict:
+def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_trials: int = 1, ledger=None) -> dict:
     """Evaluate strategy `code` on `split` (`dev`, `val`, `holdout`, or `forward`) using the canonical
     `strategy_eval` backtest harness on verified desk stores (`macro`, `perps`, `carry`, `pred`).
     Zero synthetic return blending — 100% pure store backtest math."""
@@ -1588,7 +1592,12 @@ def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_t
         'robustness': (split in ('dev', 'val')),
         'return_daily': True,
     }
+    if ledger is not None and split in ('dev', 'val'):
+        job['trials'] = ledger.trial_moments(code)
     ev = strategy_eval(job)
+    if ledger is not None and split in ('dev', 'val') and 'error' not in ev:
+        ev.setdefault('split', split)
+        ledger.record_eval_trials(code, ev, 'rsi_truth_machine')
     if 'summary' in ev and 'mean_daily_bps' not in ev['summary']:
         rets = np.asarray((ev.get('daily') or {}).get('ret') or [0.0], dtype=float)
         ev['summary']['mean_daily_bps'] = round(float(np.mean(rets) * 1e4), 3)
@@ -1664,7 +1673,7 @@ def validate_and_promote_population(ledger, settings=None, desk: str | None = No
             continue
 
         # Stage 1: Full DEV Gate (Gate A)
-        dev_rep = _evaluate_truth_machine_split(code, sid, 'dev', s_cfg, n_trials=n_eff)
+        dev_rep = _evaluate_truth_machine_split(code, sid, 'dev', s_cfg, n_trials=n_eff, ledger=ledger)
         failed_dev = check(DEV_GATES, dev_rep)
         if failed_dev:
             ledger.update_strategy(sid, status='rejected_dev', dev_report=dev_rep, gate_reasons=failed_dev)
@@ -1679,7 +1688,7 @@ def validate_and_promote_population(ledger, settings=None, desk: str | None = No
         ledger.update_strategy(sid, status='validating', dev_report=dev_rep, gate_reasons=[])
 
         # Stage 2: Sealed VAL Gate with Cluster-Adjusted Effective Trials DSR (Gate B)
-        val_rep = _evaluate_truth_machine_split(code, sid, 'val', s_cfg, n_trials=n_eff)
+        val_rep = _evaluate_truth_machine_split(code, sid, 'val', s_cfg, n_trials=n_eff, ledger=ledger)
         failed_val = check(val_gates(s_cfg), val_rep)
         val_sr = float(val_rep['summary']['sharpe'])
         if failed_val:
@@ -2397,7 +2406,7 @@ def run_counterfactual_ablation_and_replace(ledger, settings=None, use_llm: bool
         if not cached_ab:
             raw_code, mechanism = _build_ablated_baseline_code(code, dk)
             try:
-                ab_rep = _evaluate_truth_machine_split(raw_code, f"{sid}-ablated", 'val', s_cfg, n_trials=2)
+                ab_rep = _evaluate_truth_machine_split(raw_code, f"{sid}-ablated", 'val', s_cfg, n_trials=2, ledger=ledger)
                 ab_sum = ab_rep.get('summary') or {}
                 raw_val_sr = round(float(np.clip(ab_sum.get('sharpe') or 0.0, -2.85, 10.0)), 2)
                 raw_dd = round(float(np.clip(ab_sum.get('max_drawdown') or 0.14, 0.01, 0.65)), 4)
@@ -4201,7 +4210,7 @@ def run_tournament_funnel(ledger, settings=None, n_agents: int = 50,
     for r in dev_cands:
         try:
             mod = load_strategy(r['code'])
-            d_rep = _evaluate_truth_machine_split(r['code'], r['id'], 'dev', s_cfg, n_trials=2)
+            d_rep = _evaluate_truth_machine_split(r['code'], r['id'], 'dev', s_cfg, n_trials=2, ledger=ledger)
             rets = np.asarray((d_rep.get('daily') or {}).get('ret') or [], dtype=float)
             if len(rets) >= 15 and np.std(rets) > 1e-9:
                 cand_streams.append(rets[:60])

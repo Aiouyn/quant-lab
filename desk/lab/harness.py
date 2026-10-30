@@ -78,9 +78,6 @@ def carry_eval(job):
                     'positive_weeks': round(stats.weekly_positive_fraction(base['daily']['day'], daily), 3),
                     'top5_day_share': round(stats.top_day_share(daily), 3),
                     'mean_ex_top5_days_bps': round(stats.mean_ex_top(daily) * 1e4, 3)}
-    if job.get('n_trials'):
-        out['stats']['dsr'] = round(stats.dsr(daily, job['n_trials'], job.get('trial_sr_std')), 4)
-        out['stats']['n_trials'] = job['n_trials']
     if job.get('return_daily'):
         out['daily'] = base['daily']
     if job.get('stress'):
@@ -103,6 +100,7 @@ def carry_eval(job):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    _finish_trials(out, daily, job, base, var, 365)
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -161,9 +159,6 @@ def panel_desk_eval(job, desk):
                     'top5_day_share': round(stats.top_day_share(daily), 3),
                     'mean_ex_top5_days_bps': round(base['mean_ex_top5_days_bps'], 3),
                     'median_daily_bps': round(base['median_daily_bps'], 3)}
-    if job.get('n_trials'):
-        out['stats']['dsr'] = round(stats.dsr(daily, job['n_trials'], job.get('trial_sr_std')), 4)
-        out['stats']['n_trials'] = job['n_trials']
     if job.get('return_daily'):
         out['daily'] = base['daily']
     if job.get('stress'):
@@ -186,6 +181,7 @@ def panel_desk_eval(job, desk):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    _finish_trials(out, daily, job, base, var, periods)
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -234,9 +230,6 @@ def strategy_eval(job):
         'top5_day_share': round(stats.top_day_share(daily), 3),
         'mean_ex_top5_days_bps': round(stats.mean_ex_top(daily) * 1e4, 3),
     }
-    if job.get('n_trials'):
-        out['stats']['dsr'] = round(stats.dsr(daily, job['n_trials'], job.get('trial_sr_std')), 4)
-        out['stats']['n_trials'] = job['n_trials']
     if job.get('return_daily'):
         out['daily'] = base['daily']
     if job.get('stress'):
@@ -251,6 +244,7 @@ def strategy_eval(job):
         sub, s2 = df.head(k), sig[:k]
         er = backtest(sub, s2, res, cost)
         out['certification'] = certify(sub, s2, res, cost, er)
+    _finish_trials(out, daily, job, base, var, 365)
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -292,6 +286,68 @@ def robustness(code, store, days, cost, base, var):
                                      'median_sharpe': round(float(np.median([x['sharpe'] for x in ok])), 3) if ok else None}
     return rob
 
+
+
+# ---------------------------------------------------------------------------------------------- trials + honest DSR
+def _phash(params, variant):
+    import hashlib
+    return hashlib.sha256(json.dumps([variant, params], sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def trial_log(code, base, var, out, periods):
+    """One row per backtest this job ran: the base run, every cost/side variant and every parameter neighbour."""
+    p0 = dict(load_strategy(code).PARAMS)
+    n_obs = len(base['daily']['ret'])
+    log = [{'variant': 'base', 'params_hash': _phash(p0, 'base'), 'sharpe': float(base.get('sharpe') or 0.0),
+            'n_obs': n_obs, 'periods': periods}]
+    for k, v in (var or {}).items():
+        if isinstance(v, dict) and v.get('sharpe') is not None:
+            log.append({'variant': k, 'params_hash': _phash(p0, k), 'sharpe': float(v['sharpe']), 'n_obs': n_obs,
+                        'periods': periods})
+    for x in ((out.get('robustness') or {}).get('param_neighborhood') or {}).get('variants') or []:
+        if x.get('sharpe') is not None:
+            pp = dict(p0, **{x['param']: x['value']})
+            log.append({'variant': f"param:{x['param']}={x['value']}", 'params_hash': _phash(pp, 'base'),
+                        'sharpe': float(x['sharpe']), 'n_obs': n_obs, 'periods': periods})
+    return log
+
+
+def deflate(daily, job, log):
+    """DSR against the REAL cumulative trial count, per family and across families, using the variance of trial
+    Sharpes (per-period). The variance is floored at the null 1/T and the count at any legacy count the host passed,
+    so this is never looser than the old null-variance DSR. Returns None when the job asked for no deflation."""
+    if not (job.get('trials') or job.get('n_trials')):
+        return None
+    import math
+    T = max(len(daily), 2)
+    floor = 1.0 / T
+    legacy_n = int(job.get('n_trials') or 0)
+    legacy_sd = job.get('trial_sr_std')
+    if legacy_sd is not None:
+        floor = max(floor, float(legacy_sd) ** 2)
+    cur = [r['sharpe'] / math.sqrt(r['periods']) for r in log if np.isfinite(r['sharpe'])]
+    res = {}
+    for scope in ('family', 'global'):
+        m = (job.get('trials') or {}).get(scope) or {}
+        n = int(m.get('n') or 0) + len(cur)
+        sm = float(m.get('sum') or 0.0) + float(np.sum(cur))
+        sq = float(m.get('sumsq') or 0.0) + float(np.sum(np.square(cur)))
+        var = max(sq / n - (sm / n) ** 2, 0.0) if n > 1 else 0.0
+        var = max(var, floor)
+        n_eff = max(n, legacy_n, 2)
+        res[scope] = {'n': n_eff, 'sr_var': var, 'dsr': float(stats.dsr(daily, n_eff, math.sqrt(var)))}
+    return res
+
+
+def _finish_trials(out, daily, job, base, var, periods):
+    log = trial_log(job['code'], base, var, out, periods)
+    out['trial_log'] = log
+    d = deflate(daily, job, log)
+    if d is not None:
+        out['stats'].update({'dsr': round(min(d['family']['dsr'], d['global']['dsr']), 4),
+                             'dsr_family': round(d['family']['dsr'], 4), 'dsr_global': round(d['global']['dsr'], 4),
+                             'n_trials': d['global']['n'], 'n_trials_family': d['family']['n'],
+                             'trial_sr_var_family': d['family']['sr_var'], 'trial_sr_var_global': d['global']['sr_var']})
 
 def panel_factor_eval(job):
     from .panel_factor import evaluate
