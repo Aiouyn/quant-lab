@@ -4,6 +4,10 @@
 - `freeze_splits`: a split file is created only when absent; an existing (frozen) file is never rewritten, and a
   rebuild whose computed split differs from the frozen one raises `SplitsMismatch` instead of silently moving data
   between dev/val/holdout.
+- `write_splits` / `read_splits`: every splits.json has a sha256 manifest (`splits.json.sha256`) written next to it;
+  `read_splits` recomputes the hash on every load and a missing or mismatching manifest is a hard error
+  (`SplitsIntegrityError`). Existing files are sealed once, deliberately, with `seal_splits` / `python -m
+  desk.data.provenance seal <splits.json>`.
 - `write_provenance`: `provenance.json` sidecar with source, UTC fetch time, row/asset counts, date range and the
   code commit that built the panel.
 """
@@ -26,6 +30,10 @@ class StoreBuildError(RuntimeError):
 
 class SplitsMismatch(StoreBuildError):
     """The split a rebuild would compute differs from the frozen splits.json on disk."""
+
+
+class SplitsIntegrityError(RuntimeError):
+    """splits.json does not match its sha256 manifest (or has none). Never auto-repaired."""
 
 
 # ---------------------------------------------------------------------------------------------- atomic writes
@@ -73,7 +81,7 @@ def freeze_splits(path, computed: dict, desk: str) -> dict:
     """Create `path` from `computed` if absent; otherwise verify and return the frozen file untouched."""
     path = Path(path)
     if path.exists():
-        frozen = json.loads(path.read_text(encoding='utf-8'))
+        frozen = read_splits(path)
         if _core(frozen) != _core(computed):
             raise SplitsMismatch(
                 f'{desk}: frozen {path} differs from the split this build computes; refusing to overwrite.\n'
@@ -81,8 +89,51 @@ def freeze_splits(path, computed: dict, desk: str) -> dict:
                 'Investigate (or delete the file deliberately) before rebuilding.')
         return frozen
     sp = {**computed, 'created': datetime.now(timezone.utc).isoformat(timespec='seconds')}
-    atomic_write_json(path, sp)
+    write_splits(path, sp)
     return sp
+
+
+# ---------------------------------------------------------------------------------------------- sha256 manifest
+def manifest_path(path) -> Path:
+    path = Path(path)
+    return path.with_name(path.name + '.sha256')
+
+
+def _sha256(b: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(b).hexdigest()
+
+
+def seal_splits(path) -> str:
+    """Write the sha256 manifest for the CURRENT bytes of `path`. Only for writers that own the file."""
+    path = Path(path)
+    digest = _sha256(path.read_bytes())
+    _replace_from_tmp(manifest_path(path), lambda t: t.write_text(f'{digest}  {path.name}\n', encoding='utf-8'))
+    return digest
+
+
+def write_splits(path, obj, indent=1) -> Path:
+    """The only sanctioned way to (re)write a splits.json: atomic write, then the manifest for those exact bytes."""
+    path = Path(path)
+    atomic_write_json(path, obj, indent=indent)
+    seal_splits(path)
+    return path
+
+
+def read_splits(path) -> dict:
+    """Load a splits.json after checking it against its manifest. Mismatch or missing manifest -> SplitsIntegrityError."""
+    path = Path(path)
+    raw = path.read_bytes()
+    m = manifest_path(path)
+    if not m.exists():
+        raise SplitsIntegrityError(f'{path}: no sha256 manifest ({m.name}); refusing to use unsealed splits. '
+                                   'Seal it deliberately: python -m desk.data.provenance seal <path>')
+    want = m.read_text(encoding='utf-8').split()[0].strip().lower() if m.read_text(encoding='utf-8').strip() else ''
+    got = _sha256(raw)
+    if want != got:
+        raise SplitsIntegrityError(f'{path}: sha256 {got[:16]}.. does not match manifest {want[:16]}..; '
+                                   'splits.json was modified outside write_splits(). Investigate before running anything.')
+    return json.loads(raw.decode('utf-8'))
 
 
 # ---------------------------------------------------------------------------------------------- provenance
@@ -127,3 +178,13 @@ def write_provenance(root, desk: str, source: str, panel, time_col: str, asset_c
     }
     atomic_write_json(Path(root) / 'provenance.json', prov, indent=2)
     return prov
+
+
+if __name__ == '__main__':                                     # python -m desk.data.provenance seal <splits.json>...
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == 'seal':
+        for a in sys.argv[2:]:
+            print(f'{seal_splits(a)}  {a}')
+    else:
+        print('usage: python -m desk.data.provenance seal <splits.json> [...]')
+        sys.exit(2)

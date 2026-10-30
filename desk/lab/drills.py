@@ -157,8 +157,9 @@ def build_drill(settings, kind, n_days=90, seed=7):
     store.mkdir(parents=True)
     rng = np.random.default_rng(seed)
     a, b = int(len(days) * 0.6), int(len(days) * 0.85)
-    (store / 'splits.json').write_text(json.dumps({'created': time.time(), 'dev': days[:a], 'val': days[a:b],
-                                                   'holdout': days[b:], 'forward': [], 'drill': kind}))
+    from ..data.provenance import write_splits
+    write_splits(store / 'splits.json', {'created': time.time(), 'dev': days[:a], 'val': days[a:b],
+                                         'holdout': days[b:], 'forward': [], 'drill': kind}, indent=None)
     for f in ('funding_hl.parquet',):
         if (src / f).exists():
             shutil.copy2(src / f, store / f)

@@ -135,7 +135,8 @@ def test_split_guard(tmp_path):
     days = [f'2025-11-{d:02d}' for d in range(1, 11)]
     for d in days:
         synth(100).write_parquet(tmp_path / '1s' / f'{d}.parquet')
-    (tmp_path / 'splits.json').write_text(json.dumps({'created': 0, 'dev': days[:6], 'val': days[6:8], 'holdout': days[8:], 'forward': []}))
+    from desk.data.provenance import write_splits
+    write_splits(tmp_path / 'splits.json', {'created': 0, 'dev': days[:6], 'val': days[6:8], 'holdout': days[8:], 'forward': []})
     st = FeatureStore(S(), root=tmp_path, allowed=('dev',))
     st.load(days[0])
     with pytest.raises(SplitViolation):

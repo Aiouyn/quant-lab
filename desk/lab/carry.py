@@ -65,13 +65,17 @@ class CarryStore:
         self._panel = None
 
     def splits(self):
-        return json.loads((self.root / 'splits.json').read_text())
+        from ..data.provenance import read_splits
+        return read_splits(self.root / 'splits.json')
 
-    def range_ms(self, split):
+    def range_ms(self, split, _lock=True):
         if split not in self.allowed:
             from ..data.store import SplitViolation
             raise SplitViolation(f'carry {split} data is not available in this context')
         a, b = self.splits()[split]
+        if split == 'holdout' and _lock:
+            from .holdout import assert_holdout_open
+            assert_holdout_open('carry', [a, b])
         to = lambda d: int(datetime.fromisoformat(d).replace(tzinfo=timezone.utc).timestamp() * 1000)
         return to(a), to(b) + 86_400_000
 
@@ -85,7 +89,7 @@ class CarryStore:
 
     def load(self, split, warmup_days=30, coins=None):
         a, b = self.range_ms(split)
-        latest_allowed = max(self.range_ms(s)[1] for s in self.allowed)
+        latest_allowed = max(self.range_ms(s, _lock=False)[1] for s in self.allowed)
         p = self.panel().filter((pl.col('ts') >= a - warmup_days * 86_400_000) & (pl.col('ts') < min(b, latest_allowed)))
         if coins:
             p = p.filter(pl.col('coin').is_in(list(coins)))

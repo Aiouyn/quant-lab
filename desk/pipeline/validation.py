@@ -216,18 +216,30 @@ class Pipeline:
             self.L.event('pipeline', 'VAL_PASS', {'id': sid, 'sharpe': r['summary']['sharpe'], 'dsr': r['stats'].get('dsr')})
             s = self.L.strategy(sid)
         if s['status'] == 'holdout':
-            used = self.L.q('SELECT strategy FROM holdout_uses WHERE code_hash=?', (s['code_hash'],))
-            if used and used[0]['strategy'] != sid:
-                self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_identical_code'])
+            from ..lab.holdout import HoldoutAlreadyUsed, HoldoutLocked, assert_holdout_open, code_desk, desk_holdout_window
+            try:                                                 # 1) window must be forward-only and not burned
+                window = desk_holdout_window(self.s, code_desk(s['code']))
+                assert_holdout_open(code_desk(s['code']), window)
+            except HoldoutLocked as e:
+                self.L.update_strategy(sid, status='holdout_locked', gate_reasons=['holdout_burned_or_not_forward'])
+                self.L.event('pipeline', 'HOLDOUT_LOCKED', {'id': sid, 'reason': str(e)})
+                self._notify(s, f'[{sid}] {s["name"]} passed validation and is waiting for a forward-only holdout '
+                                '(all existing holdout windows are burned).')
                 return
-            self.L.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (s['code_hash'], sid, time.time(), None))
+            try:                                                 # 2) one shot per strategy FAMILY, insert-only ledger
+                family = self.L.claim_holdout_shot(sid, s['code'], s['code_hash'], window)
+            except HoldoutAlreadyUsed as e:
+                self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_family'])
+                self.L.event('pipeline', 'HOLDOUT_REFUSED', {'id': sid, 'reason': str(e)})
+                return
             r = await self._job({'type': 'strategy_eval', 'code': s['code'], 'split': 'holdout', 'allowed': ['dev', 'val', 'holdout'],
                                  'cost': self.cost(), 'return_daily': True, 'stress': True})
             if 'error' in r:
+                self.L.record_holdout_result(family, sid, False)
                 self.L.update_strategy(sid, status='error', holdout_report=r, gate_reasons=['holdout_error'])
                 return
             failed = check(holdout_gates(self.s), r)
-            self.L.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed else 1, s['code_hash']))
+            self.L.record_holdout_result(family, sid, not failed)
             if failed:
                 self.L.update_strategy(sid, status='rejected_holdout', holdout_report=r, gate_reasons=failed)
                 self._notify(s, f'[{sid}] {s["name"]} passed validation but FAILED the one-shot holdout. It is retired.')

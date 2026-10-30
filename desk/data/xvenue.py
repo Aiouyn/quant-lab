@@ -120,6 +120,7 @@ def load(coin, start, end):
 
 
 if __name__ == '__main__':
-    sp = json.loads((ROOT / 'splits.json').read_text())
+    from .provenance import read_splits
+    sp = read_splits(ROOT / 'splits.json')
     a, b = sp[sys.argv[1] if len(sys.argv) > 1 else 'dev']
     build(a, b, coins=sys.argv[2].split(',') if len(sys.argv) > 2 else COINS)

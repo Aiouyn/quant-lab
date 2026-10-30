@@ -65,17 +65,21 @@ class PerpsStore:
         self._panel = None
 
     def splits(self):
+        from ..data.provenance import read_splits, write_splits
         f = self.root / 'splits.json'
         if not f.exists():
             self.root.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(SPLITS, indent=1))
-        return json.loads(f.read_text())
+            write_splits(f, SPLITS)
+        return read_splits(f)
 
-    def range_ms(self, split):
+    def range_ms(self, split, _lock=True):
         if split not in self.allowed:
             from ..data.store import SplitViolation
             raise SplitViolation(f'perps {split} data is not available in this context')
         a, b = self.splits()[split]
+        if split == 'holdout' and _lock:
+            from .holdout import assert_holdout_open
+            assert_holdout_open('perps', [a, b])
         return _ms(a), _ms(b) + 86_400_000
 
     def panel(self):
@@ -85,7 +89,7 @@ class PerpsStore:
 
     def load(self, split, warmup_days=30, coins=None):
         a, b = self.range_ms(split)
-        latest = max(self.range_ms(s)[1] for s in self.allowed)
+        latest = max(self.range_ms(s, _lock=False)[1] for s in self.allowed)
         p = self.panel().filter((pl.col('ts') >= a - warmup_days * 86_400_000) & (pl.col('ts') < min(b, latest)))
         if coins:
             p = p.filter(pl.col('coin').is_in(list(coins)))

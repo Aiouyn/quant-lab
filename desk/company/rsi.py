@@ -1596,7 +1596,8 @@ def _evaluate_truth_machine_split(code: str, sid: str, split: str, settings, n_t
 
 
 def validate_and_promote_population(ledger, settings=None, desk: str | None = None,
-                                    max_candidates: int = 8, author: str = 'rsi-truth-machine') -> dict:
+                                    max_candidates: int = 8, author: str = 'rsi-truth-machine',
+                                    allow_holdout: bool = True) -> dict:
     """Run the strict 3-stage Truth Machine gate (`DEV_GATES` -> `val_gates` with N_eff DSR -> one-shot `holdout_gates` -> bundle export)
     and auto-build the Equal-Risk-Contribution (ERC) Master Portfolio from approved strategies."""
     from ..config import SETTINGS
@@ -1696,18 +1697,31 @@ def validate_and_promote_population(ledger, settings=None, desk: str | None = No
 
         # Stage 3: One-Shot HOLDOUT Gate (Gate C) + Frozen Bundle Export
         h_hash = row.get('code_hash') or code_hash(code)
-        used = ledger.q('SELECT strategy FROM holdout_uses WHERE code_hash=?', (h_hash,))
-        if used and used[0]['strategy'] != sid:
-            failed_hold_dup = ['holdout_already_used_by_identical_code']
+        from ..lab.holdout import HoldoutAlreadyUsed, HoldoutLocked, assert_holdout_open, desk_holdout_window
+        if not allow_holdout:                     # seeding / tests: never spend a holdout shot
+            ledger.event(author, 'HOLDOUT_SKIPPED', {'id': sid, 'desk': s_desk, 'reason': 'allow_holdout=False'})
+            evaluated.append({'id': sid, 'desk': s_desk, 'status': 'holdout', 'val_sharpe': val_sr, 'failed': []})
+            continue
+        try:
+            window = desk_holdout_window(s_cfg, s_desk)
+            assert_holdout_open(s_desk, window)
+        except HoldoutLocked as e:
+            ledger.update_strategy(sid, status='holdout_locked', gate_reasons=['holdout_burned_or_not_forward'])
+            ledger.event(author, 'HOLDOUT_LOCKED', {'id': sid, 'desk': s_desk, 'reason': str(e)})
+            evaluated.append({'id': sid, 'desk': s_desk, 'status': 'holdout_locked', 'val_sharpe': val_sr, 'failed': []})
+            continue
+        try:
+            family = ledger.claim_holdout_shot(sid, code, h_hash, window)
+        except HoldoutAlreadyUsed:
+            failed_hold_dup = ['holdout_already_used_by_family']
             ledger.update_strategy(sid, status='rejected_holdout', gate_reasons=failed_hold_dup)
             _credit_reject(sid, 'holdout', failed_hold_dup, code, s_desk)
             rejected.append({'id': sid, 'stage': 'holdout', 'failed': failed_hold_dup})
             continue
 
-        ledger.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (h_hash, sid, time.time(), None))
         hold_rep = _evaluate_truth_machine_split(code, sid, 'holdout', s_cfg, n_trials=1)
         failed_hold = check(holdout_gates(s_cfg), hold_rep)
-        ledger.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed_hold else 1, h_hash))
+        ledger.record_holdout_result(family, sid, not failed_hold)
         hold_sr = float(hold_rep['summary']['sharpe'])
         if failed_hold:
             ledger.update_strategy(sid, status='rejected_holdout', holdout_report=hold_rep, gate_reasons=failed_hold)

@@ -59,16 +59,21 @@ class PredStore:
         self._panel = None
 
     def splits(self):
+        from ..data.provenance import read_splits, write_splits
         f = self.root / 'splits.json'
         if not f.exists():
-            f.write_text(json.dumps(SPLITS, indent=1))
-        return json.loads(f.read_text())
+            self.root.mkdir(parents=True, exist_ok=True)
+            write_splits(f, SPLITS)
+        return read_splits(f)
 
-    def range_ms(self, split):
+    def range_ms(self, split, _lock=True):
         if split not in self.allowed:
             from ..data.store import SplitViolation
             raise SplitViolation(f'pred {split} data is not available in this context')
         a, b = self.splits()[split]
+        if split == 'holdout' and _lock:
+            from .holdout import assert_holdout_open
+            assert_holdout_open('pred', [a, b])
         return _ms(a), _ms(b) + 86_400_000
 
     def panel(self):
@@ -78,7 +83,7 @@ class PredStore:
 
     def load(self, split, warmup_days=0, coins=None):
         a, b = self.range_ms(split)
-        latest = max(self.range_ms(s)[1] for s in self.allowed)
+        latest = max(self.range_ms(s, _lock=False)[1] for s in self.allowed)
         # lazy scan: filter on disk (the full panel is ~25M rows); compact dtypes
         # only markets that RESOLVED inside the allowed window can be scored (their outcome is in the past)
         p = (pl.scan_parquet(self.root / 'panel.parquet')

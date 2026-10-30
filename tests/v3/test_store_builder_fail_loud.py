@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 from desk.data import carry_data, macro_data, store_builder
-from desk.data.provenance import SplitsMismatch, StoreBuildError, freeze_splits, write_provenance
+from desk.data.provenance import write_splits, SplitsMismatch, StoreBuildError, freeze_splits, write_provenance
 from desk.lab.macro import SPLITS as MACRO_SPLITS
 
 
@@ -88,7 +88,7 @@ def test_freeze_splits_mismatch_raises_and_keeps_file(tmp_path):
     f = tmp_path / 'splits.json'
     frozen = {'created': 0, 'dev': ['2023-06-01', '2024-01-01'], 'val': ['2024-01-02', '2024-06-01'],
               'holdout': ['2024-06-02', '2024-09-01']}
-    f.write_text(json.dumps(frozen))
+    write_splits(f, frozen)
     before = f.read_bytes()
     bogus_150_110_60 = {'dev': ['2025-10-15', '2026-03-13'], 'val': ['2026-03-14', '2026-07-01'],
                         'holdout': ['2026-07-02', '2026-08-30']}
@@ -100,7 +100,7 @@ def test_freeze_splits_mismatch_raises_and_keeps_file(tmp_path):
 def test_macro_build_respects_existing_frozen_splits(tmp_path, monkeypatch):
     s = _settings(tmp_path)
     (s.store / 'macro').mkdir(parents=True)
-    (s.store / 'macro' / 'splits.json').write_text(json.dumps({'dev': ['1999-01-01', '2001-01-01']}))
+    write_splits(s.store / 'macro' / 'splits.json', {'dev': ['1999-01-01', '2001-01-01']})
     monkeypatch.setattr(macro_data, 'fetch_universe', lambda *a, **k: pytest.fail('must not fetch on mismatch'))
     with pytest.raises(SplitsMismatch):
         store_builder.build_macro_store(s, force=True)

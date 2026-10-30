@@ -49,16 +49,20 @@ class MacroStore:
         self._panel = None
 
     def splits(self):
+        from ..data.provenance import read_splits, write_splits
         f = self.root / 'splits.json'
         if not f.exists():
-            f.write_text(json.dumps(SPLITS, indent=1))
-        return json.loads(f.read_text())
+            write_splits(f, SPLITS)
+        return read_splits(f)
 
-    def range_dates(self, split):
+    def range_dates(self, split, _lock=True):
         if split not in self.allowed:
             from ..data.store import SplitViolation
             raise SplitViolation(f'macro {split} data is not available in this context')
         a, b = self.splits()[split]
+        if split == 'holdout' and _lock:
+            from .holdout import assert_holdout_open
+            assert_holdout_open('macro', [a, b])
         return date.fromisoformat(a), date.fromisoformat(b)
 
     def panel(self):
@@ -68,7 +72,7 @@ class MacroStore:
 
     def load(self, split, warmup_days=300, symbols=None):
         a, b = self.range_dates(split)
-        latest = max(self.range_dates(s)[1] for s in self.allowed)
+        latest = max(self.range_dates(s, _lock=False)[1] for s in self.allowed)
         start = date.fromordinal(a.toordinal() - int(warmup_days * 1.5))
         p = self.panel().filter((pl.col('date') >= start) & (pl.col('date') <= min(b, latest)))
         if symbols:

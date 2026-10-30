@@ -39,16 +39,17 @@ class FeatureStore:
             return sorted(p.stem for p in (self.root / '1s').glob('*.parquet'))
 
     def splits(self, refresh=False):
+        from .provenance import read_splits, write_splits
         f = self.root / 'splits.json'
         if f.exists():
-            sp = json.loads(f.read_text())
+            sp = read_splits(f)
             if refresh:
                 frozen = set(sp['dev'] + sp['val'] + sp['holdout'] + sp['forward'])
                 last = max(sp['holdout'])
                 new = [d for d in self._inventory_dates() if d not in frozen and d > last]
                 if new:
                     sp['forward'] = sorted(sp['forward'] + new)
-                    f.write_text(json.dumps(sp, indent=1))
+                    write_splits(f, sp)
         else:
             if not (self.root / 'meta').exists() and not refresh:
                 raise FileNotFoundError('feature store not built yet: run `python -m desk data`')
@@ -58,7 +59,7 @@ class FeatureStore:
             b = int(n * (self.settings.dev_fraction + self.settings.val_fraction))
             sp = {'created': time.time(), 'dev': dates[:a], 'val': dates[a:b], 'holdout': dates[b:], 'forward': []}
             self.root.mkdir(parents=True, exist_ok=True)
-            f.write_text(json.dumps(sp, indent=1))
+            write_splits(f, sp)
         ingested = {p.stem for p in (self.root / '1s').glob('*.parquet')} if (self.root / '1s').exists() else set()
         sp['summary'] = {k: {'days': len(sp[k]), 'ingested': len([d for d in sp[k] if d in ingested]),
                              'first': sp[k][0] if sp[k] else None, 'last': sp[k][-1] if sp[k] else None} for k in SPLITS}
@@ -76,6 +77,9 @@ class FeatureStore:
             raise SplitViolation(f'{split} data is not available in this context')
         sp = self.splits()
         ds = sp[split]
+        if split == 'holdout':
+            from ..lab.holdout import assert_holdout_open
+            assert_holdout_open('l2', ds)
         if ingested_only:
             ds = [d for d in ds if (self.root / '1s' / f'{d}.parquet').exists()]
         return ds
@@ -85,6 +89,9 @@ class FeatureStore:
         split = self.split_of(date)
         if split not in self.allowed:
             raise SplitViolation(f'{date} belongs to {split}; not available in this context')
+        if split == 'holdout':
+            from ..lab.holdout import assert_holdout_open
+            assert_holdout_open('l2', self.splits()['holdout'])
         return self.root / resolution / f'{date}.parquet'
 
     def load(self, dates, resolution='1s', columns=None, with_funding=True):
@@ -140,7 +147,8 @@ class FeatureStore:
                 except OSError:
                     import shutil
                     shutil.copy2(src, dst)
-        (view / 'splits.json').write_text(json.dumps({'created': sp['created'], 'dev': sp['dev'], 'val': [], 'holdout': [], 'forward': []}))
+        from .provenance import write_splits
+        write_splits(view / 'splits.json', {'created': sp['created'], 'dev': sp['dev'], 'val': [], 'holdout': [], 'forward': []}, indent=None)
         (view / 'meta').mkdir(exist_ok=True)
         return view
 

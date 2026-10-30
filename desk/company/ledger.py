@@ -56,6 +56,29 @@ CREATE INDEX IF NOT EXISTS ix_prim ON primitive_usages(primitive, kind);
 CREATE INDEX IF NOT EXISTS ix_reas ON rsi_reasoning(created, desk);
 '''
 
+# One-shot holdout lock (cycle 1b). Shots are keyed by strategy FAMILY (desk/lab/holdout.py). Both tables, and the
+# legacy code_hash-keyed holdout_uses, are insert-only: UPDATE and DELETE abort, and so does any INSERT that would
+# collide with an existing family (so INSERT OR REPLACE cannot delete-and-reinsert a used shot).
+HOLDOUT_LOCK_SQL = '''
+CREATE TABLE IF NOT EXISTS holdout_shots(family TEXT PRIMARY KEY, desk TEXT, strategy TEXT, code_hash TEXT,
+  window TEXT, skeleton TEXT, reason TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS holdout_results(id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT, strategy TEXT,
+  passed INT, created REAL);
+CREATE TRIGGER IF NOT EXISTS holdout_shots_no_dup BEFORE INSERT ON holdout_shots
+  WHEN EXISTS (SELECT 1 FROM holdout_shots WHERE family = NEW.family)
+  BEGIN SELECT RAISE(ABORT, 'holdout_shots is insert-only: family already used its holdout shot'); END;
+'''
+INSERT_ONLY_TABLES = ('holdout_shots', 'holdout_results', 'holdout_uses')
+for _t in INSERT_ONLY_TABLES:
+    HOLDOUT_LOCK_SQL += (f"CREATE TRIGGER IF NOT EXISTS {_t}_no_update BEFORE UPDATE ON {_t} "
+                         f"BEGIN SELECT RAISE(ABORT, '{_t} is insert-only'); END;\n"
+                         f"CREATE TRIGGER IF NOT EXISTS {_t}_no_delete BEFORE DELETE ON {_t} "
+                         f"BEGIN SELECT RAISE(ABORT, '{_t} is insert-only'); END;\n")
+HOLDOUT_LOCK_SQL += '''CREATE TRIGGER IF NOT EXISTS holdout_uses_no_dup BEFORE INSERT ON holdout_uses
+  WHEN EXISTS (SELECT 1 FROM holdout_uses WHERE code_hash = NEW.code_hash)
+  BEGIN SELECT RAISE(ABORT, 'holdout_uses is insert-only'); END;
+'''
+
 
 def _id(prefix):
     return f'{prefix}-{uuid.uuid4().hex[:6]}'
@@ -68,6 +91,8 @@ class Ledger:
         self._lock = threading.RLock()
         with self.db() as db:
             db.executescript(SCHEMA)
+            db.executescript(HOLDOUT_LOCK_SQL)
+            self._burn_legacy_holdouts(db)
             for table, col in (('llm_requests', 'model TEXT'), ('agents', 'model TEXT')):
                 try:
                     db.execute(f'ALTER TABLE {table} ADD COLUMN {col}')
@@ -80,12 +105,93 @@ class Ledger:
         con.row_factory = sqlite3.Row
         con.execute('PRAGMA journal_mode=WAL')
         con.execute('PRAGMA synchronous=NORMAL')
+        con.execute('PRAGMA recursive_triggers=ON')        # REPLACE-deletes fire the insert-only DELETE triggers
         try:
             with self._lock:
                 yield con
                 con.commit()
         finally:
             con.close()
+
+    # ----------------------------------------------------------------- holdout lock
+    @staticmethod
+    def _family_rows(code, code_hash_, parent_codes=()):
+        from ..lab.holdout import code_desk, family_keys, skeleton_tokens
+        try:
+            keys = family_keys(code, parent_codes)
+            return code_desk(code), keys, ' '.join(skeleton_tokens(code))
+        except (SyntaxError, ValueError, TypeError):
+            return None, [f'legacy:{code_hash_}'], None
+
+    def _burn_legacy_holdouts(self, db):
+        """Every holdout shot taken before the lock (legacy holdout_uses rows, any strategy with a holdout report or a
+        holdout verdict) burns its whole family. Idempotent; runs on every open."""
+        rows = db.execute(
+            "SELECT s.id, s.code, s.code_hash FROM strategies s WHERE s.holdout_report IS NOT NULL "
+            "OR s.status IN ('approved','rejected_holdout') "
+            "OR s.code_hash IN (SELECT code_hash FROM holdout_uses) OR s.id IN (SELECT strategy FROM holdout_uses)").fetchall()
+        seen = set()
+        for r in rows:
+            desk, keys, sk = self._family_rows(r['code'] or '', r['code_hash'])
+            for i, k in enumerate(keys):
+                if k in seen or db.execute('SELECT 1 FROM holdout_shots WHERE family=?', (k,)).fetchone():
+                    continue
+                seen.add(k)
+                db.execute('INSERT INTO holdout_shots VALUES(?,?,?,?,?,?,?,?)',
+                           (k, desk, r['id'], r['code_hash'], None, sk if i == 0 else None, 'burned_legacy', time.time()))
+        for r in db.execute('SELECT code_hash, strategy FROM holdout_uses').fetchall():
+            k = f'legacy:{r["code_hash"]}'
+            if not db.execute('SELECT 1 FROM holdout_shots WHERE family=?', (k,)).fetchone():
+                db.execute('INSERT INTO holdout_shots VALUES(?,?,?,?,?,?,?,?)',
+                           (k, None, r['strategy'], r['code_hash'], None, None, 'burned_legacy', time.time()))
+
+    def parent_codes(self, sid, depth=5):
+        out, frontier = [], [sid]
+        for _ in range(depth):
+            nxt = []
+            for c in frontier:
+                row = self.q('SELECT parent_ids FROM lineages WHERE child_id=?', (c,))
+                if not row:
+                    continue
+                try:
+                    pids = json.loads(row[0]['parent_ids'] or '[]')
+                except (TypeError, ValueError):
+                    pids = []
+                for pid in pids if isinstance(pids, list) else [pids]:
+                    got = self.q('SELECT code FROM strategies WHERE id=?', (str(pid),))
+                    if got and got[0]['code']:
+                        out.append(got[0]['code'])
+                    nxt.append(str(pid))
+            frontier = nxt
+        return out
+
+    def claim_holdout_shot(self, sid, code, code_hash_, window=None):
+        """Atomically take this family's one holdout shot or raise HoldoutAlreadyUsed. Returns the family key."""
+        from ..lab.holdout import FAMILY_SIMILARITY, HoldoutAlreadyUsed, similar
+        desk, keys, sk = self._family_rows(code, code_hash_, self.parent_codes(sid))
+        toks = sk.split() if sk else []
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for k in keys + [f'legacy:{code_hash_}']:
+                hit = db.execute('SELECT strategy FROM holdout_shots WHERE family=?', (k,)).fetchone()
+                if hit:
+                    raise HoldoutAlreadyUsed(f'family {k} already used its holdout shot (strategy {hit["strategy"]})')
+            for r in db.execute('SELECT family, strategy, skeleton FROM holdout_shots WHERE desk=? AND skeleton IS NOT NULL',
+                                (desk,)).fetchall():
+                if toks and similar(toks, r['skeleton'].split()) >= FAMILY_SIMILARITY:
+                    raise HoldoutAlreadyUsed(f'near copy of family {r["family"]} (strategy {r["strategy"]}) which '
+                                             'already used its holdout shot')
+            now = time.time()
+            for i, k in enumerate(keys):
+                db.execute('INSERT INTO holdout_shots VALUES(?,?,?,?,?,?,?,?)',
+                           (k, desk, sid, code_hash_, json.dumps(window, default=str) if window is not None else None,
+                            sk if i == 0 else None, 'shot', now))
+            db.execute('INSERT INTO holdout_uses VALUES(?,?,?,?)', (code_hash_, sid, now, None))
+        return keys[0]
+
+    def record_holdout_result(self, family, sid, passed):
+        self.x('INSERT INTO holdout_results(family,strategy,passed,created) VALUES(?,?,?,?)',
+               (family, sid, 1 if passed else 0, time.time()))
 
     def q(self, sql, args=()):
         with self.db() as db:

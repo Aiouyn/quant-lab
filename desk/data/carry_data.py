@@ -305,9 +305,9 @@ def compute_carry_splits(panel, frozen=None):
 
 def _freeze_splits(root, panel):
     """Create carry/splits.json once; never rewrite it, and raise if the panel would now split differently."""
-    from .provenance import freeze_splits
+    from .provenance import freeze_splits, read_splits
     f = root / 'splits.json'
-    frozen = json.loads(f.read_text()) if f.exists() else None
+    frozen = read_splits(f) if f.exists() else None
     return freeze_splits(f, compute_carry_splits(panel, frozen), 'carry')
 
 
