@@ -17,8 +17,7 @@ MIN_GAP_PLAN_S = int(os.getenv('DESK_CLAUDE_MIN_GAP_S', '300'))
 # tools that produce or decide something; a session that calls none of them did no real work
 PRODUCTIVE = {'run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'verdict',
               'set_pod_weights', 'reassign_agent', 'build_portfolio', 'paper_start', 'set_cost_model',
-              'contribute_primitive', 'propose_process_change', 'write_digest', 'retire_lesson', 'record_lesson',
-              'board_post', 'message', 'post_memo'}
+              'contribute_primitive', 'propose_process_change', 'write_digest', 'retire_lesson', 'record_lesson'}
 CADENCE_S = {'cio': 2700, 'librarian': 3600, 'pm': 1800, 'execution': 3600, 'toolsmith': 2400,
              'officer': 0, 'lead': 30, 'researcher': 10}
 
@@ -54,6 +53,9 @@ class Agent:
                 # agent whose sessions keep ending with nothing done backs off (up to 16x) and ignores pod chatter
                 gap = max(gap, MIN_GAP_PLAN_S) * (2 ** min(self.idle_streak, 4))
                 pod_wake = pod_wake and self.idle_streak < 2
+                floor = min(gap, MIN_GAP_PLAN_S * (2 ** min(self.idle_streak, 4)))
+                await org.sleep(floor)                 # hard floor: messages cannot cut it short
+                gap -= floor
             if self.role in ('officer', 'pm'):
                 await org.sleep(gap or 30, wake=lambda: self._direct_unread(org) > 0)
             else:
@@ -134,7 +136,8 @@ class Agent:
         with open(nb, 'a', encoding='utf-8') as f:
             f.write(f'\n\n### Session {self.sessions} summary ({time.strftime("%Y-%m-%d %H:%M")})\n{summary}\n')
         L.agent_status(self.name, 'idle', summary)
-        L.event(self.name, 'SESSION_END', {'steps': steps, 'summary': summary[:1500]})
+        L.event(self.name, 'SESSION_END', {'steps': steps, 'productive': getattr(self, '_productive', 0),
+                                           'idle_streak': self.idle_streak, 'summary': summary[:1500]})
 
     async def _exec(self, tools, call):
         try:
