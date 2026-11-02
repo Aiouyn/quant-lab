@@ -103,7 +103,13 @@ python -m desk forward                   # ingest NEW Drive days -> rolling forw
 python -m desk stop                      # graceful stop (agents finish their current step)
 ```
 
-- **Model.** `MODEL_NAME=auto` (the default) picks, at startup, the first model in `DESK_MODEL_PREFERENCE` that the
+- **Model: Claude (recommended).** Set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (from console.anthropic.com;
+  a Claude.ai subscription is not an API key). Every agent then runs on Claude Haiku 5.5 (`claude-haiku-5-5`) through
+  the official `anthropic` SDK, with adaptive thinking at `DESK_EFFORT=medium` and prompt caching. Name another
+  `claude-*` model in `MODEL_NAME` to change it. `DESK_USD_PER_HOUR` (e.g. `2`) makes agents wait while the last hour's
+  spend at list prices is above the cap; set a monthly limit in the Console too. Running out of credit pauses the firm
+  and it probes every 15 minutes, as with a plan quota.
+- **Model: OpenCode.** `MODEL_NAME=auto` (the default) picks, at startup, the first model in `DESK_MODEL_PREFERENCE` that the
   OpenCode Zen gateway lists: `minimax-m3.1-flash-free`, then `deepseek-v4.1-flash-free`, then `glm-5.3-flash-free`.
   Free models on Zen come and go; the pick is printed and logged (`MODEL_SELECTED`). Name a model in `MODEL_NAME` to pin it.
 - **Concurrency.** It adapts by itself (AIMD: starts at 8 and grows toward `--concurrency`, 32 by default, while the gateway does not throttle).
