@@ -184,3 +184,16 @@ def test_plan_gap_is_a_hard_floor_that_messages_cannot_cut(tmp_path):
     asyncio.run(a.live(Org()))
     assert sleeps[0] == (A.MIN_GAP_PLAN_S * 2, False)             # first idle session: doubled, no early wake
     assert A.PRODUCTIVE.isdisjoint({'message', 'board_post', 'post_memo'})
+
+
+def test_pod_priority_override_puts_open_desks_first(monkeypatch):
+    import importlib
+    from desk.company import runtime
+    monkeypatch.setenv('DESK_POD_PRIORITY', 'xsec,events')
+    rt = importlib.reload(runtime)
+    try:
+        names = [n for n, _, _ in rt.roster(4)]
+        assert names == ['cio', 'officer-1', 'xsec-lead', 'xsec-r1']
+    finally:
+        monkeypatch.delenv('DESK_POD_PRIORITY')
+        importlib.reload(runtime)
