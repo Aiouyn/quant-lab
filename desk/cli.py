@@ -10,6 +10,9 @@ def _print(x):
     print(json.dumps(x, indent=1, default=str) if not isinstance(x, str) else x, flush=True)
 
 
+DRILLS = ['planted', 'null', 'perps-planted', 'perps-null', 'macro-planted', 'macro-null']
+
+
 def main(argv=None):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -31,14 +34,14 @@ def main(argv=None):
     r.add_argument('--agents', type=int, default=16)
     r.add_argument('--hours', type=float, default=8.0)
     r.add_argument('--concurrency', type=int)
-    r.add_argument('--drill', choices=['planted', 'null'], help='run on a synthetic drill market instead of real data')
+    r.add_argument('--drill', choices=DRILLS, help='run on a synthetic drill market instead of real data')
     r.add_argument('--tokens-per-hour', type=int, help='optional hard cap on LLM tokens per rolling hour')
     sub.add_parser('stop', help='ask the running company to stop gracefully')
-    stt = sub.add_parser('status', help='company status, KPIs and leaderboard'); stt.add_argument('--drill', choices=['planted', 'null'])
+    stt = sub.add_parser('status', help='company status, KPIs and leaderboard'); stt.add_argument('--drill', choices=DRILLS)
     s = sub.add_parser('serve', help='control-room dashboard'); s.add_argument('--port', type=int, default=8900)
     s.add_argument('--host', default='127.0.0.1', help='bind address (default 127.0.0.1; the dashboard has no auth)')
-    s.add_argument('--drill', choices=['planted', 'null'])
-    sub.choices['stop'].add_argument('--drill', choices=['planted', 'null'])
+    s.add_argument('--drill', choices=DRILLS)
+    sub.choices['stop'].add_argument('--drill', choices=DRILLS)
     pp = sub.add_parser('paper', help='Hyperliquid paper trading for a bundle or portfolio')
     pp.add_argument('target'); pp.add_argument('--hours', type=float, default=24 * 7)
     pp.add_argument('--features', choices=['okx', 'hl'], default='okx', help='live feature source (okx = research-identical)')
@@ -49,12 +52,13 @@ def main(argv=None):
     rec.add_argument('--coins', default='', help='comma list for the multi-asset recorder (e.g. BTC,ETH,SOL,HYPE)')
     rec.add_argument('--archive', default='', help='directory to archive compacted days (e.g. a Google Drive folder)')
     rs = sub.add_parser('rescore-factors', help='re-score registered factors under the current scoring rule')
-    rs.add_argument('--drill', choices=['planted', 'null'])
+    rs.add_argument('--drill', choices=DRILLS)
     sub.add_parser('forward', help='ingest new archive days and score approved strategies on the rolling forward holdout')
     v = sub.add_parser('validate', help='run validation pipeline on a submitted strategy'); v.add_argument('strategy_id')
     dr = sub.add_parser('drill', help='build or score drill markets (measure the firm itself)')
-    dr.add_argument('kind', choices=['planted', 'null']); dr.add_argument('--report', action='store_true')
+    dr.add_argument('kind', choices=['planted', 'null', 'scoreboard']); dr.add_argument('--report', action='store_true')
     dr.add_argument('--days', type=int, default=90)
+    dr.add_argument('--desk', choices=['l2', 'perps', 'macro'], default='l2')
     rsi_p = sub.add_parser('rsi', help='RSI telemetry: status, scoreboard, compile-hints, build-store, quarantine '
                                        '(move rows written by the retired RSI engine out of the ledger)')
     rsi_p.add_argument('action', nargs='?', default='status',
@@ -184,8 +188,24 @@ def main(argv=None):
         _print(Pipeline(s).process(a.strategy_id))
         return 0
     if a.cmd == 'drill':
-        from .lab.drills import build_drill, drill_report
-        _print(drill_report(s, a.kind) if a.report else build_drill(s, a.kind, n_days=a.days))
+        from .company.ledger import Ledger
+        from .lab.panel_drills import build_panel_drill, panel_drill_report, record_drill_score
+        main_ledger = Ledger(s.ledger)
+        if a.kind == 'scoreboard':
+            _print(main_ledger.get('drill_scores', None) or {'note': 'no drill scored yet'})
+            return 0
+        if a.desk == 'l2':
+            from .lab.drills import build_drill, drill_report
+            if a.report:
+                res = drill_report(s, a.kind)
+                res.update({'drill': a.kind, 'desk': 'l2', 'kind': a.kind, 'scored_at': __import__('time').time()})
+                record_drill_score(main_ledger, res)
+                _print(res)
+            else:
+                _print(build_drill(s, a.kind, n_days=a.days))
+            return 0
+        _print(panel_drill_report(s, a.desk, a.kind, record_in=main_ledger) if a.report
+               else build_panel_drill(s, a.desk, a.kind))
         return 0
     if a.cmd == 'kernel':
         from .kernel import seal, verify

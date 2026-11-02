@@ -294,6 +294,7 @@ def compute_generation_scoreboard(ledger) -> dict:
         'planted_signal_corr': drill.get('planted_signal_corr'),
         'drill_verdict': drill.get('verdict'),
         'null_false_discoveries': drill.get('null_false_discoveries'),
+        'drill_desks_covered': drill.get('desks_covered') or [],
         'hint_resolution_rate': hint_rate,
         'mean_primitive_lift': None,     # no causal lift estimator exists yet (needs drill ablations)
         'forward_sharpe': round(max(fwd_sharpes), 3) if fwd_sharpes else None,
@@ -310,7 +311,8 @@ def rsi_snapshot(ledger, settings=None) -> dict:
     """KPIs for the brief, the CIO and the dashboard."""
     sb = compute_generation_scoreboard(ledger)
     kpis = {k: sb[k] for k in ('approved', 'best_val_sharpe', 'forward_verdict', 'forward_confirmed',
-                               'hint_resolution_rate', 'generation_fitness')}
+                               'hint_resolution_rate', 'generation_fitness', 'drill_verdict', 'null_false_discoveries',
+                               'drill_desks_covered')}
     kpis['active_dynamic_hints'] = ledger.q("SELECT COUNT(*) AS n FROM dynamic_hints WHERE status='active'")[0]['n']
     kpis['contrib_modules'] = len(discover_contrib_modules())
     return {'kpis': kpis, 'latest_scoreboard': sb}

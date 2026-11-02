@@ -267,6 +267,28 @@ python -m desk drill null --report  # every approval here is a false discovery
 The planted drill measures *discovery power*. The null drill measures the *false-discovery rate*. The causality tests and
 `tests/v3` measure the plumbing (`python -m pytest`).
 
+The perps and macro desks have their own drills (`desk/lab/panel_drills.py`), built from the desk's real panel:
+
+```powershell
+python -m desk drill planted --desk perps    # hidden causal effect from one visible column, chosen at random
+python -m desk run --drill perps-planted --agents 12 --hours 2
+python -m desk drill planted --desk perps --report
+
+python -m desk drill null --desk macro       # each asset's returns shuffled in weekly blocks, nothing predictable
+python -m desk run --drill macro-null --agents 12 --hours 2
+python -m desk drill null --desk macro --report
+
+python -m desk drill scoreboard              # latest verdict per drill, rolled up into the RSI scoreboard
+```
+
+The planted effect's column, window, transform and sign are drawn when the drill is built and kept in the drill home
+(`drill_secret.json`), which agent sandboxes cannot read, so reading the drill code does not give the answer away.
+Every `--report` is recorded in the main ledger (`drill_scores`): `null_false_discoveries`, `planted_signal_corr`,
+the overall verdict and the desks covered appear in `python -m desk rsi scoreboard`. These numbers are the fitness
+of the firm's PROCESS: a change to agents, prompts or tools is an improvement only if planted discovery rises while
+null false discoveries stay at zero. Pred and carry drills are not built yet (pred needs synthetic resolutions, and
+carry's real edge is a yield that a null market must remove explicitly).
+
 ## Costs and execution model
 
 - **Fees.** Hyperliquid base tier: taker 4.5 bps plus 0.5 bps slippage per side.
