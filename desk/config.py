@@ -42,8 +42,8 @@ def _base_url() -> str:
 
 def _default_model() -> str:
     m = os.getenv('MODEL_NAME', '').strip()
-    if m.lower() == 'auto':
-        return 'auto'
+    if m.lower() == 'auto':                    # 'auto' picks among OpenCode Zen models; other gateways get their default
+        return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-pro'
     if _provider() == 'opencode':
         if m and not m.startswith('mimo-'):
             return m
@@ -57,7 +57,7 @@ def _default_model() -> str:
 def _default_flash_model() -> str:
     fm = os.getenv('DESK_FLASH_MODEL', '').strip()
     if fm.lower() == 'auto' or (not fm and os.getenv('MODEL_NAME', '').strip().lower() == 'auto'):
-        return 'auto'
+        return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-flash'
     if _provider() == 'opencode':
         if fm and not fm.startswith('mimo-'):
             return fm

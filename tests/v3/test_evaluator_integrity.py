@@ -124,8 +124,10 @@ ps.fork_exec([b'/bin/sh', b'-c', b'touch {target}'], [b'/bin/sh'], True, (), Non
 
 def test_strategy_sees_no_secrets():
     err = attack("import os\nraise RuntimeError(sorted(os.environ))")
-    for secret in ('OPENCODE_API_KEY', 'OPENAI_API_KEY', 'MIMO_API_KEY', 'DESK_STORE_ROOT', 'RESULTS_DIR', 'HOME'):
+    for secret in ('OPENCODE_API_KEY', 'OPENAI_API_KEY', 'MIMO_API_KEY', 'DESK_STORE_ROOT', 'RESULTS_DIR'):
         assert secret not in err
+    home = attack("import os\nraise RuntimeError(os.environ.get('HOME', '') + '|' + os.environ.get('USERPROFILE', ''))")
+    assert 'jail_' in home and str(Path.home()) + '|' not in home     # HOME is the empty jail directory, not the user's
 
 
 def test_print_does_not_corrupt_results():
