@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -12,6 +13,12 @@ from .llm import assistant_message, estimate_tokens
 from .roles import charter, PODS
 from .tools import Toolbox, specs_for, compact
 
+MIN_GAP_PLAN_S = int(os.getenv('DESK_CLAUDE_MIN_GAP_S', '300'))
+# tools that produce or decide something; a session that calls none of them did no real work
+PRODUCTIVE = {'run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'verdict',
+              'set_pod_weights', 'reassign_agent', 'build_portfolio', 'paper_start', 'set_cost_model',
+              'contribute_primitive', 'propose_process_change', 'write_digest', 'retire_lesson', 'record_lesson',
+              'board_post', 'message', 'post_memo'}
 CADENCE_S = {'cio': 2700, 'librarian': 3600, 'pm': 1800, 'execution': 3600, 'toolsmith': 2400,
              'officer': 0, 'lead': 30, 'researcher': 10}
 
@@ -23,6 +30,7 @@ class Agent:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.end_requested = None
         self.sessions = 0
+        self.idle_streak = 0
 
     # ------------------------------------------------------------------ lifecycle
     async def live(self, org):
@@ -40,10 +48,17 @@ class Agent:
                 org.ledger.agent_status(self.name, 'error')
                 await org.sleep(90)
             gap = CADENCE_S.get(self.role, 10)
+            pod_wake = self.role not in ('cio',)
+            if getattr(org, 'claude', None) is not None:
+                # on a shared Claude plan every session counts against the owner's limits: a minimum gap, and an
+                # agent whose sessions keep ending with nothing done backs off (up to 16x) and ignores pod chatter
+                gap = max(gap, MIN_GAP_PLAN_S) * (2 ** min(self.idle_streak, 4))
+                pod_wake = pod_wake and self.idle_streak < 2
             if self.role in ('officer', 'pm'):
                 await org.sleep(gap or 30, wake=lambda: self._direct_unread(org) > 0)
             else:
-                await org.sleep(gap, wake=lambda: org.ledger.unread_count(self.name, self.pod) > 0 and self.role not in ('cio',))
+                await org.sleep(gap, wake=lambda: (self._direct_unread(org) > 0 if not pod_wake else
+                                                   org.ledger.unread_count(self.name, self.pod) > 0))
 
     async def _has_work(self, org):
         if self.role == 'officer':
@@ -68,6 +83,7 @@ class Agent:
         L.x('UPDATE agents SET sessions=sessions+1 WHERE name=?', (self.name,))
         L.agent_status(self.name, 'working')
         tools = Toolbox(org, self)
+        self._productive = 0
         specs = specs_for(self.role)
         messages = [{'role': 'system', 'content': charter(self.role, self.pod, ledger=L)},
                     {'role': 'user', 'content': org.brief(self)}]
@@ -112,6 +128,7 @@ class Agent:
         return self._close(L, step + 1)
 
     def _close(self, L, steps):
+        self.idle_streak = self.idle_streak + 1 if not getattr(self, '_productive', 0) else 0
         summary = self.end_requested or f'(session ended after {steps} steps without summary)'
         nb = self.workspace / 'notebook.md'
         with open(nb, 'a', encoding='utf-8') as f:
@@ -128,6 +145,8 @@ class Agent:
             return json.dumps({'error': f'could not parse arguments as JSON: {e}'})
         t0 = time.time()
         out = await tools.call(call['name'], args)
+        if call['name'] in PRODUCTIVE and not (isinstance(out, dict) and out.get('error')):
+            self._productive = getattr(self, '_productive', 0) + 1
         tools.L.event(self.name, 'TOOL', {'tool': call['name'], 'seconds': round(time.time() - t0, 1),
                                           'error': out.get('error')[:300] if isinstance(out, dict) and out.get('error') else None})
         return compact(out, 6000 if call['name'] in ('run_python', 'dossier', 'evaluate_strategy', 'combine_factors') else 4000)
