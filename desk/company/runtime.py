@@ -246,12 +246,18 @@ class Org:
 def run_company(settings, agents=28, hours=8.0, concurrency=None, drill=None, tokens_per_hour=None):
     if drill:
         home = settings.home / 'drills' / drill
-        if not (home / 'store' / 'splits.json').exists():
-            raise SystemExit(f'drill market not built: python -m desk drill {drill}')
+        desk, _, kind = drill.rpartition('-')
+        marker = home / 'store' / desk / 'splits.json' if desk else home / 'store' / 'splits.json'
+        if not marker.exists():
+            raise SystemExit(f'drill market not built: python -m desk drill {kind} --desk {desk or "l2"}')
         settings = dataclasses.replace(settings, home=home)
     from ..data.store import FeatureStore
-    store = FeatureStore(settings)
-    store.build_dev_view()
+    try:
+        FeatureStore(settings).build_dev_view()
+    except Exception as e:                     # panel-desk drills have no OKX store
+        if not drill:
+            raise
+        print(f'l2 dev view not built for this drill: {e!r}'[:200])
     try:                                       # agents read the carry desk only through its dev-only copy
         from ..lab.carry import write_dev_view as carry_dev_view
         carry_dev_view(settings)
