@@ -18,6 +18,8 @@ ANTHROPIC_DEFAULT_MODEL = 'claude-haiku-5-5'
 
 
 def _key():
+    if _provider() == 'claude_code':           # the claude CLI's own sign-in (the owner's Claude plan); no key
+        return ''
     if _provider() == 'anthropic':
         return os.getenv('ANTHROPIC_API_KEY', '')
     key = os.getenv('OPENCODE_API_KEY') or os.getenv('MIMO_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
@@ -28,8 +30,6 @@ def _provider() -> str:
     prov = os.getenv('LLM_PROVIDER', '').strip().lower()
     if prov:
         return prov
-    if os.getenv('ANTHROPIC_API_KEY'):
-        return 'anthropic'
     if os.getenv('OPENCODE_API_KEY'):
         return 'opencode'
     if os.getenv('MIMO_API_KEY') and 'xiaomimimo' in os.getenv('MIMO_BASE_URL', 'xiaomimimo'):
@@ -38,8 +38,8 @@ def _provider() -> str:
 
 
 def _base_url() -> str:
-    if _provider() == 'anthropic':
-        return os.getenv('ANTHROPIC_BASE_URL', '').strip()     # empty: the SDK's default endpoint
+    if _provider() in ('anthropic', 'claude_code'):
+        return os.getenv('ANTHROPIC_BASE_URL', '').strip() if _provider() == 'anthropic' else ''     # empty: the SDK's default endpoint
     for env_var in ('LLM_BASE_URL', 'OPENCODE_BASE_URL'):
         val = os.getenv(env_var, '').strip()
         if val:
@@ -62,7 +62,7 @@ def _anthropic_model(*names) -> str:
 
 def _default_model() -> str:
     m = os.getenv('MODEL_NAME', '').strip()
-    if _provider() == 'anthropic':             # 'auto' and other gateways' names fall back to Haiku 5.5
+    if _provider() in ('anthropic', 'claude_code'):   # 'auto' and other gateways' names fall back to Haiku 5.5
         return _anthropic_model('MODEL_NAME')
     if m.lower() == 'auto':                    # 'auto' picks among OpenCode Zen models; other gateways get their default
         return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-pro'
@@ -78,7 +78,7 @@ def _default_model() -> str:
 
 def _default_flash_model() -> str:
     fm = os.getenv('DESK_FLASH_MODEL', '').strip()
-    if _provider() == 'anthropic':
+    if _provider() in ('anthropic', 'claude_code'):
         return _anthropic_model('DESK_FLASH_MODEL', 'MODEL_NAME')
     if fm.lower() == 'auto' or (not fm and os.getenv('MODEL_NAME', '').strip().lower() == 'auto'):
         return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-flash'

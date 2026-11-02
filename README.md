@@ -103,8 +103,14 @@ python -m desk forward                   # ingest NEW Drive days -> rolling forw
 python -m desk stop                      # graceful stop (agents finish their current step)
 ```
 
-- **Model: Claude (recommended).** Set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (from console.anthropic.com;
-  a Claude.ai subscription is not an API key). Every agent then runs on Claude Haiku 5.5 (`claude-haiku-5-5`) through
+- **Model: Claude on your Claude plan.** Set `LLM_PROVIDER=claude_code` and run a small firm (`--agents 4`). Each agent
+  session is then one `claude -p` run of the installed Claude Code CLI, signed in to your Pro/Max plan: the charter is its
+  system prompt, every built-in tool is off, and it acts only through the desk's tools (served by the firm on a local
+  MCP endpoint), so the sandbox, jail and evaluator gates are unchanged. API keys are removed from its environment, so it
+  never bills pay-as-you-go. `DESK_CLAUDE_SESSIONS` (default 2) caps concurrent sessions; plan limits are shared with
+  your own Claude use, and hitting one pauses the firm until the reset. Model `claude-haiku-5-5`, effort `DESK_EFFORT`.
+- **Model: Claude API (pay-as-you-go).** Set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (from console.anthropic.com;
+  a Claude.ai subscription is not an API key). A key alone never switches this on. Every agent then runs on Claude Haiku 5.5 (`claude-haiku-5-5`) through
   the official `anthropic` SDK, with adaptive thinking at `DESK_EFFORT=medium` and prompt caching. Name another
   `claude-*` model in `MODEL_NAME` to change it. `DESK_USD_PER_HOUR` (e.g. `2`) makes agents wait while the last hour's
   spend at list prices is above the cap; set a monthly limit in the Console too. Running out of credit pauses the firm

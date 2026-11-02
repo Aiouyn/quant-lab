@@ -72,6 +72,13 @@ class Agent:
         messages = [{'role': 'system', 'content': charter(self.role, self.pod, ledger=L)},
                     {'role': 'user', 'content': org.brief(self)}]
         max_steps = org.settings.max_steps_per_session
+        if getattr(org, 'claude', None) is not None:          # LLM_PROVIDER=claude_code: one Claude Code run
+            summary, info = await org.claude.run(self, tools, messages[0]['content'], messages[1]['content'],
+                                                 org.model_for_role(self.role), max_steps, self._exec)
+            if summary is None and info.get('error'):
+                raise RuntimeError(f"claude code session failed: {info['error'][:300]}")
+            self.end_requested = self.end_requested or (summary or '')[:2000] or None
+            return self._close(L, info.get('steps') or 0)
         nudged = False
         compacting = False
         step = 0
@@ -102,12 +109,15 @@ class Agent:
                 messages.append({'role': 'tool', 'tool_call_id': c['id'] or f'call_{calls.index(c)}', 'content': r})
             if self.end_requested:
                 break
-        summary = self.end_requested or f'(session ended after {step + 1} steps without summary)'
+        return self._close(L, step + 1)
+
+    def _close(self, L, steps):
+        summary = self.end_requested or f'(session ended after {steps} steps without summary)'
         nb = self.workspace / 'notebook.md'
         with open(nb, 'a', encoding='utf-8') as f:
             f.write(f'\n\n### Session {self.sessions} summary ({time.strftime("%Y-%m-%d %H:%M")})\n{summary}\n')
         L.agent_status(self.name, 'idle', summary)
-        L.event(self.name, 'SESSION_END', {'steps': step + 1, 'summary': summary[:1500]})
+        L.event(self.name, 'SESSION_END', {'steps': steps, 'summary': summary[:1500]})
 
     async def _exec(self, tools, call):
         try:

@@ -151,6 +151,8 @@ def test_config_selects_anthropic_and_haiku(monkeypatch):
     for k in ('LLM_PROVIDER', 'MODEL_NAME', 'DESK_FLASH_MODEL', 'OPENCODE_API_KEY', 'ANTHROPIC_BASE_URL'):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
+    assert C._provider() == 'opencode'                     # a key alone never switches on pay-as-you-go billing
+    monkeypatch.setenv('LLM_PROVIDER', 'anthropic')
     assert C._provider() == 'anthropic' and C._key() == 'sk-ant-test' and C._base_url() == ''
     monkeypatch.setenv('OPENCODE_API_KEY', 'oc')
     monkeypatch.setenv('LLM_PROVIDER', 'anthropic')

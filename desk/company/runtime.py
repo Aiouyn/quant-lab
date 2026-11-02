@@ -64,6 +64,10 @@ class Org:
         self.started = time.time()
         self.llm = LLM(settings, self.ledger, cap=concurrency or settings.max_concurrency,
                        start=min(settings.start_concurrency, concurrency or settings.max_concurrency))
+        self.claude = None
+        if getattr(settings, 'provider', '') == 'claude_code':
+            from .claude_code import Runner
+            self.claude = Runner(settings, self.ledger, self.llm)
         self.sandbox_slots = asyncio.Semaphore(max(1, settings.compute_workers))
         self.job_slots = asyncio.Semaphore(max(1, settings.heavy_slots))
         from ..pipeline.validation import Pipeline

@@ -38,7 +38,9 @@ def report(settings, hours=1.0):
     tok = {'requests': 0, 'prompt': 0, 'cached': 0, 'output': 0, 'errors': 0}
     for r in req:
         p, c, o = r['p'] or 0, r['c'] or 0, r['o'] or 0
-        if (r['model'] or '') in USD_RATES:
+        if (r['model'] or '').startswith('plan:'):         # Claude Code on the owner's plan: no per-token charge
+            pass
+        elif (r['model'] or '') in USD_RATES:
             hit, miss, out = USD_RATES[r['model']]
             usd_direct += c * hit + (p - c) * miss + o * out
         else:

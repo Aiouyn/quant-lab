@@ -143,7 +143,9 @@ class LLM:
         self.anthropic = getattr(settings, 'provider', '') == 'anthropic'
         is_opencode = 'opencode.ai' in getattr(settings, 'base_url', '') or getattr(settings, 'provider', '') == 'opencode'
         default_headers = {'User-Agent': OPENCODE_USER_AGENT, 'x-opencode-client': 'cli'} if is_opencode else None
-        if self.anthropic:
+        if getattr(settings, 'provider', '') == 'claude_code':
+            self.client = None                    # sessions run through the claude CLI (claude_code.py)
+        elif self.anthropic:
             import anthropic
             self.client = anthropic.AsyncAnthropic(api_key=settings.api_key or None, base_url=settings.base_url or None,
                                                    max_retries=0, timeout=settings.request_timeout_s)
