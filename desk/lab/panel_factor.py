@@ -27,11 +27,13 @@ DESK_CFG = {
 
 
 def load_factor(code):
-    ns = {'np': np, 'pl': pl}
-    exec(compile(code, '<factor>', 'exec'), ns)
-    if not callable(ns.get('factor')):
+    """Factor code runs in a jail (desk/lab/jail.py): this process only sees its metadata and output arrays."""
+    from .jail import load_jailed
+    mod = load_jailed(code)
+    if mod.factor is None:
         raise ValueError('factor module must define factor(panel, params)')
-    return types.SimpleNamespace(factor=ns['factor'], PARAMS=dict(ns.get('PARAMS', {})), DESK=ns.get('DESK'))
+    return types.SimpleNamespace(factor=mod.factor, PARAMS=dict(getattr(mod, 'PARAMS', {}) or {}),
+                                 DESK=getattr(mod, 'DESK', None))
 
 
 def values(mod, panel):

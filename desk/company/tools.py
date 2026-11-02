@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from ..lab.sandbox import run_python, run_job
-from ..lab.strategy import code_hash, load_strategy, StrategyError
+from ..lab.strategy import code_hash, load_strategy, structural_hash, StrategyError
 
 S, I, N, B = {'type': 'string'}, {'type': 'integer'}, {'type': 'number'}, {'type': 'boolean'}
 
@@ -102,7 +102,8 @@ SPECS = {
                       {'target': S}, ['target']),
     # ------------------------------------------------------------ execution
     'venue_stats': fn('venue_stats', 'Summary of Hyperliquid captures vs OKX: spreads, depth, sweep impact.'),
-    'set_cost_model': fn('set_cost_model', 'Set the firm cost model used by validation (impact_mult, slippage_bps, latency_s).',
+    'set_cost_model': fn('set_cost_model', 'Change the firm cost model used by validation (impact_mult, slippage_bps, '
+                         'latency_s). Stricter changes apply at once; looser ones become a proposal a human approves.',
                          {'impact_mult': N, 'slippage_bps': N, 'latency_s': I, 'rationale': S}, ['rationale']),
     # ------------------------------------------------------------ librarian / toolsmith
     'retire_lesson': fn('retire_lesson', 'Retire a lesson that is wrong, superseded or duplicated.', {'id': S, 'reason': S}, ['id', 'reason']),
@@ -419,6 +420,9 @@ class Toolbox:
             return {'error': f'strategy does not load: {type(e).__name__}: {e}'}
         h = code_hash(code)
         dup = self.L.q('SELECT id, status FROM strategies WHERE code_hash=?', (h,))
+        if not dup:                              # same logic with different comments/formatting/variable names
+            sh = structural_hash(code)
+            dup = [r for r in self.L.q('SELECT id, status, code FROM strategies') if structural_hash(r['code'] or '') == sh]
         if dup:
             return {'error': f'identical code already submitted as {dup[0]["id"]} ({dup[0]["status"]})'}
         sid = self.L.add_strategy(name, self.agent.name, self.agent.pod, code, h, mod.RESOLUTION, thesis)
@@ -502,17 +506,30 @@ class Toolbox:
         return venue_stats(self.s)
 
     async def t_set_cost_model(self, rationale, impact_mult=None, slippage_bps=None, latency_s=None):
+        """The cost model is part of the evaluator. Agents may make it STRICTER on their own (higher impact,
+        slippage or latency apply at once); anything that loosens it is only a proposal until a human approves it
+        with `python -m desk costs approve <id>`."""
         cur = self.org.cost_params()
+        new = dict(cur)
         if impact_mult is not None:
-            cur['impact_mult'] = max(0.5, min(5.0, float(impact_mult)))
+            new['impact_mult'] = max(0.5, min(5.0, float(impact_mult)))
         if slippage_bps is not None:
-            cur['slippage_bps'] = max(0.0, min(5.0, float(slippage_bps)))
+            new['slippage_bps'] = max(0.0, min(5.0, float(slippage_bps)))
         if latency_s is not None:
-            cur['latency_s'] = max(1, min(10, int(latency_s)))
-        self.L.x('INSERT INTO cost_models(author,params,rationale,created) VALUES(?,?,?,?)',
-                 (self.agent.name, json.dumps(cur), rationale, time.time()))
-        self.L.send('all', self.agent.name, f'Cost model updated: {cur}. Rationale: {rationale[:400]}')
-        return {'cost_model': cur}
+            new['latency_s'] = max(1, min(10, int(latency_s)))
+        looser = [k for k in ('impact_mult', 'slippage_bps', 'latency_s') if float(new.get(k, 0)) < float(cur.get(k, 0))]
+        if not looser:
+            self.L.x('INSERT INTO cost_models(author,params,rationale,created) VALUES(?,?,?,?)',
+                     (self.agent.name, json.dumps(new), rationale, time.time()))
+            self.L.send('all', self.agent.name, f'Cost model made stricter: {new}. Rationale: {rationale[:400]}')
+            return {'cost_model': new, 'status': 'applied (stricter or unchanged)'}
+        self.L.x('INSERT INTO cost_model_proposals(author,params,rationale,created,status) VALUES(?,?,?,?,?)',
+                 (self.agent.name, json.dumps(new), rationale, time.time(), 'pending'))
+        pid = self.L.q('SELECT MAX(id) AS i FROM cost_model_proposals')[0]['i']
+        self.L.send('all', self.agent.name, f'Cost model PROPOSAL #{pid} (loosens {looser}): {new}. Waits for human '
+                                            f'approval. Rationale: {rationale[:300]}')
+        return {'status': 'pending_human_approval', 'proposal': pid, 'loosens': looser, 'current': cur,
+                'note': 'loosening the cost model changes the evaluator; a human reviews it (python -m desk costs).'}
 
     # ------------------------------------------------------------ librarian / toolsmith
     async def t_retire_lesson(self, id, reason):

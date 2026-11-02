@@ -232,18 +232,22 @@ class Pipeline:
             self.L.event('pipeline', 'VAL_PASS', {'id': sid, 'sharpe': r['summary']['sharpe'], 'dsr': r['stats'].get('dsr')})
             s = self.L.strategy(sid)
         if s['status'] == 'holdout':
-            used = self.L.q('SELECT strategy FROM holdout_uses WHERE code_hash=?', (s['code_hash'],))
-            if used and used[0]['strategy'] != sid:
+            # one-shot per strategy LOGIC: keyed by the structural hash (comments, formatting and renamed variables
+            # do not make a new strategy); legacy rows keyed by the raw-text hash are still honoured
+            from ..lab.strategy import structural_hash
+            hkey = structural_hash(s['code'])
+            used = self.L.q('SELECT strategy FROM holdout_uses WHERE code_hash IN (?, ?)', (hkey, s['code_hash']))
+            if any(u['strategy'] != sid for u in used):
                 self.L.update_strategy(sid, status='rejected_holdout', gate_reasons=['holdout_already_used_by_identical_code'])
                 return
-            self.L.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (s['code_hash'], sid, time.time(), None))
+            self.L.x('INSERT OR REPLACE INTO holdout_uses VALUES(?,?,?,?)', (hkey, sid, time.time(), None))
             r = await self._job({'type': 'strategy_eval', 'code': s['code'], 'split': 'holdout', 'allowed': ['dev', 'val', 'holdout'],
                                  'cost': self.cost(), 'return_daily': True, 'stress': True})
             if 'error' in r:
                 self.L.update_strategy(sid, status='error', holdout_report=r, gate_reasons=['holdout_error'])
                 return
             failed = check(holdout_gates(self.s), r)
-            self.L.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed else 1, s['code_hash']))
+            self.L.x('UPDATE holdout_uses SET passed=? WHERE code_hash=?', (0 if failed else 1, hkey))
             if failed:
                 self.L.update_strategy(sid, status='rejected_holdout', holdout_report=r, gate_reasons=failed)
                 self._notify(s, f'[{sid}] {s["name"]} passed validation but FAILED the one-shot holdout. It is retired.')

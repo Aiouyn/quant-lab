@@ -1,0 +1,10 @@
+# The evaluator kernel decides whether a strategy is real. Changes need the owner's review, must only make
+# evaluation stricter, and must re-seal desk/KERNEL_MANIFEST.json (`python -m desk kernel seal`).
+/desk/lab/                      @Aiouyn
+/desk/pipeline/validation.py    @Aiouyn
+/desk/pipeline/bundle.py        @Aiouyn
+/desk/data/store.py             @Aiouyn
+/desk/config.py                 @Aiouyn
+/desk/kernel.py                 @Aiouyn
+/desk/KERNEL_MANIFEST.json      @Aiouyn
+/.github/                       @Aiouyn

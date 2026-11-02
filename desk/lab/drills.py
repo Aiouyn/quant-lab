@@ -222,9 +222,9 @@ def drill_report(settings, kind):
         try:
             res = f['resolution']
             df = store.load(days, res)
-            ns = {'np': np, 'pl': pl}
-            exec(f['code'], ns)
-            v = np.asarray(ns['factor'](df, dict(ns.get('PARAMS', {}))), float)
+            from .jail import load_jailed
+            fmod = load_jailed(f['code'])               # agent-written factor code: jailed
+            v = np.asarray(fmod.factor(df, dict(getattr(fmod, 'PARAMS', {}) or {})), float)
             h = pl.DataFrame({'ts': df1['ts'], 'h': hid}).join(pl.DataFrame({'ts': df['ts'], 'v': v}), on='ts', how='inner')
             c = np.corrcoef(np.nan_to_num(h['h'].to_numpy()), np.nan_to_num(h['v'].to_numpy()))[0, 1]
             best.append((abs(float(c)), f['id'], f['name']))

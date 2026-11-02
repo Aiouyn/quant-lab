@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, created 
 CREATE TABLE IF NOT EXISTS control(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS pods(name TEXT PRIMARY KEY, mandate TEXT, weight REAL, updated REAL);
 CREATE TABLE IF NOT EXISTS cost_models(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, params TEXT, rationale TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS cost_model_proposals(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, params TEXT, rationale TEXT, created REAL, status TEXT, decided REAL, decided_by TEXT);
 CREATE TABLE IF NOT EXISTS portfolios(id TEXT PRIMARY KEY, author TEXT, members TEXT, weights TEXT, report TEXT, status TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS dynamic_hints(id TEXT PRIMARY KEY, pattern TEXT, hint TEXT, source_error TEXT, author TEXT,
   hits INT DEFAULT 0, resolved_count INT DEFAULT 0, status TEXT DEFAULT 'active', created REAL);
