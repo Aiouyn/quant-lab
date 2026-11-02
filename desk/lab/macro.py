@@ -76,9 +76,30 @@ class MacroStore:
         return p, a, b
 
 
+def visible(panel: pl.DataFrame) -> pl.DataFrame:
+    """What a macro strategy sees. Yahoo's adjclose is back-adjusted with dividends paid AFTER each date, so
+    adjclose/close on day t reveals the future dividend stream (adj_open the same). Strategies get point-in-time
+    versions with the same names: a total-return index rebuilt from daily adjclose ratios, anchored at the first
+    close, so its level only reflects dividends already paid. Returns (ratios) are unchanged; the engine keeps the
+    original columns."""
+    if 'adjclose' not in panel.columns:
+        return panel
+    by = 'symbol'
+    ratio = (pl.col('adjclose') / pl.col('adjclose').shift(1).over(by)).fill_null(1.0).fill_nan(1.0)
+    anchor = pl.coalesce(pl.col('close'), pl.col('adjclose')).first().over(by) if 'close' in panel.columns \
+        else pl.col('adjclose').first().over(by)
+    p = panel.with_columns((anchor * ratio.cum_prod().over(by)).alias('_tri'))
+    p = p.with_columns(pl.when(pl.col('adjclose').is_null()).then(None).otherwise(pl.col('_tri')).alias('_tri'))
+    cols = [pl.col('_tri').alias('adjclose')]
+    if 'adj_open' in p.columns:
+        cols.append((pl.col('adj_open') * pl.col('_tri') / pl.col('adjclose')).alias('adj_open'))
+    return p.with_columns(cols).drop('_tri')
+
+
 def write_dev_view(settings):
     st = MacroStore(settings, allowed=('dev',))
     p, a, b = st.load('dev', warmup_days=0)
+    p = visible(p)
     out = st.root / 'views' / 'dev.parquet'
     out.parent.mkdir(parents=True, exist_ok=True)
     p.write_parquet(out, compression='zstd')
@@ -87,7 +108,7 @@ def write_dev_view(settings):
 
 def macro_signal(mod, panel, params=None):
     p = dict(mod.PARAMS) if params is None else params
-    out = mod.signal(panel, p)
+    out = mod.signal(visible(panel), p)
     if isinstance(out, pl.Series):
         out = out.to_numpy()
     out = np.asarray(out, dtype=np.float64).reshape(-1)
@@ -175,19 +196,10 @@ def summarize_macro(res, cost: MacroCost, from_d=None, to_d=None):
             'daily': {'day': [int(x.toordinal() - 719163) for x in d], 'ret': [float(r) for r in daily]}, 'execution': 'macro'}
 
 
-def macro_causality(mod, panel, cuts=(0.4, 0.7)):
-    full = macro_signal(mod, panel)
-    ds = panel['date'].to_numpy()
-    ud = np.unique(ds)
-    issues = []
-    for c in cuts:
-        cut = ud[int(len(ud) * c)]
-        k = int(np.sum(ds <= cut))
-        pre = macro_signal(mod, panel.head(k))
-        bad = int(np.sum(np.abs(pre - full[:k]) > 1e-6))
-        if bad:
-            issues.append(f'prefix cut at {cut}: {bad} weights changed when later days were removed (future data use)')
-    return {'ok': not issues, 'issues': issues, 'rows': len(panel)}
+def macro_causality(mod, panel, cuts=None):
+    from .causality import DEFAULT_CUTS, panel_causality
+    return panel_causality(macro_signal, mod, panel, 'date', 'weights', cuts or DEFAULT_CUTS, keep_cols=('symbol', 'tradable', 'cls'),
+                           code=getattr(mod, '_code', None))
 
 
 def evaluate_macro(code, store: MacroStore, split='dev', cost=None, params=None, variants=None, with_causality=True):

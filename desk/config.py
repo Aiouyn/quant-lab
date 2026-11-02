@@ -112,6 +112,8 @@ class Settings:
     max_drawdown: float = 0.20
     max_top5_day_share: float = 0.5
     min_holdout_sharpe: float = 0.5
+    # out-of-sample budget: sealed-validation looks per strategy FAMILY (same logic, any parameter values)
+    val_budget_per_family: int = 2
     # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1` + `deepseek-v4.1-flash`)
     provider: str = field(default_factory=_provider)
     model: str = field(default_factory=_default_model)

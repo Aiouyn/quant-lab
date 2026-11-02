@@ -92,6 +92,32 @@ class CarryStore:
         return p, a, b
 
 
+def dev_view_root(settings):
+    """Research sandboxes read the carry desk through this dev-only copy, never through store/carry itself."""
+    return settings.store / 'carry_views' / 'dev' / 'carry'
+
+
+def write_dev_view(settings):
+    """Copy the carry coin files cut at the end of the DEV split, with a splits.json that names dev only. The sandbox
+    can then read every byte it is given: val/holdout hours are physically absent, not just filtered in Python."""
+    import shutil
+    src = CarryStore(settings, allowed=('dev',))
+    if not (src.root / 'splits.json').exists():
+        return None
+    sp = src.splits()
+    _, end = src.range_ms('dev')
+    out = dev_view_root(settings)
+    tmp = out.parent / (out.name + '.tmp')
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / 'coins').mkdir(parents=True)
+    for f in sorted((src.root / 'coins').glob('*.parquet')):
+        pl.read_parquet(f).filter(pl.col('ts') < end).write_parquet(tmp / 'coins' / f.name, compression='zstd')
+    (tmp / 'splits.json').write_text(json.dumps({k: v for k, v in sp.items() if k not in ('val', 'holdout', 'forward')}))
+    shutil.rmtree(out, ignore_errors=True)
+    tmp.rename(out)
+    return out
+
+
 def pivot(panel: pl.DataFrame, col):
     w = panel.pivot(on='coin', index='ts', values=col, aggregate_function='last').sort('ts')
     return w
@@ -175,19 +201,10 @@ def carry_signal(mod, panel, params=None):
     return np.clip(np.where(np.isfinite(out), out, 0.0), -1, 1)
 
 
-def carry_causality(mod, panel, cuts=(0.4, 0.7)):
-    full = carry_signal(mod, panel)
-    ts = panel['ts'].to_numpy()
-    uts = np.unique(ts)
-    issues = []
-    for c in cuts:
-        cut = uts[int(len(uts) * c)]
-        k = int(np.sum(ts <= cut))
-        pre = carry_signal(mod, panel.head(k))
-        bad = int(np.sum(np.abs(pre - full[:k]) > 1e-6))
-        if bad:
-            issues.append(f'prefix cut at {cut}: {bad} positions changed when later hours were removed (future data use)')
-    return {'ok': not issues, 'issues': issues, 'rows': len(panel)}
+def carry_causality(mod, panel, cuts=None):
+    from .causality import DEFAULT_CUTS, panel_causality
+    return panel_causality(carry_signal, mod, panel, 'ts', 'positions', cuts or DEFAULT_CUTS, keep_cols=('coin',),
+                           code=getattr(mod, '_code', None))
 
 
 def evaluate_carry(code, cstore, split='dev', cost=None, params=None, variants=None, with_causality=True, keep=False):

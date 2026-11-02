@@ -213,7 +213,22 @@ class Pipeline:
         if s['status'] == 'validating':
             # Selection on VALIDATION data happens only among strategies evaluated on it, so the deflation count is
             # the number of validation evaluations (dev-side search is what validation itself tests). Null SR noise.
-            n_val = self.L.q("SELECT COUNT(*) n FROM strategies WHERE val_report IS NOT NULL")[0]['n'] + 1
+            # out-of-sample budget: each strategy family (same logic, any parameter values) gets a fixed number of
+            # looks at validation. Recorded BEFORE the run, so failed and errored runs count too.
+            from ..lab.strategy import family_hash
+            fam = family_hash(s['code'])
+            budget = int(getattr(self.s, 'val_budget_per_family', 2))
+            looks = self.L.q('SELECT strategy FROM val_uses WHERE family=? AND strategy<>?', (fam, sid))
+            if len(looks) >= budget:
+                self.L.update_strategy(sid, status='rejected_val', gate_reasons=['val_budget_exhausted_for_family'])
+                self._notify(s, f'[{sid}] {s["name"]}: its strategy family already used its {budget} validation looks '
+                                f'({", ".join(r["strategy"] for r in looks)}). Re-tuning parameters does not buy another '
+                                'look; a new idea (different logic) does.')
+                self.L.event('pipeline', 'VAL_BUDGET', {'id': sid, 'family': fam})
+                return
+            self.L.x('INSERT OR IGNORE INTO val_uses VALUES(?,?,?)', (fam, sid, time.time()))
+            n_val = max(self.L.q("SELECT COUNT(*) n FROM strategies WHERE val_report IS NOT NULL")[0]['n'],
+                        self.L.q('SELECT COUNT(*) n FROM val_uses')[0]['n'] - 1) + 1
             job = {'type': 'strategy_eval', 'code': s['code'], 'split': 'val', 'allowed': ['dev', 'val'], 'cost': self.cost(),
                    'return_daily': True, 'stress': True, 'n_trials': n_val}
             r = await self._job(job)

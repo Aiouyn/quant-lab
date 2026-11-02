@@ -146,7 +146,7 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
     body = '\n'.join(l for l in code.splitlines() if not l.startswith('from __future__ import'))
     data_env = {'DESK_STORE_ROOT': settings.store / 'views' / 'dev',
                 'DESK_LIBRARY': settings.artifacts / 'library.json',
-                'DESK_CARRY_ROOT': settings.store / 'carry',
+                'DESK_CARRY_ROOT': settings.store / 'carry_views' / 'dev' / 'carry',   # dev-only copy (lab.carry)
                 'DESK_PERPS_DEV': settings.store / 'perps' / 'views' / 'dev.parquet',
                 'DESK_MACRO_DEV': settings.store / 'macro' / 'views' / 'dev.parquet',
                 'DESK_PERPS_DEV_FILLS': settings.store / 'perps' / 'views' / 'dev_fills.parquet',

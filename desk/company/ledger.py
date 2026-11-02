@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY, name TEXT, author TEX
 CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, code_hash TEXT,
   sharpe REAL, days INT, created REAL);
 CREATE TABLE IF NOT EXISTS holdout_uses(code_hash TEXT PRIMARY KEY, strategy TEXT, created REAL, passed INT);
+CREATE TABLE IF NOT EXISTS val_uses(family TEXT, strategy TEXT PRIMARY KEY, created REAL);
 CREATE TABLE IF NOT EXISTS lessons(id TEXT PRIMARY KEY, author TEXT, claim TEXT, evidence TEXT, confidence REAL,
   scope TEXT, tags TEXT, status TEXT DEFAULT 'active', created REAL);
 CREATE TABLE IF NOT EXISTS memos(id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT, kind TEXT, body TEXT, created REAL);

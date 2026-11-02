@@ -222,19 +222,10 @@ def summarize_pred(p, cost: PredCost, from_ms=None, to_ms=None):
             'execution': 'pred'}
 
 
-def pred_causality(mod, panel, cuts=(0.4, 0.7)):
-    full = pred_signal(mod, panel)
-    ts = panel['ts'].to_numpy()
-    ut = np.unique(ts)
-    issues = []
-    for c in cuts:
-        cut = ut[int(len(ut) * c)]
-        k = int(np.sum(ts <= cut))
-        pre = pred_signal(mod, panel.head(k))
-        bad = int(np.sum(np.abs(pre - full[:k]) > 1e-6))
-        if bad:
-            issues.append(f'prefix cut at {cut}: {bad} weights changed when later hours were removed (future data use)')
-    return {'ok': not issues, 'issues': issues, 'rows': len(panel)}
+def pred_causality(mod, panel, cuts=None):
+    from .causality import DEFAULT_CUTS, panel_causality
+    return panel_causality(pred_signal, mod, panel, 'ts', 'weights', cuts or DEFAULT_CUTS, keep_cols=('market',),
+                           code=getattr(mod, '_code', None))
 
 
 def evaluate_pred(code, store: PredStore, split='dev', cost=None, params=None, variants=None, with_causality=True):
