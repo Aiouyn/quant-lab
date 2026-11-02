@@ -24,27 +24,114 @@ import numpy as np
 import polars as pl
 
 from .backtest import backtest, CostModel, RES_SECONDS
+from .jail import JailError, JailedModel, StrategyError, load_jailed  # noqa: F401  (re-exported)
 
 FORBIDDEN = ('import os', 'import subprocess', 'import socket', 'shutil', 'requests', 'httpx', 'urllib',
              'open(', '__import__', 'eval(', 'exec(', 'fwd_returns', 'forward_returns')
-
-
-class StrategyError(ValueError):
-    pass
 
 
 def code_hash(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()[:16]
 
 
-def load_strategy(code: str):
-    for bad in FORBIDDEN:
-        if bad in code:
-            raise StrategyError(f'strategy code may not use `{bad}` (strategies are pure functions of past data)')
+CONTRACT_NAMES = {'signal', 'fit', 'factor', 'PARAMS', 'DESK', 'RESOLUTION', 'LOOKBACK', 'TRAIN_DAYS', 'REFIT_DAYS',
+                  'EXECUTION', 'WARMUP_DAYS', 'PERPS_EXECUTION', 'CARRY_EXECUTION'}
+
+
+def structural_hash(code: str) -> str:
+    """Identity of a strategy for the one-shot holdout: the same logic gets the same hash even when comments,
+    whitespace, docstrings, formatting or the names of its own variables/functions/imports change. Constants, column
+    names and the contract names (signal, PARAMS, ...) still count, so a real change is a different strategy (and a
+    new trial; Phase 1b adds a per-family out-of-sample budget for near-duplicates)."""
+    import ast
+    import builtins
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return 'raw:' + code_hash(code)
+    keep = CONTRACT_NAMES | set(dir(builtins))
+    names: dict[str, str] = {}
+
+    def canon(n):
+        if n is None or n in keep:
+            return n
+        return names.setdefault(n, f'v{len(names)}')
+
+    class Canon(ast.NodeTransformer):
+        def _strip_doc(self, node):
+            body = getattr(node, 'body', None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], 'value', None), ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                node.body = body[1:] or [ast.Pass()]
+            return node
+
+        def visit_Module(self, node):
+            self._strip_doc(node)
+            return self.generic_visit(node)
+
+        def visit_FunctionDef(self, node):
+            self._strip_doc(node)
+            node.name = canon(node.name)
+            return self.generic_visit(node)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node):
+            self._strip_doc(node)
+            node.name = canon(node.name)
+            return self.generic_visit(node)
+
+        def visit_Name(self, node):
+            node.id = canon(node.id)
+            return node
+
+        def visit_arg(self, node):
+            node.arg = canon(node.arg)
+            node.annotation = None
+            return node
+
+        def visit_alias(self, node):
+            if node.asname:
+                node.asname = canon(node.asname)
+            elif '.' not in node.name:
+                node.asname = canon(node.name)
+            return node
+
+        def visit_keyword(self, node):           # f(window=3) keeps the callee's keyword names
+            self.generic_visit(node)
+            return node
+
+        def visit_Global(self, node):
+            node.names = [canon(n) for n in node.names]
+            return node
+
+        visit_Nonlocal = visit_Global
+
+    tree = Canon().visit(tree)
+    dump = ast.dump(tree, annotate_fields=False, include_attributes=False)
+    return 's:' + hashlib.sha256(dump.encode()).hexdigest()[:16]
+
+
+def in_process_allowed() -> bool:
+    """Strategy code runs in-process only inside an agent sandbox (already an untrusted process that sees dev data
+    only). Everywhere else (harness, validation, bundles, the firm) it runs in a jail: see desk/lab/jail.py."""
+    from . import guard
+    return guard.ACTIVE == 'sandbox'
+
+
+def _load_in_process(code: str):
     mod = types.ModuleType('strategy_' + code_hash(code))
     mod.__dict__['np'] = np
     mod.__dict__['pl'] = pl
     exec(compile(code, f'<strategy {code_hash(code)}>', 'exec'), mod.__dict__)
+    return mod
+
+
+def load_strategy(code: str):
+    for bad in FORBIDDEN:
+        if bad in code:
+            raise StrategyError(f'strategy code may not use `{bad}` (strategies are pure functions of past data)')
+    mod = _load_in_process(code) if in_process_allowed() else load_jailed(code)
     if not callable(getattr(mod, 'signal', None)):
         raise StrategyError('strategy must define signal(df, params, model=None)')
     mod.DESK = getattr(mod, 'DESK', 'l2')

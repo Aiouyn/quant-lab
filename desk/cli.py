@@ -60,6 +60,11 @@ def main(argv=None):
     rsi_p.add_argument('action', nargs='?', default='status',
                        choices=['status', 'scoreboard', 'compile-hints', 'build-store', 'quarantine'])
     rsi_p.add_argument('--apply', action='store_true', help='quarantine: actually move rows (default is a dry run)')
+    cm = sub.add_parser('costs', help='review cost-model proposals from agents (loosening needs a human)')
+    cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
+    cm.add_argument('proposal_id', nargs='?', type=int)
+    kn = sub.add_parser('kernel', help='evaluator kernel manifest: verify, or seal after reviewing a kernel change')
+    kn.add_argument('action', nargs='?', default='verify', choices=['verify', 'seal'])
     a = p.parse_args(argv)
 
     from .config import SETTINGS
@@ -181,6 +186,37 @@ def main(argv=None):
     if a.cmd == 'drill':
         from .lab.drills import build_drill, drill_report
         _print(drill_report(s, a.kind) if a.report else build_drill(s, a.kind, n_days=a.days))
+        return 0
+    if a.cmd == 'kernel':
+        from .kernel import seal, verify
+        if a.action == 'seal':
+            _print(seal())
+            return 0
+        res = verify()
+        _print(res)
+        return 0 if res['ok'] else 1
+    if a.cmd == 'costs':
+        from .company.ledger import Ledger
+        import json as _json
+        import time as _time
+        L = Ledger(s.ledger)
+        if a.action == 'list':
+            cur = L.q('SELECT params, author, created FROM cost_models ORDER BY id DESC LIMIT 1')
+            _print({'current': _json.loads(cur[0]['params']) if cur else 'default CostModel',
+                    'pending': L.q("SELECT id, author, params, rationale, created FROM cost_model_proposals "
+                                   "WHERE status='pending' ORDER BY id")})
+            return 0
+        row = L.q('SELECT * FROM cost_model_proposals WHERE id=?', (a.proposal_id,))
+        if not row or row[0]['status'] != 'pending':
+            print(f'no pending proposal #{a.proposal_id}')
+            return 1
+        status = 'approved' if a.action == 'approve' else 'rejected'
+        L.x('UPDATE cost_model_proposals SET status=?, decided=?, decided_by=? WHERE id=?',
+            (status, _time.time(), 'human-cli', a.proposal_id))
+        if status == 'approved':
+            L.x('INSERT INTO cost_models(author,params,rationale,created) VALUES(?,?,?,?)',
+                (f"{row[0]['author']} (approved by human)", row[0]['params'], row[0]['rationale'], _time.time()))
+        print(f'proposal #{a.proposal_id} {status}')
         return 0
     if a.cmd == 'rsi':
         if a.action == 'quarantine':

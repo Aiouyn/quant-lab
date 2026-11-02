@@ -18,4 +18,6 @@ jobs:
       - run: pip install -r requirements.txt
       - name: every desk module imports
         run: python -c "import pkgutil, importlib, desk; [importlib.import_module(m.name) for m in pkgutil.walk_packages(desk.__path__, 'desk.') if not m.name.startswith('desk.lib.contrib')]"
+      - name: evaluator kernel matches its reviewed manifest
+        run: python -m desk kernel verify
       - run: python -m pytest

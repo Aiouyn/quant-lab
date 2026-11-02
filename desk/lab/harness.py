@@ -18,6 +18,7 @@ import polars as pl
 from ..config import SETTINGS
 from ..data.store import FeatureStore
 from .backtest import CostModel, backtest
+from .jail import load_jailed
 from .strategy import evaluate, load_strategy
 from . import stats
 
@@ -344,17 +345,14 @@ def factor_eval(job):
     if len(days) < len(picks):
         raise RuntimeError(f'benchmark days not fully ingested yet ({len(days)}/{len(picks)})')
     df = store.load(days, res)
-    ns = {'np': np, 'pl': pl}
-    exec(job['code'], ns)
-    params = dict(ns.get('PARAMS', {}))
-    vals = ns['factor'](df, params)
-    vals = np.asarray(vals.to_numpy() if isinstance(vals, pl.Series) else vals, dtype=float)
-    if len(vals) != len(df):
-        raise ValueError(f'factor returned {len(vals)} values for {len(df)} rows')
-    # causality on a prefix
+    fmod = load_jailed(job['code'])                 # factor code runs in a jail, never in the harness process
+    if fmod.factor is None:
+        raise ValueError('factor module must define factor(df, params)')
+    params = dict(getattr(fmod, 'PARAMS', {}) or {})
+    vals = fmod.factor(df, params)
+    # causality on a prefix (a fresh jail: the factor cannot remember the full sample)
     k = len(df) // 2
-    pre = ns['factor'](df.head(k), params)
-    pre = np.asarray(pre.to_numpy() if isinstance(pre, pl.Series) else pre, dtype=float)
+    pre = fmod.factor(df.head(k), params)
     a, b = pre, vals[:k]
     bad = int(np.sum(~((np.isnan(a) & np.isnan(b)) | (np.abs(a - b) <= 1e-6 * (1 + np.abs(b))))))
     report = evaluate_factor(df, vals, res)
@@ -378,6 +376,11 @@ def factor_eval(job):
 
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
+    from ..kernel import verify
+    sealed = verify()
+    if not sealed['ok']:                     # a kernel file changed outside a reviewed commit: refuse to evaluate
+        Path(sys.argv[2]).write_text(json.dumps({'error': sealed['error'], 'kernel': sealed}))
+        return
     try:
         out = {'strategy_eval': strategy_eval, 'factor_eval': factor_eval}[job['type']](job)
     except Exception as e:

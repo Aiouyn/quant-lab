@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import pickle
 import time
 from pathlib import Path
 
@@ -25,7 +24,7 @@ def export_bundle(settings, strategy: dict, cost: dict) -> Path:
         store = FeatureStore(settings)
         days = [x for k in ('dev', 'val', 'holdout') for x in store.days(k)]
         model = mod.fit(store.load(days[-mod.TRAIN_DAYS:], mod.RESOLUTION), dict(mod.PARAMS))
-        blob = pickle.dumps(model)
+        blob = model.blob                    # pickled inside the jail; only ever unpickled inside a jail
         (d / 'model.pkl').write_bytes(blob)
         model_hash = sha(blob)
     v, h = strategy.get('val_report') or {}, strategy.get('holdout_report') or {}
@@ -53,5 +52,6 @@ def load_bundle(path: Path):
         blob = (path / 'model.pkl').read_bytes()
         if sha(blob) != m['model_sha256']:
             raise ValueError('bundle model hash mismatch')
-        model = pickle.loads(blob)
+        from ..lab.jail import JailedModel
+        model = JailedModel(blob)            # never unpickled here: the strategy jail unpickles it per call
     return m, load_strategy(code), model

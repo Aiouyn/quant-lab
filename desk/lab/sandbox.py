@@ -1,8 +1,10 @@
 """Isolated execution of agent Python code and trusted harness jobs (async subprocesses).
 
-Sandbox: credential-free environment, dev-only data view, thread caps, wall-clock timeout and an RSS
-watchdog. This protects the organization from accidents (runaway loops, memory blowups, peeking at
-validation data by mistake); it is not an OS-level security boundary against hostile code.
+Sandbox: credential-free environment, dev-only data view, thread caps, wall-clock timeout, an RSS watchdog, and a
+guard installed before the agent's code runs (desk/lab/guard.py): the agent can read code, the Python installation
+and the dev-only data views, write only inside its own workspace, and cannot open sockets or start programs. On Linux
+(including WSL2) the kernel enforces this (Landlock + seccomp); on Windows/macOS only the Python-level audit hook does,
+which stops accidents and casual peeking but is not a security boundary against deliberately hostile code.
 """
 from __future__ import annotations
 
@@ -24,11 +26,33 @@ from ..config import ROOT
 SAFE_ENV = ('SYSTEMROOT', 'SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA',
             'APPDATA', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'COMSPEC', 'WINDIR', 'PATHEXT')
 
-PREAMBLE = '''import sys, warnings
-sys.path.insert(0, {root!r})
+PREAMBLE = '''import sys
+sys.path[0] = {root!r}                       # not the scripts folder: a planted module there must not shadow anything
+from desk.lab.guard import install_sandbox_guard as _guard
+_guard({policy!r})
+del _guard
+import warnings
 warnings.filterwarnings('ignore')
 from desk.research import *
 '''
+
+
+def guard_policy(settings, workspace: Path, data_env: dict) -> dict:
+    """What an agent sandbox may touch. Everything under results/ (the ledger, the full store, other agents'
+    workspaces, val/holdout views) is denied except the dev views named in data_env and the agent's own workspace."""
+    from .guard import python_roots
+    root = Path(ROOT).resolve()
+    deny = {root / 'results', root / 'data', root / '.env', root / '.git', Path(settings.home), Path(settings.store),
+            Path(settings.data_dir)}
+    deny_r = {str(Path(p).resolve()) for p in deny}
+
+    def hidden(p):
+        rp = str(p.resolve())
+        return any(rp == d or rp.startswith(d + os.sep) or d.startswith(rp + os.sep) for d in deny_r)
+    code = [str(p) for p in root.iterdir() if not hidden(p)]
+    allow = sorted({str(v) for k, v in data_env.items() if k.startswith('DESK_') and v and Path(v).exists()})
+    return {'read_roots': python_roots(exclude=[str(root)] + sorted(deny_r)) + code, 'allow_roots': allow,
+            'write_roots': [str(Path(workspace).resolve())], 'deny_roots': sorted(deny_r)}
 
 
 def _env(extra):
@@ -120,15 +144,22 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
     # `from __future__` must be the first statement: hoist it above the preamble
     fut = [l for l in code.splitlines() if l.startswith('from __future__ import')]
     body = '\n'.join(l for l in code.splitlines() if not l.startswith('from __future__ import'))
-    path.write_text(''.join(f + '\n' for f in fut) + PREAMBLE.format(root=str(ROOT)) + body, encoding='utf-8')
-    env = _env({'DESK_STORE_ROOT': settings.store / 'views' / 'dev',
+    data_env = {'DESK_STORE_ROOT': settings.store / 'views' / 'dev',
                 'DESK_LIBRARY': settings.artifacts / 'library.json',
                 'DESK_CARRY_ROOT': settings.store / 'carry',
                 'DESK_PERPS_DEV': settings.store / 'perps' / 'views' / 'dev.parquet',
                 'DESK_MACRO_DEV': settings.store / 'macro' / 'views' / 'dev.parquet',
                 'DESK_PERPS_DEV_FILLS': settings.store / 'perps' / 'views' / 'dev_fills.parquet',
                 'DESK_PRED_DEV': settings.store / 'pred' / 'views' / 'dev.parquet',
-                'DESK_PRED_DEV_OUTCOMES': settings.store / 'pred' / 'views' / 'dev_outcomes.parquet', **(extra_env or {})})
+                'DESK_PRED_DEV_OUTCOMES': settings.store / 'pred' / 'views' / 'dev_outcomes.parquet', **(extra_env or {})}
+    ws = Path(workspace).resolve()
+    tmp = ws / 'tmp'
+    tmp.mkdir(parents=True, exist_ok=True)
+    policy = guard_policy(settings, ws, data_env)
+    path.write_text(''.join(f + '\n' for f in fut) + PREAMBLE.format(root=str(ROOT), policy=policy) + body,
+                    encoding='utf-8')
+    env = _env({**data_env, 'TMP': tmp, 'TEMP': tmp, 'TMPDIR': tmp,
+                'NUMBA_CACHE_DIR': ws / '.numba_cache', 'MPLCONFIGDIR': ws / '.mpl'})
     tq = time.time()
     async with (slot or _nullslot()):
         await _wait_for_memory(mem_mb)

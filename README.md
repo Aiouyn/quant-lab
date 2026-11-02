@@ -18,9 +18,43 @@ removed from the tree on 2026-11-02; they remain in git history.
 - **If your ledger was used with the old engine or dashboard**, it contains rows that engine wrote (seeded lessons
   with invented Sharpe ratios, fake factor reports, evolved strategies). Inspect and move them out with
   `python -m desk rsi quarantine` (dry run) and then `python -m desk rsi quarantine --apply` (backs up first).
-- **The gates below are not yet a security boundary.** Strategy code runs inside the evaluation process and the
-  research sandbox is not OS-isolated, so code can read sealed data or patch the evaluator. Sealing this is the next
-  phase of work.
+- **The evaluator is sealed (Phase 1a), with one platform caveat.** See "Evaluator integrity" below. On Linux and
+  WSL2 the kernel enforces it. On plain Windows only a Python-level guard applies, which stops accidents and casual
+  cheating but not a determined adversary: run the firm under WSL2 (or a Linux container) when it runs unattended.
+  Still open (Phase 1b): an out-of-sample budget per strategy family, point-in-time universes, stronger causality
+  checks, a dev-only view for the carry store, and mandatory trial logging.
+
+## Evaluator integrity
+
+The evaluator is the part of the system that decides whether a strategy is real. Agents may change strategies,
+factors and their own tools; they may not change how those are judged.
+
+- **Strategy and factor code never runs in the evaluator's process.** `load_strategy` returns a proxy; each
+  `signal`, `fit` and `factor` call runs in a fresh child process (`desk/lab/jail.py`, `jail_worker.py`). The child
+  gets a copy of the input frame, has no API keys or data paths, cannot read files outside the Python installation
+  and `desk/lib`, cannot write, cannot open sockets or start programs, and cannot import the evaluator. Only numbers
+  come back (JSON and raw float64); fitted models stay opaque bytes that are only unpickled inside a jail. Because
+  nothing survives between calls, a strategy cannot remember the full sample and replay it in a causality prefix call.
+- **Agent research sandboxes** (`run_python`) see code, the Python installation, the dev-only data views and their own
+  workspace. The ledger, the full store, val/holdout views and other agents' workspaces are refused, as are
+  sockets and subprocesses.
+- **Layers** (`desk/lab/guard.py`): Landlock (kernel file allowlist, also covers polars' Rust readers), seccomp (no
+  exec, fork, sockets, ptrace) and a Python audit hook. Linux/WSL2 get all three; Windows/macOS get the audit hook only.
+- **Kernel manifest.** `desk/KERNEL_MANIFEST.json` pins the sha256 of every evaluator file (`desk/lab/`, validation,
+  bundles, the store, config). The harness refuses to evaluate if any differs, so an unreviewed edit stops evaluation
+  instead of silently changing it. After reviewing a kernel change: `python -m desk kernel seal`, commit the manifest
+  with it. `.github/CODEOWNERS` requires the owner's review for these paths; CI checks the manifest.
+- **Cost model.** Agents can make it stricter on their own. A change that loosens it is a proposal until a human runs
+  `python -m desk costs` (list) and `python -m desk costs approve <id>` (or `reject`).
+- **One-shot holdout per strategy logic.** Holdout use is keyed by a structural hash of the code: comments, formatting,
+  docstrings and renamed variables do not make a new strategy.
+- **Red-team tests.** `tests/v3/test_evaluator_integrity.py` holds every known attack (patching the scorer, reading
+  sealed data through Python or polars, sockets, subprocesses, ctypes into libc, the unaudited `fork_exec`, memory
+  across causality calls, cosmetic holdout resubmission, loosening costs, editing the kernel). All must be caught.
+  On Windows, run that file once after pulling: it checks the libraries strategies use (scipy, sklearn, lightgbm) still
+  work inside the jail on your machine.
+- Cost: each jailed call starts a Python process (about 0.3 s on Linux, more on Windows; about 1.5 s when the strategy
+  imports sklearn). Evaluations take a few seconds longer.
 
 ## Why v3 exists (what was wrong with v2)
 
