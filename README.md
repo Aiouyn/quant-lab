@@ -1,11 +1,11 @@
 # Quant Lab v3 — Desk OS
 
-An autonomous quantitative research firm made of MiMo agents. It studies 332 days of 1 Hz full-depth OKX
+An autonomous quantitative research firm made of LLM agents. It studies 332 days of 1 Hz full-depth OKX
 BTC-USDT-SWAP order books, plus every OKX trade print and hourly Hyperliquid funding. It turns what it learns into
 strategies that are paper-traded on Hyperliquid and combined into portfolios.
 
-v2 (`quantdesk/`) is kept for its ledger and its running dashboard. The older v1/v2 swarm, reports and tests were
-removed from the tree on 2026-11-02; they remain in git history.
+The v1/v2 code (`quantdesk/`, `lab_runner.py`, the root `config.py`), its swarm, reports and tests were removed from
+the tree on 2026-11-02; they remain in git history. v2 produced no approved strategy.
 
 ## Current status (2026-11-02)
 
@@ -103,13 +103,39 @@ python -m desk forward                   # ingest NEW Drive days -> rolling forw
 python -m desk stop                      # graceful stop (agents finish their current step)
 ```
 
-- **Concurrency.** It adapts by itself (AIMD: starts at 8 and grows toward `--concurrency`, 32 by default, while MiMo does not throttle).
+- **Model.** `MODEL_NAME=auto` (the default) picks, at startup, the first model in `DESK_MODEL_PREFERENCE` that the
+  OpenCode Zen gateway lists: `minimax-m3.1-flash-free`, then `deepseek-v4.1-flash-free`, then `glm-5.3-flash-free`.
+  Free models on Zen come and go; the pick is printed and logged (`MODEL_SELECTED`). Name a model in `MODEL_NAME` to pin it.
+- **Concurrency.** It adapts by itself (AIMD: starts at 8 and grows toward `--concurrency`, 32 by default, while the gateway does not throttle).
 - **Compute caps.** `DESK_SANDBOXES` (default 8) caps concurrent agent Python processes; `DESK_JOB_SLOTS` (default 5) caps concurrent heavy evaluations.
 - **Token budget.** `--tokens-per-hour N` adds a hard budget.
-- **Cost controls.** All roles run on `mimo-v2.6-flash` by default; `DESK_FLASH_ROLES=researcher,toolsmith` restores Pro for the judgment layer.
+- **Cost controls.** All roles run on the flash model by default; set `DESK_FLASH_ROLES=researcher,toolsmith` and a stronger `MODEL_NAME` to give the judgment layer a bigger model.
   - About 94% of tokens were *input* tokens, because each step re-sent the whole session.
   - The rolling context keeps only the latest tool outputs verbatim, compacts at 40k tokens, uses smaller briefs, and lowers the staff-role cadence.
 - **Resuming.** Re-running `run` resumes everything: agents rebuild context from their notebooks, and the pipeline resumes queued strategies.
+
+### Running unattended: WSL2
+
+The strategy jail is only enforced by the operating system on Linux (Landlock + seccomp). On Windows, run the firm in
+WSL2 (Ubuntu), keeping the data on the Linux side for speed:
+
+```powershell
+wsl --install -d Ubuntu                  # once, from an admin PowerShell; reboot if asked
+```
+```bash
+sudo apt update && sudo apt install -y python3-venv git
+git clone https://github.com/Aiouyn/quant-lab.git ~/quant-lab && cd ~/quant-lab
+python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+cp /mnt/c/Users/Mathis/.gemini/antigravity/scratch/quant_lab/.env .              # your keys
+rsync -a /mnt/c/Users/Mathis/.gemini/antigravity/scratch/quant_lab/results/ results/   # ledger and stores
+rsync -a /mnt/c/Users/Mathis/.gemini/antigravity/scratch/quant_lab/data/ data/         # raw OKX data (or set OKX_DATA_DIR)
+python -m desk kernel guard              # must report landlock+seccomp
+export DESK_JAIL_REQUIRE_KERNEL=1        # refuse to evaluate strategies if the OS guard is missing
+python -m desk run --agents 16 --hours 8
+```
+
+The dashboard (`python -m desk serve`) is reachable from Windows at http://localhost:8900. If `kernel guard` reports
+anything but `landlock+seccomp`, update WSL (`wsl --update`): Landlock needs a 5.13+ kernel built with it.
 
 ## The organization
 

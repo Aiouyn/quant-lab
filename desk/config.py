@@ -42,25 +42,29 @@ def _base_url() -> str:
 
 def _default_model() -> str:
     m = os.getenv('MODEL_NAME', '').strip()
+    if m.lower() == 'auto':
+        return 'auto'
     if _provider() == 'opencode':
         if m and not m.startswith('mimo-'):
             return m
         fm = os.getenv('DESK_FLASH_MODEL', '').strip()
         if fm and not fm.startswith('mimo-'):
             return fm
-        return 'deepseek-v4.1-flash-free'
+        return 'auto'
     return m or 'mimo-v2.6-pro'
 
 
 def _default_flash_model() -> str:
     fm = os.getenv('DESK_FLASH_MODEL', '').strip()
+    if fm.lower() == 'auto' or (not fm and os.getenv('MODEL_NAME', '').strip().lower() == 'auto'):
+        return 'auto'
     if _provider() == 'opencode':
         if fm and not fm.startswith('mimo-'):
             return fm
         m = os.getenv('MODEL_NAME', '').strip()
         if m and not m.startswith('mimo-'):
             return m
-        return 'deepseek-v4.1-flash-free'
+        return 'auto'
     return fm or 'mimo-v2.6-flash'
 
 
@@ -114,12 +118,16 @@ class Settings:
     min_holdout_sharpe: float = 0.5
     # out-of-sample budget: sealed-validation looks per strategy FAMILY (same logic, any parameter values)
     val_budget_per_family: int = 2
-    # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1` + `deepseek-v4.1-flash`)
+    # LLM / organization (defaults to OpenCode Zen `https://opencode.ai/zen/v1`; model 'auto' = first listed of model_preference)
     provider: str = field(default_factory=_provider)
     model: str = field(default_factory=_default_model)
     flash_model: str = field(default_factory=_default_flash_model)
     # roles that run on the fast/cheap model (default: everyone). Pro for the judgment layer:
     # DESK_FLASH_ROLES=researcher,toolsmith
+    # used when MODEL_NAME is 'auto' or unset: the first of these the gateway lists is picked at startup
+    model_preference: tuple = tuple(m.strip() for m in os.getenv(
+        'DESK_MODEL_PREFERENCE', 'minimax-m3.1-flash-free,deepseek-v4.1-flash-free,glm-5.3-flash-free').split(',')
+        if m.strip())
     flash_roles: tuple = tuple(r.strip() for r in os.getenv('DESK_FLASH_ROLES', 'cio,lead,researcher,officer,pm,execution,librarian,toolsmith').split(',') if r.strip())
     api_key: str = field(default_factory=_key)
     base_url: str = field(default_factory=_base_url)
