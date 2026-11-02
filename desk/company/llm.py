@@ -11,6 +11,38 @@ import time
 from openai import AsyncOpenAI
 
 
+SAFE_FALLBACK_MODEL = 'deepseek-v4.1-flash-free'
+
+
+async def resolve_models(settings, ledger=None, client=None):
+    """Replace model='auto' with the first entry of settings.model_preference that the gateway lists.
+
+    Free models on OpenCode Zen come and go (MiniMax M3.1 Flash was free in October 2026, then left the list), so the
+    choice is made at startup from the live list rather than pinned in code. An explicitly named model is kept."""
+    import dataclasses
+    if 'auto' not in (settings.model, settings.flash_model):
+        return settings
+    prefs = list(getattr(settings, 'model_preference', ()) or ()) or [SAFE_FALLBACK_MODEL]
+    listed, err = set(), None
+    try:
+        client = client or AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=1, timeout=30)
+        page = await client.models.list()
+        listed = {m.id for m in getattr(page, 'data', page)}
+    except Exception as e:                        # listing can need auth or be unavailable: fall back, say so
+        err = repr(e)[:200]
+    pick = next((m for m in prefs if m in listed), None) or (SAFE_FALLBACK_MODEL if SAFE_FALLBACK_MODEL in listed or
+                                                             not listed else prefs[0])
+    out = dataclasses.replace(settings, model=pick if settings.model == 'auto' else settings.model,
+                              flash_model=pick if settings.flash_model == 'auto' else settings.flash_model)
+    info = {'picked': pick, 'preference': prefs, 'listed_preferred': [m for m in prefs if m in listed],
+            'list_error': err}
+    if ledger is not None:
+        ledger.event('llm', 'MODEL_SELECTED', info)
+    print(f'LLM model: {pick} (preference {prefs}; ' + (f'model list failed: {err})' if err else 'from the live list)'),
+          flush=True)
+    return out
+
+
 class Throttle:
     """Additive-increase / multiplicative-decrease concurrency limit with a priority wait queue."""
 

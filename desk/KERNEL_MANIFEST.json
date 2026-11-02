@@ -1,6 +1,6 @@
 {
  "files": {
-  "desk/config.py": "132ebf3ad1584b4d8a2e5cfff8569abb69d19c5b32185595eab489bd20d5db25",
+  "desk/config.py": "bae4cefe894fd3ef118e61257eb94129560c58a04584092817c68b5b7f62d776",
   "desk/data/store.py": "bf1c505a317c4a48139586d9d71a9d66dfe5a8d22bfd482034a06ee483184ff9",
   "desk/kernel.py": "578575e33dc2dcb6002161cb1605bfc21121ff31ff912fab3db76fecf0802b7d",
   "desk/lab/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -32,5 +32,5 @@
   "desk/pipeline/bundle.py": "96469813c64e7bdec2a35f02e9fa239852f2112e2644947f6c7471520219c611",
   "desk/pipeline/validation.py": "26195e8455b0fab3081778912b492bf285ab5709ad075cc14d3a1e8e9d780b8d"
  },
- "sealed": "2026-11-02 16:47:29"
+ "sealed": "2026-11-02 17:04:46"
 }

@@ -267,6 +267,8 @@ def run_company(settings, agents=28, hours=8.0, concurrency=None, drill=None, to
 
 
 async def _main(settings, n_agents, hours, concurrency, tokens_per_hour=None):
+    from .llm import resolve_models
+    settings = await resolve_models(settings, Ledger(settings.ledger))
     org = Org(settings, n_agents, hours, concurrency, tokens_per_hour)
     L = org.ledger
     L.set('stop', False)

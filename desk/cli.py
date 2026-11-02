@@ -76,7 +76,7 @@ def main(argv=None):
     cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
     cm.add_argument('proposal_id', nargs='?', type=int)
     kn = sub.add_parser('kernel', help='evaluator kernel manifest: verify, or seal after reviewing a kernel change')
-    kn.add_argument('action', nargs='?', default='verify', choices=['verify', 'seal'])
+    kn.add_argument('action', nargs='?', default='verify', choices=['verify', 'seal', 'guard'])
     a = p.parse_args(argv)
 
     from .config import SETTINGS
@@ -220,6 +220,14 @@ def main(argv=None):
         if a.action == 'seal':
             _print(seal())
             return 0
+        if a.action == 'guard':                   # which OS-level protection the strategy jail gets on this machine
+            from .lab import jail
+            res, _ = jail.call('meta', "DESK='perps'\nPARAMS={}\ndef signal(panel, p):\n    return 0\n")
+            g = res.get('kernel_guard') or 'none'
+            _print({'kernel_guard': g, 'ok_for_unattended_runs': 'landlock' in g and 'seccomp' in g,
+                    'note': 'landlock+seccomp = enforced by the OS. Anything else: Python-level guard only; '
+                            'run under WSL2 or Linux for unattended runs.'})
+            return 0 if 'landlock' in g else 1
         res = verify()
         _print(res)
         return 0 if res['ok'] else 1
