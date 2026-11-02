@@ -29,7 +29,7 @@ MAX_MODEL_BYTES = 64 * 1024 * 1024
 
 # beyond guard.BLOCKED_MODULES: libraries with their own native file/network/JIT paths, and the evaluator itself
 JAIL_EXTRA_BLOCKED = {
-    'pyarrow', 'duckdb', 'fsspec', 'sqlite3', '_sqlite3', 'numba', 'llvmlite', 'h5py', 'tables', 'pandas',
+    'pyarrow', 'duckdb', 'fsspec', 'sqlite3', '_sqlite3', 'numba', 'llvmlite', 'h5py', 'tables', 'pandas', 'matplotlib',
     'pickletools', 'desk.lab', 'desk.pipeline', 'desk.company', 'desk.data', 'desk.live', 'desk.web', 'desk.config',
     'desk.research',
 }

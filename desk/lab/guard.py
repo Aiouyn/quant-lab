@@ -275,7 +275,8 @@ def install_audit_hook(read_roots, write_roots=(), deny_roots=(), allow_roots=()
         if event == 'import':
             name = args[0] if args else ''
             if name in blocked_modules or any(name.startswith(m + '.') for m in blocked_modules):
-                raise ImportError(f'module {name!r} is not available to {what}')
+                # ModuleNotFoundError: libraries guard optional imports with either except clause
+                raise ModuleNotFoundError(f'module {name!r} is not available to {what}', name=name)
             return
         if event.startswith(BLOCKED_EVENT_PREFIXES):
             raise PermissionError(f'{what} may not perform {event}')

@@ -1,6 +1,6 @@
 {
  "files": {
-  "desk/config.py": "84cf65eafd99aaad9fd05741aa4a782077f4f38da6662715921bc94f959ae9d7",
+  "desk/config.py": "bf9e1935fa5877b5b6ffa8c648b926e2ca170605f0272525e33c7ddecc1ec041",
   "desk/data/store.py": "bf1c505a317c4a48139586d9d71a9d66dfe5a8d22bfd482034a06ee483184ff9",
   "desk/kernel.py": "578575e33dc2dcb6002161cb1605bfc21121ff31ff912fab3db76fecf0802b7d",
   "desk/lab/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -12,10 +12,10 @@
   "desk/lab/factors.py": "88bc6ccefb6003a8d2f4f82ee86899759eb1a9dda4b264b2b390f916af0cf59d",
   "desk/lab/forward.py": "e2eb2b7424a1dcef5849c7a090bfe05a4fa777be8e457d721316538e564ae191",
   "desk/lab/funding_events.py": "6f266efb1f2b04e7261516468f3a7adaf16cf7b2fa5e3eec1e3a2ac7f66099b0",
-  "desk/lab/guard.py": "7bd49d42192467453b0f472cbd9c46fd6d24ff66f1b7935e6a47df2bc5987610",
+  "desk/lab/guard.py": "60401e0b59dd70d108338a42f4aae9dd8fa20eacc9cbf572e5b502a8069e9e23",
   "desk/lab/harness.py": "4002b8e40e1d448dfe30c1c42d56db853bc3c4547e953fd21b7bb02fc3dbbd80",
   "desk/lab/jail.py": "6c55c681355773504fe3a30211f2db6b7998326b3120636dad63f2f8b9731459",
-  "desk/lab/jail_worker.py": "0c605a2f797e0ef10bb57be30feef200583d193e389857b333bd04682d5f08c0",
+  "desk/lab/jail_worker.py": "c66cf353fb659a351e65286bd4c58b717b8052419321d75deb8e94867868bdf8",
   "desk/lab/macro.py": "97ffd65cf06a3a1b6d1c39b7a6f43f5d1a73abe2049221b8f468ad5dc9961f2f",
   "desk/lab/maker.py": "7d636230cc59ca0960a74bd393d6cfcae2aaba69a66e85eb71bf13730332f8c8",
   "desk/lab/panel_drills.py": "2cd2c21bfeac0fa5bf020a52f706aed6b3b7f4634321bab28811212d68ece787",
@@ -32,5 +32,5 @@
   "desk/pipeline/bundle.py": "96469813c64e7bdec2a35f02e9fa239852f2112e2644947f6c7471520219c611",
   "desk/pipeline/validation.py": "26195e8455b0fab3081778912b492bf285ab5709ad075cc14d3a1e8e9d780b8d"
  },
- "sealed": "2026-11-02 17:51:30"
+ "sealed": "2026-11-02 18:00:34"
 }

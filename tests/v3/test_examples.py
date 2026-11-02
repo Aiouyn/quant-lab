@@ -47,6 +47,20 @@ def test_new_hints():
 
 def test_sandbox_hoists_future_imports(tmp_path):
     import asyncio
+    from desk.config import ROOT
+    env = ROOT / '.env'                      # a real checkout has a .env the sandbox may not read: it must still start
+    made = not env.exists()
+    if made:
+        env.write_text('DESK_TEST_ONLY=1\n')
+    try:
+        _run_hoist(tmp_path)
+    finally:
+        if made:
+            env.unlink()
+
+
+def _run_hoist(tmp_path):
+    import asyncio
     from desk.config import SETTINGS
     from desk.lab.sandbox import run_python
     r = asyncio.run(run_python('from __future__ import annotations\nprint("hi")', tmp_path, SETTINGS, timeout_s=120))

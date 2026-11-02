@@ -8,7 +8,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / '.env')
+try:
+    load_dotenv(ROOT / '.env')
+except OSError:                                 # agent sandboxes and the strategy jail may not read .env (secrets)
+    pass
 
 
 def _key():
