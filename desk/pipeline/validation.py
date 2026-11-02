@@ -303,9 +303,11 @@ class Pipeline:
     async def forward_check(self):
         """Rolling forward holdout, per desk. l2: ingest OKX archive days that appeared after the split was frozen;
         perps: forward days are appended daily by desk.data.refresh from verified live recordings. Every approved
-        strategy is scored on ALL its desk's forward days (never seen by anyone) -> forward_report with a verdict:
-        FORWARD_CONFIRMED after >= 60 forward days with Sharpe >= 0.5, positive pnl and positive mean ex top-5 days;
-        FORWARD_FAILED after >= 60 days otherwise; RUNNING before."""
+        strategy is scored on ALL its desk's forward days (never seen by anyone) -> forward_report with a verdict from
+        the pre-registered test in desk/lab/forward.py (fixed looks at 60/120/250 days, Bonferroni over looks and over
+        every strategy ever forward-tested). A FORWARD_FAILED strategy leaves the approved set. The firm-level book of
+        every forward-tested strategy is tested once and stored as `firm_forward`."""
+        from ..lab.forward import firm_forward, forward_verdict
         from ..data.store import FeatureStore
         from ..lab.strategy import load_strategy
         import asyncio as _a
@@ -346,7 +348,10 @@ class Pipeline:
         except Exception as e:
             self.L.event('pipeline', 'FORWARD_PRED_ERROR', {'error': repr(e)[:400]})
         out = {}
-        for r in self.L.q("SELECT id FROM strategies WHERE status IN ('approved','paper')"):
+        live = [r['id'] for r in self.L.q("SELECT id FROM strategies WHERE status IN ('approved','paper')")]
+        tested = {r['id'] for r in self.L.q('SELECT id FROM strategies WHERE forward_report IS NOT NULL')}
+        n_tests = len(tested | set(live))
+        for r in [{'id': x} for x in live]:
             st = self.L.strategy(r['id'])
             try:
                 desk = load_strategy(st['code']).DESK
@@ -354,26 +359,33 @@ class Pipeline:
                 continue
             n = fwd_days.get(desk, 0)
             prev = st.get('forward_report') or {}
-            if not n or prev.get('days') == n:
+            if not n or (prev.get('days') == n and 'test' in prev):     # reports from the old rule are re-scored
                 continue
             res = await self._job({'type': 'strategy_eval', 'code': st['code'], 'split': 'forward',
                                    'allowed': ['dev', 'val', 'holdout', 'forward'], 'cost': self.cost(), 'return_daily': True})
             if 'error' in res:
                 continue
             sm = res['summary']
-            ex = (res.get('stats') or {}).get('mean_ex_top5_days_bps', 0)
-            verdict = 'RUNNING' if n < 60 else ('FORWARD_CONFIRMED' if sm['sharpe'] >= 0.5 and sm['pnl'] > 0 and ex > 0
-                                                else 'FORWARD_FAILED')
+            test = forward_verdict(((res.get('daily') or {}).get('ret')), n_strategies=n_tests, desk=desk)
+            verdict = test['verdict']
             rep = {'days': n, 'desk': desk, 'summary': sm, 'stats': res.get('stats'), 'daily': res.get('daily'),
-                   'verdict': verdict, 'updated': time.time()}
+                   'verdict': verdict, 'test': test, 'updated': time.time()}
             self.L.update_strategy(r['id'], forward_report=rep)
+            if verdict == 'FORWARD_FAILED':
+                self.L.update_strategy(r['id'], status='forward_failed')
             out[r['id']] = {'days': n, 'sharpe': sm['sharpe'], 'verdict': verdict}
             if verdict != prev.get('verdict') or (sm['pnl'] < 0 and n >= 10):
                 for who in [x['name'] for x in self.L.q("SELECT name FROM agents WHERE role IN ('pm','cio')")] + [st['author']]:
                     self.L.send(who, 'pipeline', f'[{r["id"]}] rolling forward holdout ({n} unseen days): pnl {sm["pnl"]:.0f}, '
                                                  f'Sharpe {sm["sharpe"]:.2f}, verdict {verdict}.')
             self.L.event('pipeline', 'FORWARD_SCORED', {'id': r['id'], 'days': n, 'verdict': verdict})
-        return {'forward_days': fwd_days, 'scored': out}
+        reps = [x for x in (self.L.strategy(i['id']).get('forward_report') for i in
+                            self.L.q('SELECT id FROM strategies WHERE forward_report IS NOT NULL')) if x]
+        firm = firm_forward(reps) if reps else None
+        if firm:
+            firm['updated'] = time.time()
+            self.L.set('firm_forward', {k: v for k, v in firm.items()})
+        return {'forward_days': fwd_days, 'scored': out, 'firm_forward': firm}
 
     def approved_summary(self):
         out = []
