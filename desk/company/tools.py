@@ -111,46 +111,25 @@ SPECS = {
     'contribute_primitive': fn('contribute_primitive', 'Add a tested reusable function to desk.lib.contrib (importable in '
                                'sandboxes). Provide a test that prints OK.',
                                {'name': S, 'code': S, 'test': S, 'doc': S}, ['name', 'code', 'test', 'doc']),
-    # ------------------------------------------------------------ RSI (Recursive Self-Improvement)
-    'evolve_population': fn('evolve_population', 'RSI evolutionary engine: breed top active factors into multi-factor rank '
-                            'strategies and apply targeted gate-repair mutations (vol_scale_tail_clip, hysteresis_buffer, '
-                            'regime_breadth_gate, maker_execution_switch) across desks.',
-                            {'desk': {'type': 'string', 'enum': ['macro', 'perps', 'pred', 'carry', 'l2']}, 'max_children': I}),
-    'compile_hints': fn('compile_hints', 'RSI error-to-hint compiler: cluster recent RUN_PYTHON and TOOL_ERROR tracebacks '
-                        'into verified dynamic regex fix hints.', {}),
-    'primitive_lift': fn('primitive_lift', 'Empirical Bayesian lift leaderboard of desk.lib.contrib primitives '
-                         '(ΔSharpe, Δfactor score, sandbox pass rate, total uses).', {}),
-    'propose_charter_patch': fn('propose_charter_patch', 'Propose a role/pod charter overlay from gate failure bottlenecks '
-                                'and evaluate it on the planted/null drill gate before promotion.',
-                                {'role': S, 'pod': S}),
-    'evolve_primitives': fn('evolve_primitives', 'Autonomous Toolsmith RSI loop: refactor low-lift/failing desk.lib.contrib '
-                            'primitives and synthesize new verified causal primitives from lift telemetry.', {}),
-    'run_rsi_campaign': fn('run_rsi_campaign', 'Run a multi-generation RSI campaign (hints -> Toolsmith primitives -> '
-                           'LLM+AST strategy breeding -> Truth Machine gate -> ERC Master Portfolio) across desks.',
-                           {'generations': I, 'desks': {'type': 'array', 'items': S}, 'use_llm': B}),
-    'validate_and_promote': fn('validate_and_promote', 'Run the strict 3-stage Truth Machine gate (DEV_GATES -> sealed val_gates with DSR -> '
-                               'one-shot holdout_gates -> bundle export) and auto-build the ERC Master Portfolio.',
-                               {'desk': S, 'max_candidates': I}),
-    'operator_bandit': fn('operator_bandit', 'Inspect the Meta-Bandit operator leaderboard weighted by out-of-sample val survival and Sharpe lift.',
-                          {'desk': S}),
+    # ------------------------------------------------------------ RSI telemetry (self-modification tools are retired until
+    # the evaluator is sealed and drill-gated; see desk/company/rsi.py)
+    'compile_hints': fn('compile_hints', 'Cluster recurring RUN_PYTHON / TOOL_ERROR failures into dynamic fix hints '
+                        '(hit and resolution counts come only from real later runs).', {}),
+    'primitive_lift': fn('primitive_lift', 'Observed usage statistics of desk.lib.contrib primitives (uses, sandbox pass '
+                         'rate, mean dev Sharpe when used). Correlational, dev only; not a causal lift.', {}),
 }
 
 COMMON = ['board_post', 'board_list', 'board_read', 'board_update', 'message', 'search', 'read', 'leaderboard',
           'notebook', 'record_lesson', 'end_session']
 ROLE_TOOLS = {
-    'cio': COMMON + ['org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status',
-                     'evolve_population', 'compile_hints', 'primitive_lift', 'propose_charter_patch', 'run_rsi_campaign',
-                     'validate_and_promote', 'operator_bandit'],
-    'lead': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy',
-                      'evolve_population', 'primitive_lift', 'run_rsi_campaign', 'validate_and_promote', 'operator_bandit'],
-    'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy',
-                            'evolve_population', 'primitive_lift', 'operator_bandit'],
-    'officer': COMMON + ['review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy', 'validate_and_promote'],
-    'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python', 'validate_and_promote'],
+    'cio': COMMON + ['org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status', 'compile_hints', 'primitive_lift'],
+    'lead': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
+    'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
+    'officer': COMMON + ['review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy'],
+    'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python'],
     'execution': COMMON + ['venue_stats', 'set_cost_model', 'run_python', 'approved_strategies'],
-    'librarian': COMMON + ['retire_lesson', 'write_digest', 'compile_hints', 'propose_charter_patch'],
-    'toolsmith': COMMON + ['run_python', 'contribute_primitive', 'compile_hints', 'primitive_lift',
-                           'evolve_primitives', 'evolve_population', 'propose_charter_patch', 'operator_bandit'],
+    'librarian': COMMON + ['retire_lesson', 'write_digest', 'compile_hints'],
+    'toolsmith': COMMON + ['run_python', 'contribute_primitive', 'compile_hints', 'primitive_lift'],
 }
 
 
@@ -573,13 +552,6 @@ class Toolbox:
         return {'ok': True, 'module': f'desk.lib.contrib.{name}'}
 
     # ------------------------------------------------------------ RSI handlers
-    async def t_evolve_population(self, desk=None, max_children=3):
-        from .rsi import evolve_population
-        res = evolve_population(self.L, settings=self.s, desk=desk, max_children=min(int(max_children or 3), 6), author=self.agent.name)
-        if res.get('evolved_count'):
-            self._streak = 0
-        return res
-
     async def t_compile_hints(self):
         from .rsi import compile_error_hints
         return compile_error_hints(self.L, author=self.agent.name)
@@ -587,26 +559,3 @@ class Toolbox:
     async def t_primitive_lift(self):
         from .rsi import primitive_lift_leaderboard
         return primitive_lift_leaderboard(self.L)
-
-    async def t_propose_charter_patch(self, role='researcher', pod=None):
-        from .rsi import propose_charter_patch, evaluate_rsi_drill
-        cand = propose_charter_patch(self.L, role=role or 'researcher', pod=pod)
-        drill = evaluate_rsi_drill(self.L, settings=self.s, charter_id=cand['id'])
-        return {'charter': cand, 'drill_gate': drill}
-
-    async def t_evolve_primitives(self):
-        from .rsi import evolve_primitives
-        return evolve_primitives(self.L, settings=self.s, author=self.agent.name)
-
-    async def t_run_rsi_campaign(self, generations=2, desks=None, use_llm=True):
-        from .rsi import run_rsi_campaign
-        return run_rsi_campaign(self.L, settings=self.s, generations=int(generations or 2), desks=desks, use_llm=bool(use_llm))
-
-    async def t_validate_and_promote(self, desk=None, max_candidates=6):
-        from .rsi import validate_and_promote_population
-        return validate_and_promote_population(self.L, settings=self.s, desk=desk, max_candidates=int(max_candidates or 6), author=self.agent.name)
-
-    async def t_operator_bandit(self, desk=None):
-        from .rsi import operator_bandit_leaderboard
-        return operator_bandit_leaderboard(self.L, desk=desk)
-

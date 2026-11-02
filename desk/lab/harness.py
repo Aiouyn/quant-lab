@@ -46,6 +46,12 @@ def _settings(job):
     return SETTINGS
 
 
+def _numeric_params(code):
+    """How many numeric PARAMS the neighborhood test can perturb (0 means the gate does not apply)."""
+    mod = load_strategy(code)
+    return len([v for v in mod.PARAMS.values() if isinstance(v, (int, float)) and not isinstance(v, bool) and v != 0])
+
+
 def carry_eval(job):
     from .carry import CarryStore, CarryCost, evaluate_carry
     cs = CarryStore(_settings(job), allowed=tuple(job.get('allowed', ('dev',))))
@@ -103,6 +109,7 @@ def carry_eval(job):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    out['numeric_params'] = _numeric_params(job['code'])
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -186,6 +193,7 @@ def panel_desk_eval(job, desk):
             out['robustness']['param_neighborhood'] = {
                 'variants': nb, 'fraction_profitable': round(float(np.mean([x['pnl'] > 0 for x in nb])), 3),
                 'median_sharpe': round(float(np.median([x['sharpe'] for x in nb])), 3)}
+    out['numeric_params'] = _numeric_params(job['code'])
     out['seconds'] = round(time.time() - t0, 1)
     return out
 
@@ -251,6 +259,7 @@ def strategy_eval(job):
         sub, s2 = df.head(k), sig[:k]
         er = backtest(sub, s2, res, cost)
         out['certification'] = certify(sub, s2, res, cost, er)
+    out['numeric_params'] = _numeric_params(job['code'])
     out['seconds'] = round(time.time() - t0, 1)
     return out
 

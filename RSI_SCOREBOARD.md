@@ -5,11 +5,15 @@ Honest Recursive Self-Improvement telemetry. **Null means unknown.** Never inven
 ## Command
 
 ```bash
-python -m desk rsi scoreboard
-python -m desk rsi campaign --desks macro,pred,carry,perps --no-llm
+python -m desk rsi scoreboard        # this contract
+python -m desk rsi status            # KPIs used by the brief and the dashboard
+python -m desk rsi compile-hints     # cluster recurring sandbox failures into fix hints
+python -m desk rsi quarantine        # dry run: rows the retired RSI engine wrote into the ledger
+python -m desk rsi quarantine --apply
 ```
 
-Default campaign desks: `macro,pred,carry,perps`.
+The campaign, evolve, toolsmith, bandit, funnel and daemon commands were retired on 2026-11-02 with the engine that
+backed them (it evaluated on synthetic panels and invented metrics). They come back only behind a drill gate.
 
 ## Contract
 
@@ -18,23 +22,24 @@ Default campaign desks: `macro,pred,carry,perps`.
 | `best_sharpe` / `mean_sharpe` | Observed from `dev_report.summary.sharpe` | No dev samples |
 | `best_val_sharpe` / `best_holdout_sharpe` | Observed from val/holdout reports | No OOS samples |
 | `portfolio_sharpe` | ERC portfolio report Sharpe | No portfolio / no sharpe field |
-| `planted_signal_corr` / `drill_verdict` / `null_false_discoveries` | From `evaluate_rsi_drill` | Drill not run |
+| `planted_signal_corr` / `drill_verdict` / `null_false_discoveries` | From the `drill_scores` ledger key, written only by a real drill report | Drill not run |
 | `hint_resolution_rate` | `resolved_count / hits` on dynamic hints | No hint hits |
-| `mean_primitive_lift` | Mean composite lift | No primitives tracked |
+| `mean_primitive_lift` | Causal lift from drill ablations | Always null until a drill ablation estimator exists |
 | `forward_sharpe` / `forward_verdict` | From `forward_report` | Missing report → `forward_sharpe=null`, `forward_verdict=NOT_RUN` |
-| `generation_fitness` | Scalar in `[0,1]` from **learning** signals only | Always computed (0 when no evidence) |
+| `forward_confirmed` / `forward_decided` | Approved strategies with a 60-day forward verdict | 0 |
+| `generation_fitness` | `forward_confirmed / forward_decided` | 0 when nothing is decided yet |
 
-### `generation_fitness` inputs (success)
+### `generation_fitness` (Phase 0 definition)
 
-- `newly_approved` count
-- Val / holdout Sharpe of **new** approvals
-- Drill pass (`PROMOTED`)
-- Hint resolution rate
-- Primitive lift
+Only evidence the agents cannot move counts: confirmations on forward data nobody had when the strategy was written.
+Planted / null drill results join it once drills exist for every live desk.
 
 ### Explicitly **not** success
 
-- `children_bred` — breeding volume is telemetry only
+- `children_bred`: breeding volume is telemetry only
+- hint resolution rate and primitive usage: useful telemetry, but agents influence both, so they are reported and
+  excluded from fitness
+- validation or holdout Sharpe: rewarding them would turn the sealed splits into a training set
 
 ## Forbidden fabrications
 

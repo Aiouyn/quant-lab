@@ -4,7 +4,23 @@ An autonomous quantitative research firm made of MiMo agents. It studies 332 day
 BTC-USDT-SWAP order books, plus every OKX trade print and hourly Hyperliquid funding. It turns what it learns into
 strategies that are paper-traded on Hyperliquid and combined into portfolios.
 
-v2 (`quantdesk/`) is kept for its ledger and its running dashboard. The legacy swarm, reports and tests are in `legacy/`.
+v2 (`quantdesk/`) is kept for its ledger and its running dashboard. The older v1/v2 swarm, reports and tests were
+removed from the tree on 2026-11-02; they remain in git history.
+
+## Current status (2026-11-02)
+
+- **No trading edge has been demonstrated out of sample.** Every family in `RESEARCH_LOG_2026-10-03.md` was rejected
+  or failed its holdout. The only robust result is HL portfolio-margin cash-and-carry, which is a yield, not alpha.
+- **The RSI layer is telemetry only.** The previous self-improvement engine (strategy breeding, primitive synthesis,
+  charter patches, auto-promotion, a background daemon) evaluated on synthetic panels and invented metrics. It was
+  retired. Self-modification returns only after the evaluator is sealed and the firm is scored on planted / null
+  drills for every live desk. See `RSI_SCOREBOARD.md`.
+- **If your ledger was used with the old engine or dashboard**, it contains rows that engine wrote (seeded lessons
+  with invented Sharpe ratios, fake factor reports, evolved strategies). Inspect and move them out with
+  `python -m desk rsi quarantine` (dry run) and then `python -m desk rsi quarantine --apply` (backs up first).
+- **The gates below are not yet a security boundary.** Strategy code runs inside the evaluation process and the
+  research sandbox is not OS-isolated, so code can read sealed data or patch the evaluator. Sealing this is the next
+  phase of work.
 
 ## Why v3 exists (what was wrong with v2)
 
@@ -26,7 +42,7 @@ python -m desk splits                    # frozen dev / val / holdout (+ forward
 python -m desk record --hours 720        # keep recording Hyperliquid books/trades AND live OKX features (paper warm-start, calibration)
 python -m desk tape                      # one-time: price-level OKX trade tape (limit-order fill model)
 python -m desk run --agents 16 --hours 8 # the research firm (lean default; --agents 28 for the full org)
-python -m desk serve --port 8900         # control room: http://127.0.0.1:8900
+python -m desk serve --port 8900         # read-only control room: http://127.0.0.1:8900
 python -m desk status                    # KPIs, token use, funnel
 python -m desk forward                   # ingest NEW Drive days -> rolling forward holdout for approved strategies (also automatic every 6 h)
 python -m desk stop                      # graceful stop (agents finish their current step)
@@ -57,7 +73,7 @@ How the agents stay coordinated:
 - Colleagues coordinate through board claims, comments and messages, and build on each other's factors by ID.
 - Every agent backtest is written to a firm-wide multiple-testing ledger, including the ones run inside sandboxes.
 
-## The truth machine (no agent can talk its way past it)
+## The truth machine (gates every submission; see the status note above for its known gaps)
 
 1. **Dev (60%).** Researchers only ever see development days. The sandbox data root is a hard-linked dev-only view.
 2. **Full-dev gate.** All of these must hold:
