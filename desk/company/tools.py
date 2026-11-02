@@ -116,6 +116,15 @@ SPECS = {
     # the evaluator is sealed and drill-gated; see desk/company/rsi.py)
     'compile_hints': fn('compile_hints', 'Cluster recurring RUN_PYTHON / TOOL_ERROR failures into dynamic fix hints '
                         '(hit and resolution counts come only from real later runs).', {}),
+    'propose_process_change': fn('propose_process_change', 'Propose a working rule to add to one role\'s charter '
+                                 '(optionally for one pod), e.g. a check every researcher should run before submitting. '
+                                 'It changes nothing until a paired drill trial (planted + null markets, firm with vs '
+                                 'without the rule) shows it raises discovery of the planted signal with zero false '
+                                 'discoveries. Check process_history first; cite the evidence that motivates it.',
+                                 {'role': {'type': 'string', 'enum': ['cio', 'lead', 'researcher', 'officer', 'pm',
+                                                                      'execution', 'librarian', 'toolsmith']},
+                                  'pod': S, 'patch': S, 'rationale': S}, ['role', 'patch', 'rationale']),
+    'process_history': fn('process_history', 'Process changes proposed so far, their drill-trial verdicts and why.', {}),
     'primitive_lift': fn('primitive_lift', 'Observed usage statistics of desk.lib.contrib primitives (uses, sandbox pass '
                          'rate, mean dev Sharpe when used). Correlational, dev only; not a causal lift.', {}),
 }
@@ -123,14 +132,14 @@ SPECS = {
 COMMON = ['board_post', 'board_list', 'board_read', 'board_update', 'message', 'search', 'read', 'leaderboard',
           'notebook', 'record_lesson', 'end_session']
 ROLE_TOOLS = {
-    'cio': COMMON + ['org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status', 'compile_hints', 'primitive_lift'],
-    'lead': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
+    'cio': COMMON + ['propose_process_change', 'process_history', 'org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status', 'compile_hints', 'primitive_lift'],
+    'lead': COMMON + ['propose_process_change', 'process_history', 'run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
     'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
-    'officer': COMMON + ['review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy'],
+    'officer': COMMON + ['propose_process_change', 'process_history', 'review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy'],
     'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python'],
     'execution': COMMON + ['venue_stats', 'set_cost_model', 'run_python', 'approved_strategies'],
-    'librarian': COMMON + ['retire_lesson', 'write_digest', 'compile_hints'],
-    'toolsmith': COMMON + ['run_python', 'contribute_primitive', 'compile_hints', 'primitive_lift'],
+    'librarian': COMMON + ['propose_process_change', 'process_history', 'retire_lesson', 'write_digest', 'compile_hints'],
+    'toolsmith': COMMON + ['propose_process_change', 'process_history', 'run_python', 'contribute_primitive', 'compile_hints', 'primitive_lift'],
 }
 
 
@@ -588,6 +597,14 @@ class Toolbox:
     async def t_compile_hints(self):
         from .rsi import compile_error_hints
         return compile_error_hints(self.L, author=self.agent.name)
+
+    async def t_propose_process_change(self, role, patch, rationale, pod=None):
+        from ..lab.process_trials import propose
+        return propose(self.L, role, patch, rationale, author=self.agent.name, pod=pod)
+
+    async def t_process_history(self):
+        from ..lab.process_trials import history
+        return history(self.L)
 
     async def t_primitive_lift(self):
         from .rsi import primitive_lift_leaderboard

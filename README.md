@@ -11,10 +11,10 @@ removed from the tree on 2026-11-02; they remain in git history.
 
 - **No trading edge has been demonstrated out of sample.** Every family in `RESEARCH_LOG_2026-10-03.md` was rejected
   or failed its holdout. The only robust result is HL portfolio-margin cash-and-carry, which is a yield, not alpha.
-- **The RSI layer is telemetry only.** The previous self-improvement engine (strategy breeding, primitive synthesis,
+- **Self-modification is drill-gated.** The previous self-improvement engine (strategy breeding, primitive synthesis,
   charter patches, auto-promotion, a background daemon) evaluated on synthetic panels and invented metrics. It was
-  retired. Self-modification returns only after the evaluator is sealed and the firm is scored on planted / null
-  drills for every live desk. See `RSI_SCOREBOARD.md`.
+  retired. Its replacement (Phase 3) lets agents propose changes to role charters, and a change goes live only when
+  a paired trial on planted and null drill markets shows it helps. See "Process trials" below.
 - **If your ledger was used with the old engine or dashboard**, it contains rows that engine wrote (seeded lessons
   with invented Sharpe ratios, fake factor reports, evolved strategies). Inspect and move them out with
   `python -m desk rsi quarantine` (dry run) and then `python -m desk rsi quarantine --apply` (backs up first).
@@ -288,6 +288,32 @@ the overall verdict and the desks covered appear in `python -m desk rsi scoreboa
 of the firm's PROCESS: a change to agents, prompts or tools is an improvement only if planted discovery rises while
 null false discoveries stay at zero. Pred and carry drills are not built yet (pred needs synthetic resolutions, and
 carry's real edge is a yield that a null market must remove explicitly).
+
+### Process trials: how the firm changes itself
+
+The CIO, leads, officers, librarian and toolsmith can propose a *process variant*: a short working rule appended to
+one role's charter, optionally for one pod (`propose_process_change`). A proposal changes nothing until a paired
+drill trial (`desk/lab/process_trials.py`, part of the sealed kernel) accepts it:
+
+```powershell
+python -m desk process list                         # live rules, proposals, past verdicts and why
+python -m desk process propose --role researcher --pod xsec --patch "..." --rationale "..."   # a human can propose too
+python -m desk process trial                        # trial the oldest proposal (or pass its id)
+python -m desk process trial PV-1a2b3c --desk macro --pairs 3 --hours 2 --agents 8
+python -m desk process retire PV-1a2b3c --rationale "superseded"
+```
+
+For each pair, one planted market is built with a fixed seed and copied for both arms; the BASE arm runs the firm
+with today's live rules, the CAND arm adds the candidate. The candidate also runs one null market per pair. The rule
+is fixed in advance: **ACCEPT** only if the candidate approved nothing on any null market, beat BASE on a majority of
+pairs (gains under 0.02 are ties) and improved the planted score by at least 0.05 on average; otherwise **REJECT**.
+A failed run makes the trial **ERROR** and the proposal stays queued. An accepted rule replaces the live rule for the
+same role and pod. Every run's seed, score and verdict is stored in the main ledger (`process_trials`), and agents
+read the history before proposing again. The retired engine's `charter_versions` are never read.
+
+Cost: a trial is 3 firm runs per pair, run one after another (default 3 pairs, 2 h each, 8 agents: 18 hours of wall time and about 144 agent-hours of LLM use). With
+three pairs the test can only detect large improvements; that is deliberate, since a rule that only helps a little
+is not worth the risk of being noise.
 
 ## Costs and execution model
 

@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS lineages(child_id TEXT PRIMARY KEY, child_kind TEXT, 
   delta_score REAL, created REAL);
 CREATE TABLE IF NOT EXISTS charter_versions(id TEXT PRIMARY KEY, role TEXT, pod TEXT, patch_text TEXT, rationale TEXT,
   status TEXT DEFAULT 'candidate', drill_planted_score REAL, drill_null_fdr INT DEFAULT 0, error_rate_delta REAL, created REAL);
+CREATE TABLE IF NOT EXISTS process_variants(id TEXT PRIMARY KEY, role TEXT, pod TEXT, patch_text TEXT, rationale TEXT,
+  author TEXT, status TEXT DEFAULT 'proposed', created REAL, decided REAL);
+CREATE TABLE IF NOT EXISTS process_trials(id TEXT PRIMARY KEY, variant_id TEXT, desk TEXT, pairs INT, hours REAL, agents INT,
+  results TEXT, verdict TEXT, created REAL, finished REAL);
 CREATE TABLE IF NOT EXISTS rsi_runs(id TEXT PRIMARY KEY, kind TEXT, summary TEXT, metrics TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS rsi_reasoning(id TEXT PRIMARY KEY, created REAL, agent TEXT, desk TEXT, category TEXT,
   title TEXT, observation TEXT, diagnosis TEXT, hypothesis TEXT, action_taken TEXT, code_snippet TEXT,
