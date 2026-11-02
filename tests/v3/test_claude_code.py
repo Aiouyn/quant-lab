@@ -152,3 +152,35 @@ def test_idle_agents_back_off_on_the_plan(tmp_path):
     a._productive = 1
     a._close(led, 2)
     assert a.idle_streak == 0
+
+
+def test_plan_gap_is_a_hard_floor_that_messages_cannot_cut(tmp_path):
+    from desk.company import agent as A
+    a = A.Agent('macro-r1', 'researcher', 'macro', tmp_path / 'ws2')
+    sleeps = []
+
+    class Org:
+        claude = object()
+        n = 0
+
+        def stagger(self, agent):
+            return 0
+
+        def should_stop(self):
+            self.n += 1
+            return self.n > 1
+
+        async def _has(self):
+            return True
+
+        async def sleep(self, seconds, wake=None):
+            sleeps.append((seconds, wake is not None))
+
+    async def no_session(org):
+        a._productive = 0
+        a.idle_streak += 1
+    a.session = no_session
+    a._has_work = lambda org: Org()._has()
+    asyncio.run(a.live(Org()))
+    assert sleeps[0] == (A.MIN_GAP_PLAN_S * 2, False)             # first idle session: doubled, no early wake
+    assert A.PRODUCTIVE.isdisjoint({'message', 'board_post', 'post_memo'})
