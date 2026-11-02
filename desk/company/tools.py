@@ -110,8 +110,10 @@ SPECS = {
     'write_digest': fn('write_digest', 'Publish the knowledge digest injected into every session brief (<= 600 words).',
                        {'body': S}, ['body']),
     'contribute_primitive': fn('contribute_primitive', 'Add a tested reusable function to desk.lib.contrib (importable in '
-                               'sandboxes). Provide a test that prints OK.',
-                               {'name': S, 'code': S, 'test': S, 'doc': S}, ['name', 'code', 'test', 'doc']),
+                               'sandboxes). Provide a test that prints OK. It is announced to the whole firm only after '
+                               'a paired drill trial shows it helps find real signals; rationale = what evidence says it '
+                               'will.', {'name': S, 'code': S, 'test': S, 'doc': S, 'rationale': S},
+                               ['name', 'code', 'test', 'doc']),
     # ------------------------------------------------------------ RSI telemetry (self-modification tools are retired until
     # the evaluator is sealed and drill-gated; see desk/company/rsi.py)
     'compile_hints': fn('compile_hints', 'Cluster recurring RUN_PYTHON / TOOL_ERROR failures into dynamic fix hints '
@@ -133,7 +135,7 @@ COMMON = ['board_post', 'board_list', 'board_read', 'board_update', 'message', '
           'notebook', 'record_lesson', 'end_session']
 ROLE_TOOLS = {
     'cio': COMMON + ['propose_process_change', 'process_history', 'org_stats', 'set_pod_weights', 'post_memo', 'reassign_agent', 'approved_strategies', 'paper_status', 'compile_hints', 'primitive_lift'],
-    'lead': COMMON + ['propose_process_change', 'process_history', 'run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
+    'lead': COMMON + ['propose_process_change', 'process_history', 'run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift', 'contribute_primitive'],
     'researcher': COMMON + ['run_python', 'register_factor', 'evaluate_strategy', 'combine_factors', 'submit_strategy', 'primitive_lift'],
     'officer': COMMON + ['propose_process_change', 'process_history', 'review_queue', 'dossier', 'verdict', 'run_python', 'evaluate_strategy'],
     'pm': COMMON + ['approved_strategies', 'build_portfolio', 'paper_status', 'paper_start', 'run_python'],
@@ -565,7 +567,7 @@ class Toolbox:
         self.L.memo(self.agent.name, 'digest', body)
         return {'ok': True}
 
-    async def t_contribute_primitive(self, name, code, test, doc):
+    async def t_contribute_primitive(self, name, code, test, doc, rationale=None):
         if not re.fullmatch(r'[a-z][a-z0-9_]{2,40}', name):
             return {'error': 'name must be a lowercase identifier'}
         contrib = Path(__file__).resolve().parent.parent / 'lib' / 'contrib'
@@ -587,11 +589,13 @@ class Toolbox:
         except SyntaxError as e:
             target.unlink(missing_ok=True)
             return {'error': f'installed module does not compile: {e}'}
-        idx = contrib / 'INDEX.md'
-        with open(idx, 'a', encoding='utf-8') as f:
-            f.write(f'- `from desk.lib.contrib.{name} import ...` - {doc[:300]} (by {self.agent.name})\n')
-        self.L.send('all', self.agent.name, f'New primitive desk.lib.contrib.{name}: {doc[:400]}')
-        return {'ok': True, 'module': f'desk.lib.contrib.{name}'}
+        from ..lab import process_trials as PT
+        res = PT.propose_primitive(self.L, name, doc, rationale or doc, self.agent.name)
+        if 'error' in res:
+            return res
+        return {'ok': True, 'module': f'desk.lib.contrib.{name}', 'variant': res['id'],
+                'note': 'Installed but not announced: it joins the shared toolbox in every brief only if a paired drill '
+                        'trial shows firms that know it find planted signals better. You may use it yourself now.'}
 
     # ------------------------------------------------------------ RSI handlers
     async def t_compile_hints(self):

@@ -238,13 +238,14 @@ colleague's session brief, so make each line count.''',
 researchers' work; build reusable, tested, causal primitives (contribute_primitive): e.g. rolling z-scores that reset
 correctly, event detectors, HAR vol forecasts, triple-barrier labels for research, purged walk-forward helpers,
 fast grid evaluators that log trials. Check primitive_lift and compile_hints to harden low-pass-rate modules and
-compile recurring sandbox errors into dynamic fix hints. Announce new primitives to everyone with a usage example.''',
+compile recurring sandbox errors into dynamic fix hints. New primitives are announced to the firm once a drill trial accepts them.''',
 }
 
 PROCESS_NOTE = '''
 PROCESS CHANGES: if you see the firm repeatedly miss real effects or wave through weak ones, propose a working rule
 for one role (propose_process_change, after process_history). It goes live only if a paired drill trial shows the
-firm with the rule finds hidden planted signals better and approves nothing on markets with nothing to find.'''
+firm with the rule finds hidden planted signals better and approves nothing on markets with nothing to find.
+New research tools (contribute_primitive) go through the same trial before the whole firm is told about them.'''
 for _r in ('cio', 'lead', 'officer', 'librarian', 'toolsmith'):
     ROLES[_r] += PROCESS_NOTE
 
