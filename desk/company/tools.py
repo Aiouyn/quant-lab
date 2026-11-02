@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from ..lab.sandbox import run_python, run_job
-from ..lab.strategy import code_hash, load_strategy, structural_hash, StrategyError
+from ..lab.strategy import code_hash, family_hash, load_strategy, structural_hash, StrategyError
 
 S, I, N, B = {'type': 'string'}, {'type': 'integer'}, {'type': 'number'}, {'type': 'boolean'}
 
@@ -145,6 +145,10 @@ def compact(obj, limit=7000):
     return s[:limit - 200] + f'... [truncated {len(s) - limit + 200} chars; ask for narrower output]'
 
 
+BACKTEST_CALL = re.compile(r'\b(backtest|run_strategy|perps_backtest|macro_backtest|carry_backtest|pred_backtest|'
+                           r'event_study|xs_factor_report|factor_report|walk_forward|causality|evaluate)\s*\(')
+
+
 class Toolbox:
     """Executes tool calls for one agent. `org` is the runtime (ledger, settings, pipeline, slots)."""
 
@@ -277,6 +281,11 @@ class Toolbox:
         res = await run_python(code, self.agent.workspace, self.s, timeout_s=timeout_s, slot=self.org.sandbox_slots,
                                extra_env={'DESK_TRIALS': trials})
         n = self._collect_trials(trials)
+        if not n and BACKTEST_CALL.search(code or ''):
+            # the research API logs its own trials, but the agent controls its workspace (and could skip the API or
+            # delete the file): a run that calls a backtest/evaluation function counts as at least one trial
+            self.L.trial(self.agent.name, 'dev_backtest', 'run:' + code_hash(code), None, 10)
+            n = 1
         if n:
             res['trials_logged'] = n
         from .hints import hints, record_hint_resolution
@@ -425,6 +434,13 @@ class Toolbox:
             dup = [r for r in self.L.q('SELECT id, status, code FROM strategies') if structural_hash(r['code'] or '') == sh]
         if dup:
             return {'error': f'identical code already submitted as {dup[0]["id"]} ({dup[0]["status"]})'}
+        fam = family_hash(code)
+        budget = int(getattr(self.s, 'val_budget_per_family', 2))
+        looks = self.L.q('SELECT strategy FROM val_uses WHERE family=?', (fam,))
+        if len(looks) >= budget:
+            return {'error': f'this strategy family (same logic, any parameters) already used its {budget} validation '
+                             f'looks ({", ".join(r["strategy"] for r in looks)}); re-tuned variants cannot be validated. '
+                             'Submit a genuinely different idea.'}
         sid = self.L.add_strategy(name, self.agent.name, self.agent.pod, code, h, mod.RESOLUTION, thesis)
         self.org.pipeline.enqueue(sid)
         self.L.event(self.agent.name, 'SUBMITTED', {'id': sid, 'name': name})

@@ -1,32 +1,33 @@
 {
  "files": {
-  "desk/config.py": "6843677b600356a633ebb23dc5f27ca1236ddd86f41fd49bb17702019343c0e0",
+  "desk/config.py": "132ebf3ad1584b4d8a2e5cfff8569abb69d19c5b32185595eab489bd20d5db25",
   "desk/data/store.py": "bf1c505a317c4a48139586d9d71a9d66dfe5a8d22bfd482034a06ee483184ff9",
   "desk/kernel.py": "578575e33dc2dcb6002161cb1605bfc21121ff31ff912fab3db76fecf0802b7d",
   "desk/lab/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "desk/lab/backtest.py": "9b4ab78d8ee291e47d67a4a6d987c4b1281dbe134055c1e273b229dcda2b935f",
-  "desk/lab/carry.py": "471d8dd1b83d5096240a4ec08f45ea691ef3fcf57b9b8ba46516b4b2ea097ab1",
+  "desk/lab/carry.py": "ee37361ba62ac13815c7252166c8e6ca592c487e95895249c147319b4e5e7f7b",
+  "desk/lab/causality.py": "74a3b44e8c3ce4e8bb38fa6b7e28d0a0bd0f94e05db937fa4c076a45b17bdac2",
   "desk/lab/certify.py": "0fa3be7f130c445e868ce88a408944a5c237e2829f43fbde525f99cbc7b1c087",
   "desk/lab/drills.py": "44414ed6f11ab3ce7d0c32d12ae7282a6f1aa5181b59029a779d257c31cf8efa",
   "desk/lab/factors.py": "88bc6ccefb6003a8d2f4f82ee86899759eb1a9dda4b264b2b390f916af0cf59d",
   "desk/lab/funding_events.py": "6f266efb1f2b04e7261516468f3a7adaf16cf7b2fa5e3eec1e3a2ac7f66099b0",
   "desk/lab/guard.py": "09d3838ccfaeb0bd57c593994ca9520b8305d8556ca33243fe8c4a76cc01b0cb",
-  "desk/lab/harness.py": "e8713e9782421381a8fb8e044e276e36bb778ac8b76d19ad8719943b22eb4435",
+  "desk/lab/harness.py": "4002b8e40e1d448dfe30c1c42d56db853bc3c4547e953fd21b7bb02fc3dbbd80",
   "desk/lab/jail.py": "4091df432f4f6d4c1c73008787f2fa07dd9ae8778e2f1200375a9a7183234fc7",
   "desk/lab/jail_worker.py": "eb264ac8751f493d3ed11c9cc8842bb7f7e94a055efdd070cdc89cb0171b5d6e",
-  "desk/lab/macro.py": "1ce90652e87e09a09ca525bc10b485f3725940658fb40f2c722862ed08ba1a22",
+  "desk/lab/macro.py": "97ffd65cf06a3a1b6d1c39b7a6f43f5d1a73abe2049221b8f468ad5dc9961f2f",
   "desk/lab/maker.py": "7d636230cc59ca0960a74bd393d6cfcae2aaba69a66e85eb71bf13730332f8c8",
   "desk/lab/panel_factor.py": "9908dea6bb77b31bc9c2f234dfb8f21adfd11ce01530454e88f7fe9ad9fbb73a",
-  "desk/lab/perps.py": "e6ccb8f30afac9e9c2f45d74e8d5f85dbb700bdbc32f7c3b7e9e0fbfbc5db9c5",
-  "desk/lab/pred.py": "df51ddfc82ac037458e1212b77d19067ae5e473e6e6da2150cead6cf3b8498a3",
-  "desk/lab/sandbox.py": "50841d0dc5255835403572611c8542fe3a47068deda4bec1ad18a2455d45db43",
+  "desk/lab/perps.py": "d540954c3aa9bb97dd4003f1a2b66301134816020c93e243735b57e7a63fc625",
+  "desk/lab/pred.py": "231664f1c6b7f10f4caf565860dc37ee0a84f2aad4518d4dd340643b9539e49c",
+  "desk/lab/sandbox.py": "9faeca0c5d0e857719d9b1e7ebf610eac523f1a1e7e13c477483f31329d4d6f1",
   "desk/lab/snapback.py": "f183011f1aa1e70abdd16451d75aaf92d02d11ccad64c920d7738c870eb86831",
   "desk/lab/stats.py": "8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c",
-  "desk/lab/strategy.py": "bfd7cd79da360bf87af93e2fc5e28f8203ed40324bf26b9e10ff16ca1e06936d",
+  "desk/lab/strategy.py": "6e3f8419ffab189e30639aca9780c8e20b0ff2ed79d89efa588d936917e06c99",
   "desk/lab/xs.py": "2417d743f620f30954483121aa0b42cd3dd0b1eda5dba9e1c8fa341ed3ff75d8",
   "desk/lab/xvenue_sim.py": "4058d0211b8cd35034bf2167fcd5db09bd31224c2b4fed868090beec273f7bbe",
   "desk/pipeline/bundle.py": "96469813c64e7bdec2a35f02e9fa239852f2112e2644947f6c7471520219c611",
-  "desk/pipeline/validation.py": "84c6ae3f2ceccc955d6eef5fb3266e9ded28d894755700637fd44457c3ce0f40"
+  "desk/pipeline/validation.py": "c89f71cce82b5e8dcd7dfbda43eafa2fa37db74e0d2b2e29e24594d82f074c2f"
  },
- "sealed": "2026-11-02 15:26:30"
+ "sealed": "2026-11-02 16:22:59"
 }

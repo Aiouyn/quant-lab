@@ -38,7 +38,14 @@ CONTRACT_NAMES = {'signal', 'fit', 'factor', 'PARAMS', 'DESK', 'RESOLUTION', 'LO
                   'EXECUTION', 'WARMUP_DAYS', 'PERPS_EXECUTION', 'CARRY_EXECUTION'}
 
 
-def structural_hash(code: str) -> str:
+def family_hash(code: str) -> str:
+    """Strategy FAMILY for the out-of-sample budget: the structural hash with every numeric constant blanked, so
+    re-tuned parameters (window 20 -> 21, threshold 1.5 -> 1.6) are the same family. Validation is a finite resource:
+    each family gets a fixed number of looks at it (config.val_budget_per_family)."""
+    return structural_hash(code, abstract_numbers=True).replace('s:', 'f:', 1)
+
+
+def structural_hash(code: str, abstract_numbers: bool = False) -> str:
     """Identity of a strategy for the one-shot holdout: the same logic gets the same hash even when comments,
     whitespace, docstrings, formatting or the names of its own variables/functions/imports change. Constants, column
     names and the contract names (signal, PARAMS, ...) still count, so a real change is a different strategy (and a
@@ -106,6 +113,11 @@ def structural_hash(code: str) -> str:
             return node
 
         visit_Nonlocal = visit_Global
+
+        def visit_Constant(self, node):
+            if abstract_numbers and isinstance(node.value, (int, float, complex)) and not isinstance(node.value, bool):
+                node.value = 0
+            return node
 
     tree = Canon().visit(tree)
     dump = ast.dump(tree, annotate_fields=False, include_attributes=False)
@@ -216,6 +228,10 @@ def causality_test(mod, df, cuts=(0.35, 0.6, 0.85), model=None, seed=11):
     bad = int(np.sum(np.abs(out[:k] - full[:k]) > 1e-6))
     if bad:
         issues.append(f'future perturbation changed {bad} earlier outputs; signal reads future data')
+    from .causality import date_literals
+    lits = date_literals(getattr(mod, '_code', '') or '')
+    if lits:
+        issues.append(f'date literals in code {lits[:5]}: calendar knowledge is not allowed in signals')
     return {'ok': not issues, 'issues': issues, 'rows': n, 'exposure': float(np.mean(full != 0))}
 
 

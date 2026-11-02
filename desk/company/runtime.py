@@ -252,6 +252,11 @@ def run_company(settings, agents=28, hours=8.0, concurrency=None, drill=None, to
     from ..data.store import FeatureStore
     store = FeatureStore(settings)
     store.build_dev_view()
+    try:                                       # agents read the carry desk only through its dev-only copy
+        from ..lab.carry import write_dev_view as carry_dev_view
+        carry_dev_view(settings)
+    except Exception as e:
+        print(f'carry dev view not built: {e!r}'[:300])
     return asyncio.run(_main(settings, agents, hours, concurrency, tokens_per_hour))
 
 

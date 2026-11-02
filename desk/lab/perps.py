@@ -222,19 +222,10 @@ def summarize_perps(res, cost: PerpsCost, from_ms=None, to_ms=None):
             'daily': {'day': [int(d) for d in ud], 'ret': [float(r) for r in daily]}, 'execution': 'perps'}
 
 
-def perps_causality(mod, panel, cuts=(0.4, 0.7)):
-    full = perps_signal(mod, panel)
-    ts = panel['ts'].to_numpy()
-    uts = np.unique(ts)
-    issues = []
-    for c in cuts:
-        cut = uts[int(len(uts) * c)]
-        k = int(np.sum(ts <= cut))
-        pre = perps_signal(mod, panel.head(k))
-        bad = int(np.sum(np.abs(pre - full[:k]) > 1e-6))
-        if bad:
-            issues.append(f'prefix cut at {cut}: {bad} weights changed when later hours were removed (future data use)')
-    return {'ok': not issues, 'issues': issues, 'rows': len(panel)}
+def perps_causality(mod, panel, cuts=None):
+    from .causality import DEFAULT_CUTS, panel_causality
+    return panel_causality(perps_signal, mod, panel, 'ts', 'weights', cuts or DEFAULT_CUTS, keep_cols=('coin',),
+                           code=getattr(mod, '_code', None))
 
 
 def evaluate_perps(code, store: PerpsStore, split='dev', cost=None, params=None, variants=None, with_causality=True):

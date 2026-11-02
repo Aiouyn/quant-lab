@@ -47,6 +47,16 @@ def _settings(job):
     return SETTINGS
 
 
+def _engine_certification(engine):
+    """Panel and maker engines are certified by reference-parity tests (tests/v3/test_<engine>.py, run in CI). That
+    certificate only holds for the reviewed engine code, so it is granted only while the kernel manifest matches."""
+    from ..kernel import verify
+    sealed = verify()
+    return {'ok': bool(sealed['ok']), 'kernel_sealed': bool(sealed['ok']),
+            'note': f'{engine} engine: reference-parity tests in CI + sealed kernel'
+                    + ('' if sealed['ok'] else f" (NOT sealed: {sealed.get('changed') or sealed.get('error')})")}
+
+
 def _numeric_params(code):
     """How many numeric PARAMS the neighborhood test can perturb (0 means the gate does not apply)."""
     mod = load_strategy(code)
@@ -79,7 +89,7 @@ def carry_eval(job):
     summ.update({k: round(base[k], 2) for k in ('funding_pnl', 'basis_pnl', 'avg_gross', 'coins_traded')})
     out = {'summary': summ, 'causality': base['causality'], 'code_hash': base['code_hash'], 'execution': 'carry',
            'desk': 'carry', 'resolution': '1h', 'evaluated_days': base['days'], 'split': split,
-           'certification': {'ok': True, 'note': 'carry engine certified by tests/v3/test_carry.py reference parity'}}
+           'certification': _engine_certification('carry')}
     out['stats'] = {'psr': round(stats.psr(daily), 4),
                     'bootstrap_lower_mean_bps': round(stats.block_bootstrap_lower(daily) * 1e4, 4) if len(daily) >= 5 else None,
                     'positive_weeks': round(stats.weekly_positive_fraction(base['daily']['day'], daily), 3),
@@ -162,7 +172,7 @@ def panel_desk_eval(job, desk):
     summ.update({k: round(base[k], 4) for k in extra})
     out = {'summary': summ, 'causality': base['causality'], 'code_hash': base['code_hash'], 'execution': desk,
            'desk': desk, 'resolution': '1d' if desk == 'macro' else '1h', 'evaluated_days': base['days'], 'split': split,
-           'certification': {'ok': True, 'note': f'{desk} engine certified by tests/v3/test_{desk}.py reference parity'}}
+           'certification': _engine_certification(desk)}
     out['stats'] = {'psr': round(stats.psr(daily), 4),
                     'bootstrap_lower_mean_bps': round(stats.block_bootstrap_lower(daily) * 1e4, 4) if len(daily) >= 5 else None,
                     'positive_weeks': round(stats.weekly_positive_fraction(base['daily']['day'], daily), 3),
@@ -253,7 +263,7 @@ def strategy_eval(job):
     if job.get('robustness'):
         out['robustness'] = robustness(job['code'], store, days, cost, base, var)
     if job.get('certify') and out['execution'] == 'maker':
-        out['certification'] = {'ok': True, 'note': 'maker engine is certified by tests/v3 reference parity (queue model)'}
+        out['certification'] = _engine_certification('maker')
     elif job.get('certify'):
         from .certify import certify
         k = min(len(df), {'1s': 2 * 86400, '10s': 4 * 8640, '1m': 10 * 1440}[res])

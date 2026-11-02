@@ -21,8 +21,7 @@ removed from the tree on 2026-11-02; they remain in git history.
 - **The evaluator is sealed (Phase 1a), with one platform caveat.** See "Evaluator integrity" below. On Linux and
   WSL2 the kernel enforces it. On plain Windows only a Python-level guard applies, which stops accidents and casual
   cheating but not a determined adversary: run the firm under WSL2 (or a Linux container) when it runs unattended.
-  Still open (Phase 1b): an out-of-sample budget per strategy family, point-in-time universes, stronger causality
-  checks, a dev-only view for the carry store, and mandatory trial logging.
+  Out-of-sample discipline (Phase 1b) is in place; see "Out-of-sample discipline" below.
 
 ## Evaluator integrity
 
@@ -55,6 +54,28 @@ factors and their own tools; they may not change how those are judged.
   work inside the jail on your machine.
 - Cost: each jailed call starts a Python process (about 0.3 s on Linux, more on Windows; about 1.5 s when the strategy
   imports sklearn). Evaluations take a few seconds longer.
+
+## Out-of-sample discipline
+
+Sealed data is finite: every look at it spends some of its value. Phase 1b limits and counts the looks.
+
+- **Validation budget per strategy family.** A family is the same logic with any parameter values (the structural
+  hash with numbers blanked). Each family gets `val_budget_per_family` (default 2) runs on sealed validation; re-tuned
+  variants after that are refused at submission and in the pipeline. Every look, including failed and errored ones,
+  is recorded (`val_uses`) and counted in the deflated Sharpe.
+- **Trials are not voluntary.** A sandbox run that calls a backtest or evaluation function counts as at least one
+  trial even if the agent bypasses the research API or deletes its trial log.
+- **Look-ahead checks for the panel desks** (`desk/lab/causality.py`): prefix invariance at four cut points, a
+  future-perturbation test (scramble every value after a cut; earlier weights must not move, which catches code that
+  only cheats on the full panel), and a lint that refuses calendar dates or epoch timestamps written into the code.
+- **Engine certification** for panel and maker engines is granted only while the kernel manifest matches.
+- **Point-in-time data.** Macro strategies see a dividend-adjusted price rebuilt from daily returns: Yahoo's
+  back-adjusted `adjclose` (and `adj_open`) revealed dividends paid after each date. Agent sandboxes read the carry
+  desk through a dev-only copy (`store/carry_views/dev`) built at startup and on refresh; val/holdout hours are not in
+  it at all.
+- **Known remaining bias.** The pred universe is resolved Polymarket markets with lifetime volume >= $250k: a
+  selection on future popularity that needs per-market volume history to remove. Treat pred results as optimistic
+  until confirmed on forward data.
 
 ## Why v3 exists (what was wrong with v2)
 
