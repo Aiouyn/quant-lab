@@ -29,7 +29,7 @@ MAX_MODEL_BYTES = 64 * 1024 * 1024
 
 # beyond guard.BLOCKED_MODULES: libraries with their own native file/network/JIT paths, and the evaluator itself
 JAIL_EXTRA_BLOCKED = {
-    'pyarrow', 'duckdb', 'fsspec', 'sqlite3', '_sqlite3', 'numba', 'llvmlite', 'h5py', 'tables', 'pandas', 'mmap',
+    'pyarrow', 'duckdb', 'fsspec', 'sqlite3', '_sqlite3', 'numba', 'llvmlite', 'h5py', 'tables', 'pandas',
     'pickletools', 'desk.lab', 'desk.pipeline', 'desk.company', 'desk.data', 'desk.live', 'desk.web', 'desk.config',
     'desk.research',
 }
@@ -137,6 +137,12 @@ def main():
     _neuter_polars(pl)
     import ctypes                                   # noqa: F401  (loads pythonapi now; lightgbm/xgboost need ctypes)
     import subprocess                               # noqa: F401  (scipy imports it at import time)
+    import mmap                                     # noqa: F401  (joblib/sklearn need it; files stay guarded at open)
+    if os.name == 'nt':
+        try:
+            import colorama                         # noqa: F401  (binds kernel32 by bare name at import on Windows)
+        except Exception:
+            pass
     try:
         import _posixsubprocess                     # its fork_exec starts programs without an audit event
         del _posixsubprocess.fork_exec

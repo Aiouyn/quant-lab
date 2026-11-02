@@ -75,8 +75,10 @@ def _deny_roots():
     return sorted(out)
 
 
-def _env():
+def _env(home=None):
     env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP}
+    if home:                                   # libraries call Path.home(); give them the empty jail directory
+        env.update({'HOME': str(home), 'USERPROFILE': str(home)})
     env.update({'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1',
                 'POLARS_MAX_THREADS': os.getenv('DESK_JAIL_THREADS', '2'), 'OMP_NUM_THREADS': '2',
                 'OPENBLAS_NUM_THREADS': '2', 'MKL_NUM_THREADS': '2', 'NUMBA_DISABLE_JIT': '1'})
@@ -123,7 +125,7 @@ def call(op: str, code: str, df: pl.DataFrame | None = None, params=None, model:
     with tempfile.TemporaryDirectory(prefix='jail_') as cwd:     # empty working directory
         try:
             proc = subprocess.run([sys.executable, '-E', '-B', '-c', boot], input=req, capture_output=True,
-                                  cwd=cwd, env=_env(), timeout=timeout_s or DEFAULT_TIMEOUT_S)
+                                  cwd=cwd, env=_env(cwd), timeout=timeout_s or DEFAULT_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             raise JailError(f'strategy {op} timed out after {timeout_s or DEFAULT_TIMEOUT_S}s')
     out = proc.stdout

@@ -51,8 +51,10 @@ def guard_policy(settings, workspace: Path, data_env: dict) -> dict:
         return any(rp == d or rp.startswith(d + os.sep) or d.startswith(rp + os.sep) for d in deny_r)
     code = [str(p) for p in root.iterdir() if not hidden(p)]
     allow = sorted({str(v) for k, v in data_env.items() if k.startswith('DESK_') and v and Path(v).exists()})
-    return {'read_roots': python_roots(exclude=[str(root)] + sorted(deny_r)) + code, 'allow_roots': allow,
-            'write_roots': [str(Path(workspace).resolve())], 'deny_roots': sorted(deny_r)}
+    from .guard import norm
+    n = lambda xs: [norm(x) or x for x in xs]          # one spelling per path (Windows paths are case-insensitive)
+    return {'read_roots': n(python_roots(exclude=[str(root)] + sorted(deny_r)) + code), 'allow_roots': n(allow),
+            'write_roots': n([str(Path(workspace).resolve())]), 'deny_roots': n(sorted(deny_r))}
 
 
 def _env(extra):

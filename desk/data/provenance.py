@@ -38,7 +38,7 @@ def _replace_from_tmp(path: Path, write):
     try:
         write(tmp)
         os.chmod(tmp, 0o644)                                   # mkstemp creates 0600; sandbox users must read it
-        with open(tmp, 'rb') as fh:
+        with open(tmp, 'r+b') as fh:                           # Windows cannot fsync a read-only handle
             os.fsync(fh.fileno())
         os.replace(tmp, path)
         try:                                                   # persist the rename (POSIX only)

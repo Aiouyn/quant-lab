@@ -300,6 +300,10 @@ def install_sandbox_guard(policy: dict) -> dict:
         import polars                   # noqa: F401
     except ImportError:
         pass
+    try:                                # numba imports colorama, which on Windows binds kernel32 by bare name at import
+        import numba                    # noqa: F401  (the desk.research engines need it anyway)
+    except Exception:
+        pass
     try:
         import _posixsubprocess         # its fork_exec starts programs without raising an audit event
         del _posixsubprocess.fork_exec
