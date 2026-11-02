@@ -227,6 +227,10 @@ class Org:
         idx = Path(__file__).resolve().parent.parent / 'lib' / 'contrib' / 'INDEX.md'
         if idx.exists() and agent.role in ('lead', 'researcher', 'toolsmith', 'officer'):
             parts.append('== SHARED PRIMITIVES (desk.lib.contrib) ==\n' + idx.read_text(encoding='utf-8')[-2500:])
+            from ..lab.process_trials import primitives_text
+            proven = primitives_text(L)
+            if proven:
+                parts.append(proven)
             from .rsi import format_primitive_brief
             pb = format_primitive_brief(L, limit=8)
             if pb:

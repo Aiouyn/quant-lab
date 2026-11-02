@@ -4,6 +4,10 @@ A "process variant" is a short note appended to one role's charter (optionally f
 "before submitting, check the signal on each half of the dev period". Agents may propose variants; none of them
 changes the firm until a trial shows it helps on markets where the right answer is known.
 
+A variant with role 'primitive' is a research tool instead: a tested desk.lib.contrib module (pod = module name). It is
+installed when contributed but announced to agents (session brief) only in arms and firms where it is live, so the
+same paired trial decides whether knowing about the tool makes the firm better.
+
 A trial is a paired A/B experiment on drill markets (desk/lab/panel_drills.py):
 
   for each pair i:
@@ -69,6 +73,34 @@ def propose(L, role: str, patch: str, rationale: str, author: str, pod: str | No
         (vid, role, pod or '', patch, rationale, author, 'proposed', time.time()))
     return {'id': vid, 'status': 'proposed',
             'note': 'It changes nothing until a drill trial accepts it (python -m desk rsi trial).'}
+
+
+PRIMITIVE = 'primitive'      # a variant of this role is a research tool (desk.lib.contrib module), not a charter rule
+
+
+def propose_primitive(L, name: str, doc: str, rationale: str, author: str) -> dict:
+    """A new research tool goes into the firm's shared toolbox only when a drill trial shows firms that know about it
+    find planted signals better (and nothing on null markets). Until then it is installed but not announced."""
+    doc, rationale = (doc or '').strip(), (rationale or '').strip() or (doc or '').strip()
+    if not doc:
+        return {'error': 'doc required'}
+    open_n = L.q("SELECT COUNT(*) n FROM process_variants WHERE author=? AND status IN ('proposed','testing')",
+                 (author,))[0]['n']
+    if open_n >= MAX_OPEN_PER_AUTHOR:
+        return {'error': f'you already have {open_n} untested proposals; wait for their trials'}
+    patch = f'`from desk.lib.contrib.{name} import ...` - {doc[:MAX_PATCH_CHARS - 80]}'
+    vid = _new_id('PV')
+    L.x('INSERT INTO process_variants(id,role,pod,patch_text,rationale,author,status,created) VALUES(?,?,?,?,?,?,?,?)',
+        (vid, PRIMITIVE, name, patch, rationale, author, 'proposed', time.time()))
+    return {'id': vid, 'status': 'proposed'}
+
+
+def primitives_text(L) -> str:
+    rows = [r for r in live_variants(L) if r['role'] == PRIMITIVE]
+    if not rows:
+        return ''
+    return ('== TRIAL-PROVEN PRIMITIVES (each adopted only after a drill trial showed it helps) ==\n'
+            + '\n'.join(f'- {r["patch_text"]}' for r in rows))
 
 
 def live_variants(L) -> list[dict]:

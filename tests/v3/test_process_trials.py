@@ -152,3 +152,61 @@ def test_failed_run_is_an_error_and_promotes_nothing(tmp_path):
     assert res['verdict'] == 'ERROR'
     assert L.q('SELECT status FROM process_variants WHERE id=?', (vid,))[0]['status'] == 'proposed'
     assert not PT.live_variants(L)
+
+
+# ------------------------------------------------------------------------------------------------ research tools
+def _tool_firm():
+    """The firm finds the planted signal only when its brief announces the 'xsec_rank' primitive."""
+    from desk.company.ledger import Ledger
+    inner = _fake_firm()
+
+    def runner(s, drill, hours, agents):
+        L = Ledger(s.home / 'drills' / drill / 'desk.sqlite3')
+        if 'xsec_rank' in PT.primitives_text(L) and not drill.endswith('null'):
+            L.x("INSERT INTO process_variants(id,role,pod,patch_text,rationale,author,status,created) "
+                "VALUES('PV-shim','researcher','xsec','check every feature','t','t','arm',0)")
+        return inner(s, drill, hours, agents)
+    return runner
+
+
+def test_new_research_tools_are_announced_only_after_a_trial(tmp_path):
+    from desk.company.roles import charter
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    assert 'error' in PT.propose_primitive(L, 'xsec_rank', '', '', 'toolsmith')
+    vid = PT.propose_primitive(L, 'xsec_rank', 'cross-sectional rank IC per feature', 'leads rank by hand', 'toolsmith')['id']
+    assert PT.primitives_text(L) == ''                                  # installed, not announced
+    res = PT.run_trial(s, vid, desk='perps', pairs=2, hours=0.0, agents=1, runner=_tool_firm())
+    assert res['verdict'] == 'ACCEPT', res
+    assert 'desk.lib.contrib.xsec_rank' in PT.primitives_text(L)
+    assert 'xsec_rank' not in charter('researcher', 'xsec', ledger=L)   # a tool is not a charter rule
+
+
+def test_contribute_primitive_registers_a_variant_instead_of_announcing(tmp_path, monkeypatch):
+    import asyncio
+    import types
+    from pathlib import Path
+    from desk.company import tools as T
+    L = _ledger(tmp_path)
+    contrib = Path(T.__file__).resolve().parent.parent / 'lib' / 'contrib'
+    idx = contrib / 'INDEX.md'
+    before = idx.read_text(encoding='utf-8') if idx.exists() else None
+    sent = []
+    monkeypatch.setattr(L, 'send', lambda *a, **k: sent.append(a), raising=False)
+    tb = T.Toolbox.__new__(T.Toolbox)
+    tb.L, tb.agent = L, types.SimpleNamespace(name='toolsmith', role='toolsmith', workspace=tmp_path)
+    tb.s, tb.org = None, types.SimpleNamespace(sandbox_slots=None)
+
+    async def fake_run(*a, **k):
+        return {'status': 'ok', 'stdout': 'OK'}
+    monkeypatch.setattr(T, 'run_python', fake_run)
+    target = contrib / 'zz_trial_probe.py'
+    try:
+        res = asyncio.run(tb.t_contribute_primitive('zz_trial_probe', 'def f():\n    return 1\n', 'print("OK")',
+                                                    'returns one'))
+        assert res.get('ok') and res['variant'].startswith('PV-'), res
+        assert sent == [] and (idx.read_text(encoding='utf-8') if idx.exists() else None) == before
+        assert L.q('SELECT role, pod, status FROM process_variants')[0] == \
+            {'role': 'primitive', 'pod': 'zz_trial_probe', 'status': 'proposed'}
+    finally:
+        target.unlink(missing_ok=True)
