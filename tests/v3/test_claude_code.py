@@ -129,3 +129,26 @@ def test_config_claude_code_needs_no_key(monkeypatch):
     monkeypatch.setenv('MODEL_NAME', 'auto')
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-x')
     assert C._key() == '' and C._default_model() == 'claude-haiku-5-5'
+
+
+def test_idle_agents_back_off_on_the_plan(tmp_path):
+    from desk.company import agent as A
+    a = A.Agent('macro-lead', 'lead', 'macro', tmp_path / 'ws')
+
+    class L:
+        def __init__(self):
+            self.ev = []
+
+        def agent_status(self, *x):
+            pass
+
+        def event(self, *x):
+            self.ev.append(x)
+    led = L()
+    for _ in range(3):
+        a._productive = 0
+        a._close(led, 6)                                  # many reads, nothing produced
+    assert a.idle_streak == 3
+    a._productive = 1
+    a._close(led, 2)
+    assert a.idle_streak == 0
