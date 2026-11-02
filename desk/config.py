@@ -14,7 +14,12 @@ except OSError:                                 # agent sandboxes and the strate
     pass
 
 
+ANTHROPIC_DEFAULT_MODEL = 'claude-haiku-5-5'
+
+
 def _key():
+    if _provider() == 'anthropic':
+        return os.getenv('ANTHROPIC_API_KEY', '')
     key = os.getenv('OPENCODE_API_KEY') or os.getenv('MIMO_API_KEY') or os.getenv('OPENAI_API_KEY') or ''
     return key
 
@@ -23,6 +28,8 @@ def _provider() -> str:
     prov = os.getenv('LLM_PROVIDER', '').strip().lower()
     if prov:
         return prov
+    if os.getenv('ANTHROPIC_API_KEY'):
+        return 'anthropic'
     if os.getenv('OPENCODE_API_KEY'):
         return 'opencode'
     if os.getenv('MIMO_API_KEY') and 'xiaomimimo' in os.getenv('MIMO_BASE_URL', 'xiaomimimo'):
@@ -31,6 +38,8 @@ def _provider() -> str:
 
 
 def _base_url() -> str:
+    if _provider() == 'anthropic':
+        return os.getenv('ANTHROPIC_BASE_URL', '').strip()     # empty: the SDK's default endpoint
     for env_var in ('LLM_BASE_URL', 'OPENCODE_BASE_URL'):
         val = os.getenv(env_var, '').strip()
         if val:
@@ -43,8 +52,18 @@ def _base_url() -> str:
     return os.getenv('MIMO_BASE_URL', 'https://token-plan-ams.xiaomimimo.com/v1').strip()
 
 
+def _anthropic_model(*names) -> str:
+    for n in names:
+        v = os.getenv(n, '').strip()
+        if v.startswith('claude-'):
+            return v
+    return ANTHROPIC_DEFAULT_MODEL
+
+
 def _default_model() -> str:
     m = os.getenv('MODEL_NAME', '').strip()
+    if _provider() == 'anthropic':             # 'auto' and other gateways' names fall back to Haiku 5.5
+        return _anthropic_model('MODEL_NAME')
     if m.lower() == 'auto':                    # 'auto' picks among OpenCode Zen models; other gateways get their default
         return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-pro'
     if _provider() == 'opencode':
@@ -59,6 +78,8 @@ def _default_model() -> str:
 
 def _default_flash_model() -> str:
     fm = os.getenv('DESK_FLASH_MODEL', '').strip()
+    if _provider() == 'anthropic':
+        return _anthropic_model('DESK_FLASH_MODEL', 'MODEL_NAME')
     if fm.lower() == 'auto' or (not fm and os.getenv('MODEL_NAME', '').strip().lower() == 'auto'):
         return 'auto' if _provider() == 'opencode' else 'mimo-v2.6-flash'
     if _provider() == 'opencode':
@@ -132,6 +153,10 @@ class Settings:
         'DESK_MODEL_PREFERENCE', 'minimax-m3.1-flash-free,deepseek-v4.1-flash-free,glm-5.3-flash-free').split(',')
         if m.strip())
     flash_roles: tuple = tuple(r.strip() for r in os.getenv('DESK_FLASH_ROLES', 'cio,lead,researcher,officer,pm,execution,librarian,toolsmith').split(',') if r.strip())
+    # Anthropic only: thinking depth (low | medium | high | xhigh | max); adaptive thinking is always on
+    effort: str = os.getenv('DESK_EFFORT', 'medium').strip() or 'medium'
+    # optional spend cap at list prices: agents wait while the last hour's API cost is above it (0 = off)
+    usd_per_hour: float = float(os.getenv('DESK_USD_PER_HOUR', '0') or 0)
     api_key: str = field(default_factory=_key)
     base_url: str = field(default_factory=_base_url)
     max_concurrency: int = int(os.getenv('DESK_MAX_CONCURRENCY', '24'))

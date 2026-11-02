@@ -97,17 +97,36 @@ class Org:
 
     async def budget_gate(self):
         """Optional hard cap on tokens per rolling hour: callers wait while the firm is over budget."""
-        if not self.tokens_per_hour:
+        usd_cap = float(getattr(self.settings, 'usd_per_hour', 0) or 0)
+        if not self.tokens_per_hour and not usd_cap:
             return
         while not self.should_stop():
             if time.time() - self._budget_checked > 15:
-                used = self.ledger.q('SELECT SUM(prompt_tokens+completion_tokens) t FROM llm_requests WHERE created>?',
-                                     (time.time() - 3600,))[0]['t'] or 0
-                self._budget_ok = used < self.tokens_per_hour
+                ok = True
+                if self.tokens_per_hour:
+                    used = self.ledger.q('SELECT SUM(prompt_tokens+completion_tokens) t FROM llm_requests WHERE created>?',
+                                         (time.time() - 3600,))[0]['t'] or 0
+                    ok = used < self.tokens_per_hour
+                if usd_cap and ok:
+                    ok = self.usd_last_hour() < usd_cap
+                self._budget_ok = ok
                 self._budget_checked = time.time()
             if self._budget_ok:
                 return
             await asyncio.sleep(20)
+
+    def usd_last_hour(self):
+        """API spend over the last hour at list prices (models priced per token in USD only)."""
+        from ..ops.kpi import USD_RATES
+        rows = self.ledger.q('SELECT model, SUM(prompt_tokens) p, SUM(COALESCE(cached_tokens,0)) c, '
+                             'SUM(completion_tokens) o FROM llm_requests WHERE created>? GROUP BY model',
+                             (time.time() - 3600,))
+        usd = 0.0
+        for r in rows:
+            if (r['model'] or '') in USD_RATES:
+                hit, miss, out = USD_RATES[r['model']]
+                usd += (r['c'] or 0) * hit + ((r['p'] or 0) - (r['c'] or 0)) * miss + (r['o'] or 0) * out
+        return usd
 
     def stagger(self, agent):
         order = {'cio': 0, 'lead': 5, 'researcher': 20, 'toolsmith': 40, 'execution': 60, 'librarian': 900, 'officer': 30, 'pm': 60}

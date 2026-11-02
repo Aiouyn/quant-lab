@@ -2,6 +2,7 @@ numpy>=1.26,<3
 polars>=1.0,<2
 scipy>=1.11,<2
 openai>=1.50,<3
+anthropic>=2.0,<3
 python-dotenv>=1.0,<2
 requests>=2.31,<3
 pytest>=8,<10

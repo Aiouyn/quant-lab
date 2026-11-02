@@ -1,5 +1,9 @@
-"""MiMo gateway: async streaming chat with tool calls, reasoning passback, AIMD adaptive concurrency,
-priority scheduling (pods with more budget weight get slots first) and token accounting."""
+"""LLM gateway: async streaming chat with tool calls, reasoning passback, AIMD adaptive concurrency,
+priority scheduling (pods with more budget weight get slots first) and token accounting.
+
+Two wire formats: OpenAI-compatible gateways (OpenCode Zen, MiMo) and the Anthropic Messages API (LLM_PROVIDER=anthropic,
+via the official `anthropic` SDK). Agents always build OpenAI-format messages; the Anthropic path converts them per
+request (to_anthropic) and returns the same result dict."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +13,12 @@ import json
 import time
 
 from openai import AsyncOpenAI
+
+# Agents edit their history (old tool outputs are clipped), so a replayed thinking block can fail the API's
+# conversation check. "drop_block" drops such blocks instead of failing the request.
+ANTHROPIC_BETAS = ['thinking-binding-controls-2026-08-01']
+ANTHROPIC_FINISH = {'end_turn': 'stop', 'stop_sequence': 'stop', 'tool_use': 'tool_calls', 'max_tokens': 'length',
+                    'refusal': 'refusal', 'pause_turn': 'stop'}
 
 
 SAFE_FALLBACK_MODEL = 'deepseek-v4.1-flash-free'
@@ -130,10 +140,16 @@ class LLM:
         self._seq = itertools.count(1)
         self._agent_sessions: dict[str, tuple[float, str]] = {}
         self._project_id = "prj_" + hashlib.sha256(str(getattr(settings, 'home', 'desk')).encode()).hexdigest()[:16]
+        self.anthropic = getattr(settings, 'provider', '') == 'anthropic'
         is_opencode = 'opencode.ai' in getattr(settings, 'base_url', '') or getattr(settings, 'provider', '') == 'opencode'
         default_headers = {'User-Agent': OPENCODE_USER_AGENT, 'x-opencode-client': 'cli'} if is_opencode else None
-        self.client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=0,
-                                  timeout=settings.request_timeout_s, default_headers=default_headers)
+        if self.anthropic:
+            import anthropic
+            self.client = anthropic.AsyncAnthropic(api_key=settings.api_key or None, base_url=settings.base_url or None,
+                                                   max_retries=0, timeout=settings.request_timeout_s)
+        else:
+            self.client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=0,
+                                      timeout=settings.request_timeout_s, default_headers=default_headers)
         self.throttle = Throttle(start or settings.start_concurrency, cap or settings.max_concurrency, ledger=ledger)
 
     def _get_opencode_headers(self, agent: str) -> dict[str, str]:
@@ -183,7 +199,8 @@ class LLM:
                 if status == 403 and 'freetiererror' in err_low:
                     # Force-rotate the agent's session ID and retry immediately
                     self._agent_sessions.pop(agent, None)
-                if status == 429 and any(k in err_low for k in ('quota', 'usage limit', 'gousagelimiterror', 'insufficient')):
+                if (status == 429 and any(k in err_low for k in ('quota', 'usage limit', 'gousagelimiterror', 'insufficient'))
+                        or status in (400, 402) and ('credit balance' in err_low or 'usage limits' in err_low)):   # Anthropic: out of credit / spend cap
                     if time.time() >= getattr(self, 'quota_paused_until', 0):
                         self.quota_paused_until = time.time() + 900
                         self.ledger.set('quota', {'exhausted_at': time.time(), 'next_probe': self.quota_paused_until, 'reason': str(e)[:240]})
@@ -211,6 +228,8 @@ class LLM:
             self.ledger.event('llm', 'QUOTA_PROBE', {'agent': agent})
 
     async def _stream(self, messages, tools, max_tokens, thinking, model=None):
+        if self.anthropic:
+            return await self._stream_anthropic(messages, tools, max_tokens, model)
         target_model = model or self.s.model
         limit_tok = max_tokens or self.s.max_completion_tokens
         is_opencode = 'opencode.ai' in getattr(self.s, 'base_url', '') or getattr(self.s, 'provider', '') == 'opencode'
@@ -281,6 +300,119 @@ class LLM:
                 'tool_calls': [v for _, v in sorted(calls.items()) if v['name']], 'finish': finish, 'usage': u}
 
 
+    async def _stream_anthropic(self, messages, tools, max_tokens, model=None):
+        system, msgs = to_anthropic(messages)
+        kw = dict(model=model or self.s.model, max_tokens=max_tokens or self.s.max_completion_tokens, messages=msgs,
+                  thinking={'type': 'adaptive', 'block_binding': {'prefix_mismatch_behavior': 'drop_block'}},
+                  output_config={'effort': getattr(self.s, 'effort', 'medium') or 'medium'},
+                  cache_control={'type': 'ephemeral'}, betas=ANTHROPIC_BETAS)
+        if system:
+            kw['system'] = system
+        if tools:
+            kw['tools'] = anthropic_tools(tools)
+        last = time.time()
+        async with self.client.beta.messages.stream(**kw) as stream:
+            async for _ in stream:
+                if time.time() - last > 180:
+                    raise StreamStalled('no tokens for 180s')
+                last = time.time()
+            msg = await stream.get_final_message()
+        return anthropic_result(msg)
+
+
+def anthropic_tools(tools):
+    """OpenAI function specs -> Anthropic tool definitions (sorted, so the cached prefix stays identical)."""
+    out = []
+    for t in tools:
+        f = t.get('function') or t
+        out.append({'name': f['name'], 'description': f.get('description') or '',
+                    'input_schema': f.get('parameters') or {'type': 'object', 'properties': {}}})
+    return sorted(out, key=lambda t: t['name'])
+
+
+def anthropic_result(msg):
+    blocks = [b.to_dict() for b in msg.content]
+    text = ''.join(b.get('text') or '' for b in blocks if b.get('type') == 'text')
+    reasoning = ''.join(b.get('thinking') or '' for b in blocks if b.get('type') == 'thinking')
+    calls = [{'id': b['id'], 'name': b['name'], 'arguments': json.dumps(b.get('input') or {}, ensure_ascii=False)}
+             for b in blocks if b.get('type') == 'tool_use']
+    u = msg.usage
+    read = getattr(u, 'cache_read_input_tokens', 0) or 0
+    write = getattr(u, 'cache_creation_input_tokens', 0) or 0
+    return {'content': text, 'reasoning': reasoning, 'tool_calls': calls,
+            'finish': ANTHROPIC_FINISH.get(msg.stop_reason, msg.stop_reason),
+            'usage': {'prompt_tokens': (u.input_tokens or 0) + read + write, 'completion_tokens': u.output_tokens or 0,
+                      'cached_tokens': read, 'cache_write_tokens': write},
+            'anthropic_content': blocks}
+
+
+def _anthropic_assistant(m):
+    """Rebuild an assistant turn. The original blocks (thinking with signatures, interleaved text, tool calls) are
+    replayed as received; if the agent clipped the text, the clipped text replaces the text blocks."""
+    raw = m.get('anthropic_content')
+    content = m.get('content') or ''
+    if raw is None:
+        blocks = [{'type': 'text', 'text': content}] if content else []
+        for i, c in enumerate(m.get('tool_calls') or []):
+            f = c.get('function') or {}
+            try:
+                args = json.loads(f.get('arguments') or '{}')
+            except ValueError:
+                args = {}
+            blocks.append({'type': 'tool_use', 'id': c.get('id') or f'call_{i}', 'name': f.get('name', ''),
+                           'input': args if isinstance(args, dict) else {}})
+    else:
+        blocks = [dict(b) for b in raw if b.get('type') in ('thinking', 'redacted_thinking', 'text', 'tool_use')]
+        original = ''.join(b.get('text') or '' for b in blocks if b['type'] == 'text')
+        if content != original and content not in ('(no output)', '(reasoning omitted)'):
+            first = next((i for i, b in enumerate(blocks) if b['type'] == 'text'), None)
+            blocks = [b for b in blocks if b['type'] != 'text']
+            pos = first if first is not None else next((i for i, b in enumerate(blocks) if b['type'] == 'tool_use'),
+                                                       len(blocks))
+            if content:
+                blocks.insert(pos, {'type': 'text', 'text': content})
+        for b in blocks:
+            if b['type'] == 'text':
+                b.pop('citations', None)
+    if not any(b['type'] in ('text', 'tool_use') for b in blocks):
+        blocks.append({'type': 'text', 'text': '(no output)'})
+    return blocks
+
+
+def to_anthropic(messages):
+    """OpenAI-format chat messages -> (system, messages) for the Messages API.
+
+    System messages become the system prompt; assistant tool_calls become tool_use blocks; consecutive tool results and
+    user messages merge into one user turn (tool_result blocks first), since roles must alternate."""
+    system, out = [], []
+
+    def add(role, blocks):
+        if out and out[-1]['role'] == role:
+            out[-1]['content'].extend(blocks)
+        else:
+            out.append({'role': role, 'content': list(blocks)})
+
+    for m in messages:
+        role = m.get('role')
+        if role == 'system':
+            if m.get('content'):
+                system.append(m['content'])
+        elif role == 'assistant':
+            add('assistant', _anthropic_assistant(m))
+        elif role == 'tool':
+            add('user', [{'type': 'tool_result', 'tool_use_id': m.get('tool_call_id') or 'call_0',
+                          'content': str(m.get('content') or '(empty)')}])
+        else:
+            c = m.get('content')
+            add('user', c if isinstance(c, list) else [{'type': 'text', 'text': str(c or '(empty)')}])
+    for turn in out:                     # tool_result blocks must lead their user turn
+        if turn['role'] == 'user':
+            turn['content'].sort(key=lambda b: b.get('type') != 'tool_result')
+    if out and out[0]['role'] != 'user':
+        out.insert(0, {'role': 'user', 'content': [{'type': 'text', 'text': '(start)'}]})
+    return '\n\n'.join(system), out
+
+
 class StreamStalled(TimeoutError):
     pass
 
@@ -288,8 +420,10 @@ class StreamStalled(TimeoutError):
 def assistant_message(res):
     """Serialize an assistant turn for the next request (MiMo needs reasoning_content passed back)."""
     m = {'role': 'assistant', 'content': res['content'] or (None if (res['tool_calls'] or res.get('reasoning')) else '(no output)')}
-    if res.get('reasoning'):
+    if res.get('reasoning') and res.get('anthropic_content') is None:
         m['reasoning_content'] = res['reasoning']
+    if res.get('anthropic_content') is not None:
+        m['anthropic_content'] = res['anthropic_content']
     if res['tool_calls']:
         m['tool_calls'] = [{'id': c['id'] or f'call_{i}', 'type': 'function',
                             'function': {'name': c['name'], 'arguments': c['arguments'] or '{}'}}
@@ -298,4 +432,5 @@ def assistant_message(res):
 
 
 def estimate_tokens(messages):
-    return len(json.dumps(messages, ensure_ascii=False)) // 3
+    return len(json.dumps([{k: v for k, v in m.items() if k != 'anthropic_content'} for m in messages],
+                          ensure_ascii=False)) // 3

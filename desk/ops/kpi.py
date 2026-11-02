@@ -20,6 +20,11 @@ RATES = {
     'glm-5.3-flash-free': (0, 0, 0),
     'deepseek-v4-pro': (2.5, 300, 600),
 }
+# Anthropic API list prices, USD per token: (cache read, uncached input, output). Cache writes are billed at 1.25x input
+# and counted as uncached here, so this slightly understates cost on the first request of each session.
+USD_RATES = {
+    'claude-haiku-5-5': (0.01e-6, 0.10e-6, 0.50e-6),
+}
 USD_PER_CREDIT = float(os.environ.get('KPI_USD_PER_CREDIT', 16 / 11e9))
 
 
@@ -29,14 +34,18 @@ def report(settings, hours=1.0):
     t0 = time.time() - hours * 3600
     req = L.q("SELECT model, COUNT(*) n, SUM(prompt_tokens) p, SUM(COALESCE(cached_tokens,0)) c, SUM(completion_tokens) o, "
               "AVG(seconds) s, SUM(status<>'ok') err FROM llm_requests WHERE created >= ? GROUP BY model", (t0,))
-    credits = 0.0
+    credits = usd_direct = 0.0
     tok = {'requests': 0, 'prompt': 0, 'cached': 0, 'output': 0, 'errors': 0}
     for r in req:
-        hit, miss, out = RATES.get(r['model'] or '', RATES['mimo-v2.6-flash'])
         p, c, o = r['p'] or 0, r['c'] or 0, r['o'] or 0
-        credits += c * hit + (p - c) * miss + o * out
+        if (r['model'] or '') in USD_RATES:
+            hit, miss, out = USD_RATES[r['model']]
+            usd_direct += c * hit + (p - c) * miss + o * out
+        else:
+            hit, miss, out = RATES.get(r['model'] or '', RATES['mimo-v2.6-flash'])
+            credits += c * hit + (p - c) * miss + o * out
         tok['requests'] += r['n']; tok['prompt'] += p; tok['cached'] += c; tok['output'] += o; tok['errors'] += r['err'] or 0
-    usd = credits * USD_PER_CREDIT
+    usd = credits * USD_PER_CREDIT + usd_direct
     ev = L.q('SELECT agent, kind, payload FROM events WHERE created >= ?', (t0,))
     kinds = Counter(e['kind'] for e in ev)
     tools = Counter()
