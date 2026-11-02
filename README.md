@@ -153,6 +153,17 @@ How the agents stay coordinated:
 6. **Approved.** A hashed bundle is exported to `results/v3/bundles/<id>`.
 7. **Hyperliquid paper trading.** Decisions use live OKX features computed by the *identical* research code: the 5000-level book via REST each second plus trades over WebSocket, so there is no feature-transfer risk. Fills are simulated on Hyperliquid's live book: 1 s later, crossing the spread, with sweep impact, fees and hourly funding. `--features hl` decides on Hyperliquid book features instead. Drift bands are computed against validation returns.
 8. **Portfolio.** Ledoit-Wolf risk parity, a 35% cap, correlation de-duplication, then a fresh portfolio paper run.
+9. **Forward verdict** (`desk/lab/forward.py`, sealed). Approved strategies are scored on forward days, market data
+   that did not exist at approval (`python -m desk forward`, also every 6 h during a run). The test is fixed in
+   advance: looks only at 60, 120 and 250 forward days, each on exactly the first N days, a one-sided t-test on daily
+   returns at p <= 0.05 / (3 x the number of strategies ever forward-tested), and the mean without the 5 best days
+   must stay positive. A strategy is FORWARD_FAILED if its mean is not positive at the 120-day look or it has not
+   confirmed by the 250-day look, and it then leaves the approved set (status `forward_failed`). Each report states
+   the Sharpe the next look can detect. The previous rule (Sharpe >= 0.5 over 60 days) confirmed a strategy with no
+   edge about 40% of the time.
+10. **Firm verdict.** One equal-weight book of every strategy ever forward-tested (failures included, so dropping
+    losers afterwards cannot help) is tested once with the same looks. `firm_forward_verdict` in
+    `python -m desk rsi scoreboard` is the firm's only claim to make money.
 
 ```powershell
 python -m desk paper S-xxxxxx --hours 168     # paper trade one approved strategy

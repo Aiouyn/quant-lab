@@ -273,7 +273,10 @@ def compute_generation_scoreboard(ledger) -> dict:
     val = [x for x in (_sharpe(r['val_report']) for r in rows) if x is not None]
     hold = [x for x in (_sharpe(r['holdout_report']) for r in rows) if x is not None]
     approved = [r for r in rows if r['status'] in ('approved', 'paper')]
-    fwd = [_json(r['forward_report']) for r in approved if _json(r['forward_report'])]
+    forward_tested = [r for r in rows if r['status'] in ('approved', 'paper', 'forward_failed')]
+    fwd = [_json(r['forward_report']) for r in forward_tested if _json(r['forward_report'])]
+    firm = ledger.get('firm_forward', None) if hasattr(ledger, 'get') else None
+    firm = firm if isinstance(firm, dict) else {}
     fwd_sharpes = [x for x in (((f.get('summary') or {}).get('sharpe')) for f in fwd) if isinstance(x, (int, float))]
     verdicts = [f.get('verdict') for f in fwd if f.get('verdict')]
     confirmed = sum(v == 'FORWARD_CONFIRMED' for v in verdicts)
@@ -319,7 +322,12 @@ def compute_generation_scoreboard(ledger) -> dict:
         'forward_verdict': forward_verdict,
         'forward_confirmed': confirmed,
         'forward_decided': decided,
-        # Phase 0 fitness: share of forward-decided approvals that were confirmed on unseen data. Proxies the agents
+        # the firm's profit claim: one pre-registered test on the equal-weight book of every forward-tested strategy
+        'firm_forward_verdict': firm.get('verdict') or 'NOT_RUN',
+        'firm_forward_days': firm.get('days'),
+        'firm_forward_sharpe': firm.get('sharpe_to_date'),
+        'firm_forward_detectable_sharpe': firm.get('detectable_sharpe_next_look'),
+        # fitness: share of forward-decided approvals that were confirmed on unseen data. Proxies the agents
         # can move themselves (hint resolution, primitive usage, breeding volume) are reported above but excluded.
         'generation_fitness': round(confirmed / decided, 3) if decided else 0.0,
     }
@@ -330,7 +338,8 @@ def rsi_snapshot(ledger, settings=None) -> dict:
     sb = compute_generation_scoreboard(ledger)
     kpis = {k: sb[k] for k in ('approved', 'best_val_sharpe', 'forward_verdict', 'forward_confirmed',
                                'hint_resolution_rate', 'generation_fitness', 'drill_verdict', 'null_false_discoveries',
-                               'drill_desks_covered', 'process_variants_live', 'process_trials')}
+                               'drill_desks_covered', 'process_variants_live', 'process_trials',
+                               'firm_forward_verdict', 'firm_forward_days', 'firm_forward_sharpe')}
     kpis['active_dynamic_hints'] = ledger.q("SELECT COUNT(*) AS n FROM dynamic_hints WHERE status='active'")[0]['n']
     kpis['contrib_modules'] = len(discover_contrib_modules())
     return {'kpis': kpis, 'latest_scoreboard': sb}
