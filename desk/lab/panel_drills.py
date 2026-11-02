@@ -135,7 +135,9 @@ def make_null(panel, desk, rng):
     return p.with_columns(zero) if zero else p
 
 
-def build_panel_drill(settings, desk, kind, seed=None):
+def build_panel_drill(settings, desk, kind, seed=None, drills_root=None):
+    """Build a drill market from the real store. drills_root (default home/drills) lets a process trial give each
+    run its own copy."""
     import dataclasses
     if desk not in SPECS:
         raise SystemExit(f'panel drills exist for {DRILL_DESKS}; l2 uses `python -m desk drill {kind}`')
@@ -146,7 +148,7 @@ def build_panel_drill(settings, desk, kind, seed=None):
     t = SPECS[desk]['t']
     panel = src.panel().filter(pl.col(t) < hi if desk == 'perps' else pl.col(t) <= hi).sort([t, SPECS[desk]['k']])
     rng = np.random.default_rng(seed if seed is not None else int(time.time()))
-    home = settings.home / 'drills' / drill_name(desk, kind)
+    home = (drills_root or settings.home / 'drills') / drill_name(desk, kind)
     if home.exists():
         shutil.rmtree(home)
     root = home / 'store' / desk

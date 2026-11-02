@@ -241,6 +241,13 @@ fast grid evaluators that log trials. Check primitive_lift and compile_hints to 
 compile recurring sandbox errors into dynamic fix hints. Announce new primitives to everyone with a usage example.''',
 }
 
+PROCESS_NOTE = '''
+PROCESS CHANGES: if you see the firm repeatedly miss real effects or wave through weak ones, propose a working rule
+for one role (propose_process_change, after process_history). It goes live only if a paired drill trial shows the
+firm with the rule finds hidden planted signals better and approves nothing on markets with nothing to find.'''
+for _r in ('cio', 'lead', 'officer', 'librarian', 'toolsmith'):
+    ROLES[_r] += PROCESS_NOTE
+
 
 def charter(role, pod=None, ledger=None):
     text = ROLES[role]

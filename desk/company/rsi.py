@@ -225,14 +225,15 @@ def compile_error_hints(ledger, author: str = 'rsi-compiler', min_cluster: int =
     return summary
 
 
-# ------------------------------------------------------------------ charter overlays (disabled)
+# ------------------------------------------------------------------ charter overlays (drill-gated)
 def active_charter_overlay(ledger, role: str, pod: str | None = None) -> str:
-    """Charter overlays are disabled until a drill-gated process loop exists for the live desks.
-
-    The previous overlays were 'promoted' by a drill gate that ran on synthetic data; none of them is evidence.
-    Returning '' keeps role charters exactly as written in desk.company.roles.
-    """
-    return ''
+    """Process notes appended to a role's charter. Only variants a paired drill trial accepted are live
+    (desk/lab/process_trials.py); the retired engine's charter_versions are never read."""
+    from ..lab.process_trials import overlay_text
+    try:
+        return overlay_text(ledger, role, pod)
+    except Exception:
+        return ''
 
 
 # ------------------------------------------------------------------ scoreboard (RSI_SCOREBOARD.md)
@@ -248,6 +249,21 @@ def _json(v):
 def _sharpe(rep):
     s = ((_json(rep) or {}).get('summary') or {}).get('sharpe')
     return float(s) if isinstance(s, (int, float)) else None
+
+
+def _count(ledger, sql):
+    try:
+        return ledger.q(sql)[0]['n']
+    except Exception:
+        return None
+
+
+def _trial_counts(ledger):
+    try:
+        rows = ledger.q('SELECT verdict, COUNT(*) n FROM process_trials GROUP BY verdict')
+    except Exception:
+        return {}
+    return {r['verdict']: r['n'] for r in rows}
 
 
 def compute_generation_scoreboard(ledger) -> dict:
@@ -296,6 +312,8 @@ def compute_generation_scoreboard(ledger) -> dict:
         'null_false_discoveries': drill.get('null_false_discoveries'),
         'drill_desks_covered': drill.get('desks_covered') or [],
         'hint_resolution_rate': hint_rate,
+        'process_variants_live': _count(ledger, "SELECT COUNT(*) n FROM process_variants WHERE status='active'"),
+        'process_trials': _trial_counts(ledger),
         'mean_primitive_lift': None,     # no causal lift estimator exists yet (needs drill ablations)
         'forward_sharpe': round(max(fwd_sharpes), 3) if fwd_sharpes else None,
         'forward_verdict': forward_verdict,
@@ -312,7 +330,7 @@ def rsi_snapshot(ledger, settings=None) -> dict:
     sb = compute_generation_scoreboard(ledger)
     kpis = {k: sb[k] for k in ('approved', 'best_val_sharpe', 'forward_verdict', 'forward_confirmed',
                                'hint_resolution_rate', 'generation_fitness', 'drill_verdict', 'null_false_discoveries',
-                               'drill_desks_covered')}
+                               'drill_desks_covered', 'process_variants_live', 'process_trials')}
     kpis['active_dynamic_hints'] = ledger.q("SELECT COUNT(*) AS n FROM dynamic_hints WHERE status='active'")[0]['n']
     kpis['contrib_modules'] = len(discover_contrib_modules())
     return {'kpis': kpis, 'latest_scoreboard': sb}

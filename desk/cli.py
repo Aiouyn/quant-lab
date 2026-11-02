@@ -64,6 +64,14 @@ def main(argv=None):
     rsi_p.add_argument('action', nargs='?', default='status',
                        choices=['status', 'scoreboard', 'compile-hints', 'build-store', 'quarantine'])
     rsi_p.add_argument('--apply', action='store_true', help='quarantine: actually move rows (default is a dry run)')
+    pr = sub.add_parser('process', help='process changes for agent charters: list, propose, trial (paired drill A/B), '
+                                        'retire. A change goes live only when a trial accepts it.')
+    pr.add_argument('action', nargs='?', default='list', choices=['list', 'propose', 'trial', 'retire'])
+    pr.add_argument('variant_id', nargs='?', help='trial/retire: variant id (trial defaults to the oldest proposal)')
+    pr.add_argument('--role'); pr.add_argument('--pod'); pr.add_argument('--patch'); pr.add_argument('--rationale')
+    pr.add_argument('--desk', choices=['perps', 'macro'], default='perps')
+    pr.add_argument('--pairs', type=int, default=3); pr.add_argument('--hours', type=float, default=2.0)
+    pr.add_argument('--agents', type=int, default=8)
     cm = sub.add_parser('costs', help='review cost-model proposals from agents (loosening needs a human)')
     cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
     cm.add_argument('proposal_id', nargs='?', type=int)
@@ -215,6 +223,28 @@ def main(argv=None):
         res = verify()
         _print(res)
         return 0 if res['ok'] else 1
+    if a.cmd == 'process':
+        from .company.ledger import Ledger
+        from .lab import process_trials as PT
+        L = Ledger(s.ledger)
+        if a.action == 'list':
+            _print({'live': [{k: r[k] for k in ('id', 'role', 'pod', 'patch_text')} for r in PT.live_variants(L)],
+                    'history': PT.history(L)})
+            return 0
+        if a.action == 'propose':
+            res = PT.propose(L, a.role, a.patch, a.rationale, author='human-cli', pod=a.pod)
+            _print(res)
+            return 1 if 'error' in res else 0
+        if a.action == 'retire':
+            ok = PT.retire(L, a.variant_id, a.rationale or 'retired by human')
+            print(f'{a.variant_id} retired' if ok else f'{a.variant_id} is not active or proposed')
+            return 0 if ok else 1
+        vid = a.variant_id or PT.next_proposed(L)
+        if not vid:
+            print('no proposed process variant to trial')
+            return 1
+        _print(PT.run_trial(s, vid, desk=a.desk, pairs=a.pairs, hours=a.hours, agents=a.agents))
+        return 0
     if a.cmd == 'costs':
         from .company.ledger import Ledger
         import json as _json
