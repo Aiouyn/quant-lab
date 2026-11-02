@@ -22,6 +22,19 @@ def _bar(r, i, default):
     return SHARPE_BARS.get(r.get('desk'), (1.5, default))[i] if r.get('desk') in SHARPE_BARS else default
 
 
+def _ex_top5(r):
+    """Dev mean excluding the 5 best days, from wherever the desk engine reports it. Missing raises -> gate fails."""
+    v = r['summary'].get('mean_ex_top5_days_bps')
+    if v is None:
+        v = r['stats']['mean_ex_top5_days_bps']
+    return v
+
+
+def _no_numeric_params(r):
+    """True only when the report says the strategy has no numeric parameter to perturb."""
+    return (r.get('robustness') or {}).get('param_neighborhood') is None and r.get('numeric_params') == 0
+
+
 DEV_GATES = {
     'dev_sharpe': lambda r: r['summary']['sharpe'] >= _bar(r, 0, 1.5),
     'dev_trades': lambda r: r['summary']['trades'] >= (20 if r.get('desk') == 'carry' else 60),
@@ -35,9 +48,12 @@ DEV_GATES = {
                                              or r['robustness']['missed_entries_25%']['pnl'] > 0,
     'queue_x2_profitable': lambda r: 'queue_x2' not in r['robustness'] or r['robustness']['queue_x2']['pnl'] > 0,
     # tail-aware (2026-10-03 lesson: crash-rebound / lottery payoffs look great on the mean and die out of sample)
-    'dev_mean_ex_top5_days>0': lambda r: r['summary'].get('mean_ex_top5_days_bps', 1.0) > 0,
-    'param_neighborhood>=60%': lambda r: (r['robustness'].get('param_neighborhood') or {}).get('fraction_profitable') is None
-                                         or r['robustness']['param_neighborhood']['fraction_profitable'] >= 0.6,
+    # fail closed: a missing metric is a failed gate, never a pass
+    'dev_mean_ex_top5_days>0': lambda r: _ex_top5(r) > 0,
+    # strategies with no numeric PARAMS have no neighborhood to test (the gate does not apply); a neighborhood that
+    # was attempted but produced no usable variant fails
+    'param_neighborhood>=60%': lambda r: _no_numeric_params(r) or
+                                         (r['robustness'].get('param_neighborhood') or {}).get('fraction_profitable', -1) >= 0.6,
 }
 
 
@@ -51,7 +67,7 @@ def val_gates(s):
         'top5_days<%.0f%%' % (100 * s.max_top5_day_share): lambda r: r['stats']['top5_day_share'] < s.max_top5_day_share,
         'max_drawdown<=%.2f' % s.max_drawdown: lambda r: r['summary']['max_drawdown'] <= s.max_drawdown * 1.0,
         'stress_profitable': lambda r: r['stress']['pnl'] > 0,
-        'mean_ex_top5_days>0': lambda r: r['stats'].get('mean_ex_top5_days_bps', 1.0) > 0,
+        'mean_ex_top5_days>0': lambda r: r['stats']['mean_ex_top5_days_bps'] > 0,
         'causal': lambda r: bool(r.get('causality') and r['causality'].get('ok')),
     }
 

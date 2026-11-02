@@ -215,10 +215,29 @@ def test_gates():
     from desk.pipeline.validation import check, DEV_GATES
     rep = {'summary': {'sharpe': 2.0, 'trades': 100}, 'causality': {'ok': True}, 'certification': {'ok': True},
            'robustness': {'fees_x1.5': {'pnl': 5}, 'latency_+2s': {'pnl': 3}, 'first_half_sharpe': 1, 'second_half_sharpe': 0.5,
-                          'positive_months': 0.7, 'param_neighborhood': {'fraction_profitable': 0.75}}}
+                          'positive_months': 0.7, 'param_neighborhood': {'fraction_profitable': 0.75}},
+           'stats': {'mean_ex_top5_days_bps': 0.8}}
     assert check(DEV_GATES, rep) == []
     rep['robustness']['fees_x1.5']['pnl'] = -1
     assert check(DEV_GATES, rep) == ['fees_x1.5_profitable']
+
+
+def test_gates_fail_closed_on_missing_metrics():
+    from desk.pipeline.validation import check, DEV_GATES, val_gates
+    from desk.config import SETTINGS
+    rep = {'summary': {'sharpe': 2.0, 'trades': 100}, 'causality': {'ok': True}, 'certification': {'ok': True},
+           'robustness': {'fees_x1.5': {'pnl': 5}, 'latency_+2s': {'pnl': 3}, 'first_half_sharpe': 1, 'second_half_sharpe': 0.5,
+                          'positive_months': 0.7}, 'stats': {}}
+    failed = check(DEV_GATES, rep)
+    assert 'dev_mean_ex_top5_days>0' in failed          # tail metric missing -> fail, not pass
+    assert 'param_neighborhood>=60%' in failed          # neighborhood missing and params unknown -> fail
+    rep['numeric_params'] = 0                           # no numeric params: the neighborhood gate does not apply
+    rep['stats']['mean_ex_top5_days_bps'] = 0.5
+    assert check(DEV_GATES, rep) == []
+    vrep = {'summary': {'sharpe': 3.0, 'trades': 200, 'max_drawdown': 0.01}, 'causality': {'ok': True},
+            'stress': {'pnl': 10}, 'stats': {'dsr': 0.99, 'bootstrap_lower_mean_bps': 1.0, 'positive_weeks': 0.9,
+                                             'top5_day_share': 0.1}}
+    assert 'mean_ex_top5_days>0' in check(val_gates(SETTINGS), vrep)
 
 
 def test_portfolio_allocation_caps_and_dedup():
