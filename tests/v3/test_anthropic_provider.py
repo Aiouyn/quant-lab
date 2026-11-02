@@ -148,7 +148,8 @@ def test_out_of_credit_pauses_the_firm_instead_of_failing():
 
 def test_config_selects_anthropic_and_haiku(monkeypatch):
     from desk import config as C
-    for k in ('LLM_PROVIDER', 'MODEL_NAME', 'DESK_FLASH_MODEL', 'OPENCODE_API_KEY', 'ANTHROPIC_BASE_URL'):
+    for k in ('LLM_PROVIDER', 'MODEL_NAME', 'DESK_FLASH_MODEL', 'OPENCODE_API_KEY', 'ANTHROPIC_BASE_URL', 'MIMO_API_KEY',
+              'MIMO_BASE_URL'):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
     assert C._provider() == 'opencode'                     # a key alone never switches on pay-as-you-go billing
