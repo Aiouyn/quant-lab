@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
 import random
 import signal
 import time
@@ -23,6 +24,9 @@ CORE = [('cio', 'cio', 'exec'), ('officer-1', 'officer', 'risk'), ('officer-2', 
 
 # measured yield first: carry (structural funding edge) > order flow / meta (combination engine) > the rest
 POD_PRIORITY = ['macro', 'xsec', 'events', 'regime', 'carry', 'positioning', 'meta', 'pred']   # pred last: Polymarket is blocked for the owner (France)
+# DESK_POD_PRIORITY=xsec,events,... puts those pods first (e.g. when a small firm's first pod has run out of ideas)
+_override = [p.strip() for p in os.getenv('DESK_POD_PRIORITY', '').split(',') if p.strip()]
+POD_PRIORITY = _override + [p for p in POD_PRIORITY if p not in _override]
 
 
 def roster(n_agents):
