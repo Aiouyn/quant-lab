@@ -238,3 +238,13 @@ def test_trial_runs_pair_arms_together_and_stops_a_hopeless_trial(tmp_path):
     assert res['verdict'] == 'REJECT' and 'stopped early' in res['reason'] and len(res['pair_scores']) == 1
     runs = json.loads(L.q('SELECT results FROM process_trials')[0]['results'])['runs']
     assert sorted((r['arm'], r['kind']) for r in runs) == [('base', 'planted'), ('cand', 'null'), ('cand', 'planted')]
+
+
+def test_planted_score_gives_half_credit_for_found_but_not_approved():
+    rep = lambda c, best: {'planted_signal_corr': c, 'best_corr_with_hidden': best}
+    assert PT._score(rep(0.6, [(0.6, 's1', 'approved')]), 'planted') == 0.6
+    assert PT._score(rep(0.0, [(0.5, 's1', 'rejected_holdout'), (0.2, 's2', 'dev')]), 'planted') == 0.25
+    assert PT._score(rep(0.0, [(0.05, 's1', 'dev')]), 'planted') == 0.0          # noise is not a discovery
+    assert PT._score(rep(0.0, []), 'planted') == 0.0
+    assert PT._score(rep(None, []), 'planted') is None
+    assert PT._score({'false_discoveries': 0}, 'null') == 0                   # the null veto still counts approvals
