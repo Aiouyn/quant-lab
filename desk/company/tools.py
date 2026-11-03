@@ -48,9 +48,10 @@ SPECS = {
     # ------------------------------------------------------------ research
     'run_python': fn('run_python', 'Run Python in your sandbox. `from desk.research import *` is ALREADY imported: it is the '
                      'whole API - never import desk.lab / desk.data / desk.settings internals. DEV data only. Print compact results. '
-                     'DESKS: macro_panel() [date, symbol, adjclose, adj_open, open/high/low/close, volume, cls, tradable, cost_bps], '
+                     'DESKS: macro_panel() [date, symbol, adjclose, adj_open, open/high/low/close, volume, cls, tradable, cost_bps; '
+                     'alt feature rows FRED:* (rates, spreads, breakevens) and COT:<mkt>:spec_net_oi|comm_net_oi|oi, value in close], '
                      'perps_panel() [ts, coin, px, px_fill, f, oi, vlm, isp, premium, bn_*, dvol_btc, vix, dxy, ...], '
-                     'pred_panel() [ts, market, p, end_ms, category, hours_to_end]; backtests macro_backtest / perps_backtest / '
+                     'pred_panel() [ts, market, p, end_ms, category, hours_to_end, vol_usd_1h, vol_usd_cum]; backtests macro_backtest / perps_backtest / '
                      'pred_backtest(panel, weights); event_study, xs_factor_report, walk_forward; example_strategy(desk), '
                      'example_factor(desk), source(module), research_agenda(). There is NO "ret" column: compute returns. '
                      'POLARS (not pandas): n_unique(), group_by().agg(), sort(), with_columns(), filter(), join(), cum_max(), '

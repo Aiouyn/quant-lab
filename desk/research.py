@@ -45,7 +45,8 @@ Only DEVELOPMENT days are reachable here (the sandbox store root is a dev-only v
                                                 study fill probability, queue depletion and adverse selection.
     run_strategy(code) also handles EXECUTION={'mode':'maker',...} limit-order strategies (queue-aware fills).
     pred_panel() / pred_backtest(panel, weights) -> PRED DESK: hourly YES prices of resolved Polymarket binary markets
-                                                (dev to 2026-02; columns ts, market, p, end_ms, category, hours_to_end);
+                                                (dev to 2026-02; columns ts, market, p, end_ms, category, hours_to_end,
+                                                vol_usd_1h, vol_usd_cum: traded USD so far, lagged 1 h);
                                                 weight +w = hold YES, -w = hold NO; 1-cent half-spread; pays 1/0 at end
     event_study(panel, mask, horizons, side) -> event returns: mean, MEDIAN, mean excluding the 5 best, win rate, t
     xs_factor_report(panel, values)          -> cross-sectional IC + mean quintile spreads + cost hurdle (no registration)

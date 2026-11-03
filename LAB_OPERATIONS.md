@@ -10,8 +10,9 @@
 - **Disk guard:** if C: or D: falls below 3 GB free, the firm is stopped gracefully. It restarts once 6 GB are free again.
 - **Daily refresh (13:10 UTC):** `desk.data.refresh` updates the forward period of every desk:
   - perps: verified live HL recordings, Binance metrics, Deribit DVOL, macro context;
-  - macro: Yahoo daily bars for ~119 instruments;
-  - pred: newly resolved Polymarket markets.
+  - macro: Yahoo daily bars for ~119 instruments, plus FRED and CFTC COT feature rows (`desk.data.macro_alt`);
+  - pred: newly resolved Polymarket markets, and up to 20 min of per-market volume history (`desk.data.pred_volume`).
+    The first full backfill is a separate, resumable run: `python -m desk.data.pred_volume` (hours; stop/restart freely).
 
 | Service | Command | Role |
 |---|---|---|

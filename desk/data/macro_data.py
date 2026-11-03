@@ -127,10 +127,12 @@ def build(settings):
     frames = fetch_universe()
     check_complete(frames)
     df = assemble(frames)
+    from .macro_alt import build as add_alt          # FRED + CFTC COT feature rows, dated by publication
+    df, alt_rep = add_alt(settings, df)
     out = settings.store / 'macro' / 'panel.parquet'
     atomic_write_parquet(df, out)
     cov = df.group_by('symbol').agg(pl.col('date').min().alias('first'), pl.len().alias('rows'))
-    rep = {'rows': len(df), 'symbols': df['symbol'].n_unique(), 'missing': [],
+    rep = {'rows': len(df), 'symbols': df['symbol'].n_unique(), 'missing': [], 'alt': alt_rep,
            'first_dates': {r['symbol']: str(r['first']) for r in cov.iter_rows(named=True)}}
     atomic_write_json(settings.store / 'macro' / 'coverage.json', rep)
     return rep

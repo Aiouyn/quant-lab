@@ -97,14 +97,14 @@ def refresh(settings):
         from .macro_data import build as build_macro
         from ..lab.macro import MacroStore, write_dev_view as macro_dev_view
         m = build_macro(settings)
-        rep['macro'] = {k: m[k] for k in ('rows', 'symbols', 'missing')}
+        rep['macro'] = {k: m[k] for k in ('rows', 'symbols', 'missing', 'alt')}
         MacroStore(settings).splits(); macro_dev_view(settings)
     except Exception as e:
         rep['macro_error'] = repr(e)[:300]
     try:
         from .polymarket import build as build_pred
         from ..lab.pred import PredStore, write_dev_view as pred_dev_view
-        rep['pred'] = build_pred(settings)
+        rep['pred'] = build_pred(settings, volume_minutes=20)
         PredStore(settings).splits(); pred_dev_view(settings)
     except Exception as e:
         rep['pred_error'] = repr(e)[:300]
