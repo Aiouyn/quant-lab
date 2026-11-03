@@ -360,7 +360,11 @@ A failed run makes the trial **ERROR** and the proposal stays queued. An accepte
 same role and pod. Every run's seed, score and verdict is stored in the main ledger (`process_trials`), and agents
 read the history before proposing again. The retired engine's `charter_versions` are never read.
 
-Cost: a trial is 3 firm runs per pair, run one after another (default 3 pairs, 2 h each, 8 agents: 18 hours of wall time and about 144 agent-hours of LLM use). With
+Cost: a trial is 3 firm runs per pair (default 3 pairs, 2 h each, 8 agents: about 144 agent-hours of LLM use). The 3 runs
+of a pair run at the same time, so both arms face the same plan limits and machine load and a trial takes about 6 hours
+(`--serial` runs them one after another: 18 hours). A trial stops early only when no result of the remaining pairs
+could still lead to ACCEPT (a false discovery on a null market, or too many lost pairs), so stopping never changes a
+verdict. With
 three pairs the test can only detect large improvements; that is deliberate, since a rule that only helps a little
 is not worth the risk of being noise.
 

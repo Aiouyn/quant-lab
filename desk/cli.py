@@ -72,6 +72,7 @@ def main(argv=None):
     pr.add_argument('--desk', choices=['perps', 'macro'], default='perps')
     pr.add_argument('--pairs', type=int, default=3); pr.add_argument('--hours', type=float, default=2.0)
     pr.add_argument('--agents', type=int, default=8)
+    pr.add_argument('--serial', action='store_true', help='trial: run the 3 drills of each pair one after another')
     cm = sub.add_parser('costs', help='review cost-model proposals from agents (loosening needs a human)')
     cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
     cm.add_argument('proposal_id', nargs='?', type=int)
@@ -251,7 +252,7 @@ def main(argv=None):
         if not vid:
             print('no proposed process variant to trial')
             return 1
-        _print(PT.run_trial(s, vid, desk=a.desk, pairs=a.pairs, hours=a.hours, agents=a.agents))
+        _print(PT.run_trial(s, vid, desk=a.desk, pairs=a.pairs, hours=a.hours, agents=a.agents, parallel=not a.serial))
         return 0
     if a.cmd == 'costs':
         from .company.ledger import Ledger
