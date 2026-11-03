@@ -356,7 +356,9 @@ For each pair, one planted market is built with a fixed seed and copied for both
 with today's live rules, the CAND arm adds the candidate. The candidate also runs one null market per pair. The rule
 is fixed in advance: **ACCEPT** only if the candidate approved nothing on any null market, beat BASE on a majority of
 pairs (gains under 0.02 are ties) and improved the planted score by at least 0.05 on average; otherwise **REJECT**.
-A failed run makes the trial **ERROR** and the proposal stays queued. An accepted rule replaces the live rule for the
+A planted run scores the best |corr| between an approved strategy and the hidden signal; if nothing was approved it
+gets half the |corr| of the best strategy the firm built (0 below 0.1), so short drills where neither arm gets a
+signal through validation can still show which arm got closer. A failed run makes the trial **ERROR** and the proposal stays queued. An accepted rule replaces the live rule for the
 same role and pod. Every run's seed, score and verdict is stored in the main ledger (`process_trials`), and agents
 read the history before proposing again. The retired engine's `charter_versions` are never read.
 

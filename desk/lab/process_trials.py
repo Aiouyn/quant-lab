@@ -14,7 +14,8 @@ A trial is a paired A/B experiment on drill markets (desk/lab/panel_drills.py):
     - one planted market (a hidden, tradable signal) is built with seed s_i and copied for both arms;
     - BASE runs the firm with the charters currently live; CAND runs it with the candidate variant added
       (replacing a live variant for the same role and pod, if any);
-    - both runs are scored by how well their approved strategies track the hidden signal (0 if nothing approved);
+    - both runs are scored by how well their approved strategies track the hidden signal; if nothing was approved,
+      half the |corr| of the best strategy they built (0 if below 0.1), so a short drill can still show a lift;
   plus one null market per pair (returns block-shuffled, nothing to find), run by CAND only.
 
 Pre-registered decision rule (decide()):
@@ -45,6 +46,8 @@ DEFAULT_HOURS = 2.0
 DEFAULT_AGENTS = 8
 MIN_LIFT = 0.05            # mean paired gain in |corr| between approved strategies and the hidden signal
 TIE = 0.02                 # paired differences smaller than this count as neither a win nor a loss
+PARTIAL_CREDIT = 0.5       # weight of a found-but-not-approved signal in a planted run's score
+PARTIAL_MIN_CORR = 0.1     # below this |corr| a strategy is treated as not tracking the hidden signal (noise)
 ARM_STATUS = 'arm'         # rows written by the trial runner into a trial run's own (fresh) ledger
 
 
@@ -186,7 +189,16 @@ def _score(report, kind):
         fd = report.get('false_discoveries')
         return int(fd) if isinstance(fd, (int, float)) else None
     c = report.get('planted_signal_corr')
-    return float(c) if isinstance(c, (int, float)) and math.isfinite(c) else None
+    if not (isinstance(c, (int, float)) and math.isfinite(c)):
+        return None
+    if c > 0:
+        return float(c)
+    # Nothing approved: half credit for the best strategy the firm built that tracks the hidden signal at all. Without
+    # it a firm that never gets a planted signal through validation in a short drill scores 0 in both arms and no
+    # change can ever show a lift. Approval still earns twice as much, and the null-market veto still counts approvals.
+    found = [x[0] for x in report.get('best_corr_with_hidden') or [] if isinstance(x[0], (int, float))]
+    best = max(found, default=0.0)
+    return round(PARTIAL_CREDIT * best, 4) if best >= PARTIAL_MIN_CORR else 0.0
 
 
 def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAULT_PAIRS,
