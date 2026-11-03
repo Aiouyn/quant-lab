@@ -18,11 +18,11 @@
   "desk/lab/jail_worker.py": "c66cf353fb659a351e65286bd4c58b717b8052419321d75deb8e94867868bdf8",
   "desk/lab/macro.py": "97ffd65cf06a3a1b6d1c39b7a6f43f5d1a73abe2049221b8f468ad5dc9961f2f",
   "desk/lab/maker.py": "7d636230cc59ca0960a74bd393d6cfcae2aaba69a66e85eb71bf13730332f8c8",
-  "desk/lab/panel_drills.py": "2cd2c21bfeac0fa5bf020a52f706aed6b3b7f4634321bab28811212d68ece787",
+  "desk/lab/panel_drills.py": "a8de1043067a647442ececa811646dd1eb480f8107bf492c17529b6957d9ca4f",
   "desk/lab/panel_factor.py": "9908dea6bb77b31bc9c2f234dfb8f21adfd11ce01530454e88f7fe9ad9fbb73a",
   "desk/lab/perps.py": "d540954c3aa9bb97dd4003f1a2b66301134816020c93e243735b57e7a63fc625",
   "desk/lab/pred.py": "231664f1c6b7f10f4caf565860dc37ee0a84f2aad4518d4dd340643b9539e49c",
-  "desk/lab/process_trials.py": "b155684d255a4ee84c33e0896704a79a1dc2af9428abb4e4afa03f64e9ae8cf4",
+  "desk/lab/process_trials.py": "9080d566807fdc68bc4084667c03bcb8fb1cee23afed62a9462825e3bc491829",
   "desk/lab/sandbox.py": "2d4401b2542a9b8cd6353ae6dbed503b35894c17ba2c44c95e7a3439532903ba",
   "desk/lab/snapback.py": "f183011f1aa1e70abdd16451d75aaf92d02d11ccad64c920d7738c870eb86831",
   "desk/lab/stats.py": "8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c",
@@ -32,5 +32,5 @@
   "desk/pipeline/bundle.py": "96469813c64e7bdec2a35f02e9fa239852f2112e2644947f6c7471520219c611",
   "desk/pipeline/validation.py": "26195e8455b0fab3081778912b492bf285ab5709ad075cc14d3a1e8e9d780b8d"
  },
- "sealed": "2026-11-03 05:54:37"
+ "sealed": "2026-11-03 12:20:09"
 }

@@ -24,7 +24,7 @@ import polars as pl
 
 SPECS = {
     'perps': {
-        't': 'ts', 'k': 'coin', 'ret_px': 'px_fill', 'lag': 1, 'block': 24, 'beta': 2.0e-4,
+        't': 'ts', 'k': 'coin', 'ret_px': 'px_fill', 'lag': 1, 'block': 24, 'beta': 1.0e-3,
         'price_cols': ('px', 'px_fill', 'oracle', 'mark', 'lo', 'hi'),
         'features': ('premium', 'oi', 'vlm', 'isp', 'bn_oi_value', 'bn_ls_accounts', 'bn_ls_top_positions',
                      'bn_taker_ratio'),
@@ -212,11 +212,36 @@ def panel_drill_report(settings, desk, kind, record_in=None):
         out['best_corr_with_hidden'] = corrs[:5]
         best_approved = max((c for c, _, s in corrs if s in ('approved', 'paper')), default=0.0)
         out['planted_signal_corr'] = best_approved
+        out['best_factor_corr_with_hidden'] = _factor_corrs(s2, L, desk, panel, hid)
         out['verdict'] = ('PASS (discovered and approved)' if best_approved >= 0.3 else
                           'PARTIAL (found, not approved)' if corrs and corrs[0][0] >= 0.3 else 'FAIL (not discovered)')
     if record_in is not None:
         record_drill_score(record_in, out)
     return out
+
+
+def _factor_corrs(settings, L, desk, panel, hid, top=5):
+    """|corr| with the hidden score of each registered factor's cached DEV values (registered factors are research
+    progress even when no strategy was submitted)."""
+    sp = SPECS[desk]
+    t, k = sp['t'], sp['k']
+    vdir = settings.artifacts / 'factor_values'
+    keys = panel.select(t, k).with_row_index('_i')
+    out = []
+    for r in L.q("SELECT id, status FROM factors WHERE resolution=? AND status IN ('active','weak')", (desk,)):
+        f = vdir / f"{r['id']}.parquet"
+        if not f.exists():
+            continue
+        try:
+            v = pl.read_parquet(f)
+            j = keys.join(v, on=[t, k], how='left').sort('_i')['lv'].cast(pl.Float64).to_numpy()
+            ok = np.isfinite(j) & np.isfinite(hid)
+            if ok.sum() < 100 or np.nanstd(j[ok]) == 0:
+                continue
+            out.append((round(abs(float(np.corrcoef(j[ok], hid[ok])[0, 1])), 3), r['id'], r['status']))
+        except Exception:
+            continue
+    return sorted(out, reverse=True)[:top]
 
 
 def record_drill_score(ledger, result: dict):

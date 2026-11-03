@@ -248,3 +248,13 @@ def test_planted_score_gives_half_credit_for_found_but_not_approved():
     assert PT._score(rep(0.0, []), 'planted') == 0.0
     assert PT._score(rep(None, []), 'planted') is None
     assert PT._score({'false_discoveries': 0}, 'null') == 0                   # the null veto still counts approvals
+
+
+def test_registered_factors_earn_a_quarter_credit():
+    rep = {'planted_signal_corr': 0.0, 'best_corr_with_hidden': [], 'best_factor_corr_with_hidden': [(0.8, 'F-1', 'active')]}
+    assert PT._score(rep, 'planted') == 0.2
+    rep['best_corr_with_hidden'] = [(0.6, 'S-1', 'revise')]
+    assert PT._score(rep, 'planted') == 0.3                                       # a submitted strategy counts more
+    rep['best_factor_corr_with_hidden'] = [(0.05, 'F-2', 'weak')]
+    rep['best_corr_with_hidden'] = []
+    assert PT._score(rep, 'planted') == 0.0
