@@ -152,6 +152,25 @@ def decide(pairs: list[dict], null_false_discoveries: list[int], min_lift: float
                                                   'no false discoveries on null markets'}
 
 
+def futile(pairs_done: list[dict], nulls: list, planned: int, min_lift: float = MIN_LIFT) -> str | None:
+    """A reason to stop a trial early, or None. Only returns a reason when NO result of the remaining pairs could
+    make decide() ACCEPT (scores are in [0, 1], so a remaining pair adds at most +1 lift), so stopping early never
+    changes a verdict, it only saves time. A failed run is not futility: the trial finishes and ends in ERROR."""
+    if any(p.get('base') is None or p.get('cand') is None for p in pairs_done) or any(n is None for n in nulls):
+        return None
+    if sum(nulls) > 0:
+        return 'the candidate approved strategies on a market with nothing to find'
+    rem = planned - len(pairs_done)
+    d = [p['cand'] - p['base'] for p in pairs_done]
+    wins, losses = sum(x > TIE for x in d), sum(x < -TIE for x in d)
+    need = planned // 2 + 1
+    if wins + rem < need or wins + rem <= losses:
+        return f'won {wins} of {len(d)} pairs; cannot reach {need} of {planned}'
+    if (sum(d) + rem * 1.0) / planned < min_lift:
+        return f'mean lift cannot reach {min_lift}'
+    return None
+
+
 # ---------------------------------------------------------------------------------------------- runner
 def _seed(trial_id, i, kind):
     return int(hashlib.sha256(f'{trial_id}:{i}:{kind}'.encode()).hexdigest()[:8], 16)
@@ -172,8 +191,12 @@ def _score(report, kind):
 
 def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAULT_PAIRS,
               hours: float = DEFAULT_HOURS, agents: int = DEFAULT_AGENTS, min_lift: float = MIN_LIFT,
-              runner=None) -> dict:
-    """Run a full paired trial for one proposed variant and record the decision in the main ledger."""
+              runner=None, parallel: bool = True) -> dict:
+    """Run a full paired trial for one proposed variant and record the decision in the main ledger.
+
+    parallel: the three runs of a pair (BASE planted, CAND planted, CAND null) run at the same time, so both arms face
+    the same conditions (plan limits, machine load) and a trial takes `pairs * hours` instead of three times that.
+    The trial stops early only when no outcome of the remaining pairs could still lead to ACCEPT."""
     from ..company.ledger import Ledger
     from .panel_drills import SPECS, build_panel_drill, drill_name, panel_drill_report
     if desk not in SPECS:
@@ -208,14 +231,27 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             rec.update({'score': _score(rep, kind), 'verdict': rep.get('verdict'), 'approved': rep.get('approved')})
         except (Exception, SystemExit) as e:                 # a failed run scores None: the trial ends in ERROR
             rec.update({'score': None, 'error': repr(e)[:300]})
-        runs.append(rec)
-        L.x('UPDATE process_trials SET results=? WHERE id=?', (json.dumps({'runs': runs}), tid))
-        return rec['score']
+        return rec
 
+    jobs = [('base', 'planted'), ('cand', 'planted'), ('cand', 'null')]
+    stopped = None
     for i in range(pairs):
-        pair_scores.append({'base': one('base', i, 'planted'), 'cand': one('cand', i, 'planted')})
-        nulls.append(one('cand', i, 'null'))
-    decision = decide(pair_scores, nulls, min_lift)
+        if parallel:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+                recs = list(ex.map(lambda j: one(j[0], i, j[1]), jobs))
+        else:
+            recs = [one(arm, i, kind) for arm, kind in jobs]
+        runs.extend(recs)
+        L.x('UPDATE process_trials SET results=? WHERE id=?', (json.dumps({'runs': runs}), tid))
+        pair_scores.append({'base': recs[0]['score'], 'cand': recs[1]['score']})
+        nulls.append(recs[2]['score'])
+        stopped = futile(pair_scores, nulls, pairs, min_lift)
+        if stopped and i < pairs - 1:
+            break
+    decision = decide(pair_scores, nulls, min_lift) if not stopped else \
+        {**decide(pair_scores, nulls, min_lift), 'verdict': 'REJECT', 'reason': f'stopped early: {stopped}',
+         'pairs_planned': pairs}
     L.x('UPDATE process_trials SET results=?, verdict=?, finished=? WHERE id=?',
         (json.dumps({'runs': runs, 'pairs': pair_scores, 'decision': decision}), decision['verdict'], time.time(), tid))
     if decision['verdict'] == 'ACCEPT':

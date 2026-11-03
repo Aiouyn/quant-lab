@@ -210,3 +210,31 @@ def test_contribute_primitive_registers_a_variant_instead_of_announcing(tmp_path
             {'role': 'primitive', 'pod': 'zz_trial_probe', 'status': 'proposed'}
     finally:
         target.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------------------------------------ speed
+def test_early_stop_only_when_accept_is_impossible():
+    win, loss = {'base': 0.0, 'cand': 0.6}, {'base': 0.5, 'cand': 0.0}
+    assert PT.futile([win], [0], 3) is None
+    assert PT.futile([loss], [0], 3) is None                         # 2 wins still possible
+    assert PT.futile([loss, loss], [0, 0], 3)                         # cannot win 2 of 3
+    assert PT.futile([win], [1], 3)                                   # a false discovery always rejects
+    assert PT.futile([{'base': None, 'cand': 0.5}], [0], 3) is None   # failures finish and end in ERROR
+    # whenever futile() fires, every possible completion is a REJECT
+    import itertools
+    grid = [{'base': b, 'cand': c} for b in (0.0, 0.5, 1.0) for c in (0.0, 0.5, 1.0)]
+    for done in itertools.product(grid, repeat=1):
+        for nul in ([0], [1]):
+            if PT.futile(list(done), nul, 3):
+                for rest in itertools.product(grid, repeat=2):
+                    assert PT.decide(list(done) + list(rest), nul + [0, 0])['verdict'] == 'REJECT'
+
+
+def test_trial_runs_pair_arms_together_and_stops_a_hopeless_trial(tmp_path):
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    bad = PT.propose(L, 'researcher', 'Submit whatever looks good and check every feature.', 'x', 'r1', pod='xsec')['id']
+    res = PT.run_trial(s, bad, desk='perps', pairs=3, hours=0.0, agents=1, runner=_fake_firm(approve_on_null=True))
+    assert res['verdict'] == 'REJECT' and 'stopped early' in res['reason'] and len(res['pair_scores']) == 1
+    runs = json.loads(L.q('SELECT results FROM process_trials')[0]['results'])['runs']
+    assert sorted((r['arm'], r['kind']) for r in runs) == [('base', 'planted'), ('cand', 'null'), ('cand', 'planted')]
