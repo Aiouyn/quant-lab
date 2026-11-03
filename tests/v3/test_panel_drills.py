@@ -135,3 +135,33 @@ def test_macro_planted_respects_execution_lag_and_feature_rows():
     p = p.with_columns((pl.col('adjclose').shift(-2).over('symbol') / pl.col('adjclose').shift(-1).over('symbol') - 1)
                        .alias('r_exec')).filter(pl.col('tradable') == 1).drop_nulls(['r_exec'])
     assert np.corrcoef(p['s'].to_numpy(), p['r_exec'].to_numpy())[0, 1] > 0.05   # tradable after the 1-day delay
+
+
+def test_report_scores_registered_factor_values_against_the_hidden_signal(tmp_path):
+    import dataclasses
+    import json as _json
+    import polars as pl
+    from desk.company.ledger import Ledger
+    from desk.config import SETTINGS
+    from desk.lab import panel_drills as PD
+    from desk.lab.perps import PerpsStore
+    s = dataclasses.replace(SETTINGS, home=tmp_path, store_dir=None)
+    root = s.store / 'perps'
+    root.mkdir(parents=True)
+    perps_panel(n_coins=4).write_parquet(root / 'panel.parquet')
+    PerpsStore(s).splits()
+    PD.build_panel_drill(s, 'perps', 'planted', seed=7)
+    home = tmp_path / 'drills' / 'perps-planted'
+    s2 = dataclasses.replace(s, home=home, store_dir=None)
+    secret = _json.loads((home / 'drill_secret.json').read_text())
+    panel, _, _ = PerpsStore(s2, allowed=('dev',)).load('dev', warmup_days=0)
+    hid = PD.hidden_score(panel, 'perps', secret)
+    L = Ledger(home / 'desk.sqlite3')
+    vdir = s2.artifacts / 'factor_values'
+    vdir.mkdir(parents=True)
+    for fid, vals in (('F-good', hid), ('F-noise', np.random.default_rng(0).normal(size=len(hid)))):
+        L.x("INSERT INTO factors(id,name,resolution,status) VALUES(?,?,?,?)", (fid, fid, 'perps', 'active'))
+        panel.select('ts', 'coin').with_columns(pl.Series('lv', vals)).write_parquet(vdir / f'{fid}.parquet')
+    rep = PD.panel_drill_report(s, 'perps', 'planted')
+    best = rep['best_factor_corr_with_hidden']
+    assert best[0][1] == 'F-good' and best[0][0] > 0.99 and best[-1][0] < 0.1

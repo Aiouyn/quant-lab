@@ -15,7 +15,8 @@ A trial is a paired A/B experiment on drill markets (desk/lab/panel_drills.py):
     - BASE runs the firm with the charters currently live; CAND runs it with the candidate variant added
       (replacing a live variant for the same role and pod, if any);
     - both runs are scored by how well their approved strategies track the hidden signal; if nothing was approved,
-      half the |corr| of the best strategy they built (0 if below 0.1), so a short drill can still show a lift;
+      half the |corr| of the best strategy they built, or a quarter of the best registered factor's (each 0 below
+      0.1), so a short drill can still show which arm got closer;
   plus one null market per pair (returns block-shuffled, nothing to find), run by CAND only.
 
 Pre-registered decision rule (decide()):
@@ -47,6 +48,7 @@ DEFAULT_AGENTS = 8
 MIN_LIFT = 0.05            # mean paired gain in |corr| between approved strategies and the hidden signal
 TIE = 0.02                 # paired differences smaller than this count as neither a win nor a loss
 PARTIAL_CREDIT = 0.5       # weight of a found-but-not-approved signal in a planted run's score
+FACTOR_CREDIT = 0.25       # weight of a registered factor (no strategy) that tracks the hidden signal
 PARTIAL_MIN_CORR = 0.1     # below this |corr| a strategy is treated as not tracking the hidden signal (noise)
 ARM_STATUS = 'arm'         # rows written by the trial runner into a trial run's own (fresh) ledger
 
@@ -196,9 +198,11 @@ def _score(report, kind):
     # Nothing approved: half credit for the best strategy the firm built that tracks the hidden signal at all. Without
     # it a firm that never gets a planted signal through validation in a short drill scores 0 in both arms and no
     # change can ever show a lift. Approval still earns twice as much, and the null-market veto still counts approvals.
-    found = [x[0] for x in report.get('best_corr_with_hidden') or [] if isinstance(x[0], (int, float))]
-    best = max(found, default=0.0)
-    return round(PARTIAL_CREDIT * best, 4) if best >= PARTIAL_MIN_CORR else 0.0
+    def best(key):
+        b = max((x[0] for x in report.get(key) or [] if isinstance(x[0], (int, float))), default=0.0)
+        return b if b >= PARTIAL_MIN_CORR else 0.0
+    return round(max(PARTIAL_CREDIT * best('best_corr_with_hidden'),
+                     FACTOR_CREDIT * best('best_factor_corr_with_hidden')), 4)
 
 
 def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAULT_PAIRS,
@@ -240,7 +244,9 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             _seed_arm(Ledger(home / 'drills' / name / 'desk.sqlite3'), arms[arm])
             runner(s, name, hours, agents)
             rep = panel_drill_report(s, desk, kind)
-            rec.update({'score': _score(rep, kind), 'verdict': rep.get('verdict'), 'approved': rep.get('approved')})
+            rec.update({'score': _score(rep, kind), 'verdict': rep.get('verdict'), 'approved': rep.get('approved'),
+                        'strategies': rep.get('strategies'), 'best_corr': (rep.get('best_corr_with_hidden') or [])[:3],
+                        'best_factor_corr': (rep.get('best_factor_corr_with_hidden') or [])[:3]})
         except (Exception, SystemExit) as e:                 # a failed run scores None: the trial ends in ERROR
             rec.update({'score': None, 'error': repr(e)[:300]})
         return rec
