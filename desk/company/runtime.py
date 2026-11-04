@@ -235,6 +235,10 @@ class Org:
             pb = format_primitive_brief(L, limit=8)
             if pb:
                 parts.append(pb)
+        if agent.role in ('cio', 'lead', 'officer', 'librarian', 'toolsmith'):
+            pp = process_pipeline_text(L)
+            if pp:
+                parts.append(pp)
         cost = self.cost_params()
         parts.append(f'== COST MODEL == taker {cost["taker_bps"]} bps + slippage {cost["slippage_bps"]} bps per side, '
                      f'impact x{cost["impact_mult"]}, latency {cost["latency_s"]}s, hourly funding on.')
@@ -272,6 +276,29 @@ class Org:
         from .rsi import rsi_snapshot
         out['rsi'] = rsi_snapshot(L)['kpis']
         return out
+
+
+def process_pipeline_text(L) -> str:
+    """What the firm has tried to change about itself, so proposers build on it (and know when nothing is queued)."""
+    from ..lab import process_trials as PT
+    try:
+        hist = PT.history(L, limit=6)
+    except Exception:
+        return ''
+    queued = [h for h in hist if h['status'] in ('proposed', 'testing')]
+    lines = ['== PROCESS CHANGES (drill-trialled) ==']
+    for h in hist:
+        scope = h['role'] + ('/' + h['pod'] if h['pod'] else '')
+        verdict = f" {h['verdict']}" if h.get('verdict') else ''
+        lift = f" (lift {h['mean_lift']})" if h.get('mean_lift') is not None else ''
+        why = f" - {h['reason'][:120]}" if h.get('reason') else ''
+        lines.append(f"- {h['id']} [{scope}] {h['status']}{verdict}{lift}: {(h['patch_text'] or '')[:140]}{why}")
+    if not queued:
+        lines.append('Nothing is queued for a trial. If you have seen the firm repeatedly miss real effects, waste '
+                     'sessions, or wave weak work through, propose ONE concrete rule now (process_history, then '
+                     'propose_process_change) or contribute a tested research tool (contribute_primitive). Every '
+                     'proposal is tested on drills before it changes anything.')
+    return '\n'.join(lines)
 
 
 def run_company(settings, agents=28, hours=8.0, concurrency=None, drill=None, tokens_per_hour=None):

@@ -258,3 +258,14 @@ def test_registered_factors_earn_a_quarter_credit():
     rep['best_factor_corr_with_hidden'] = [(0.05, 'F-2', 'weak')]
     rep['best_corr_with_hidden'] = []
     assert PT._score(rep, 'planted') == 0.0
+
+
+def test_proposer_briefs_show_the_process_pipeline_and_nudge_when_empty(tmp_path):
+    from desk.company.runtime import process_pipeline_text
+    L = _ledger(tmp_path)
+    assert 'Nothing is queued' in process_pipeline_text(L)               # nothing ever proposed: nudge
+    vid = PT.propose(L, 'researcher', 'Split dev in halves.', 'drills', 'a1')['id']
+    txt = process_pipeline_text(L)
+    assert vid in txt and 'Nothing is queued' not in txt
+    L.x("UPDATE process_variants SET status='rejected' WHERE id=?", (vid,))
+    assert 'Nothing is queued' in process_pipeline_text(L)
