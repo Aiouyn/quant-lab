@@ -269,3 +269,17 @@ def test_proposer_briefs_show_the_process_pipeline_and_nudge_when_empty(tmp_path
     assert vid in txt and 'Nothing is queued' not in txt
     L.x("UPDATE process_variants SET status='rejected' WHERE id=?", (vid,))
     assert 'Nothing is queued' in process_pipeline_text(L)
+
+
+def test_briefs_show_where_drills_lost_the_planted_signal(tmp_path):
+    from desk.company.runtime import process_pipeline_text
+    L = _ledger(tmp_path)
+    runs = [{'kind': 'planted', 'score': 0.17, 'approved': 0, 'best_corr': [[0.33, 'S-1', 'rejected_review']]},
+            {'kind': 'planted', 'score': 0.4, 'approved': 1, 'best_corr': [[0.4, 'S-2', 'approved']]},
+            {'kind': 'planted', 'score': 0.1, 'approved': 0, 'best_corr': [], 'best_factor_corr': [[0.46, 'F-1', 'active']]},
+            {'kind': 'null', 'score': 0}]
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,results,created) VALUES('PT-1','PV-x','REJECT',?,1)",
+        (json.dumps({'runs': runs}),))
+    txt = process_pipeline_text(L)
+    assert '3 planted runs' in txt and 'approved in 1' in txt
+    assert 'rejected_review: 1' in txt and 'factor only, never submitted: 1' in txt

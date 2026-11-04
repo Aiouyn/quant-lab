@@ -278,6 +278,31 @@ class Org:
         return out
 
 
+def drill_misses(L, trials: int = 6) -> str:
+    """Where recent drill trials lost the planted signal: evidence a proposer can act on."""
+    import json as _json
+    lost, found, approved, runs = {}, 0, 0, 0
+    for r in L.q("SELECT results FROM process_trials WHERE verdict IN ('ACCEPT','REJECT') ORDER BY created DESC LIMIT ?",
+                 (trials,)):
+        for run in (_json.loads(r['results'] or '{}') or {}).get('runs', []):
+            if run.get('kind') != 'planted' or run.get('score') is None:
+                continue
+            runs += 1
+            best = (run.get('best_corr') or [[0, '', '']])[0]
+            if (run.get('approved') or 0) and best[0] >= 0.3:
+                approved += 1
+            elif best and best[0] >= 0.3:
+                found += 1
+                lost[best[2]] = lost.get(best[2], 0) + 1
+            elif max((f[0] for f in run.get('best_factor_corr') or []), default=0) >= 0.3:
+                lost['factor only, never submitted'] = lost.get('factor only, never submitted', 0) + 1
+    if not runs:
+        return ''
+    where = ', '.join(f'{k}: {v}' for k, v in sorted(lost.items(), key=lambda x: -x[1])) or 'none'
+    return (f'Drill evidence (last {trials} trials, {runs} planted runs): planted signal approved in {approved}; '
+            f'found but lost at -> {where}. A rule that fixes the biggest loss point is the best next proposal.')
+
+
 def process_pipeline_text(L) -> str:
     """What the firm has tried to change about itself, so proposers build on it (and know when nothing is queued)."""
     from ..lab import process_trials as PT
@@ -293,6 +318,9 @@ def process_pipeline_text(L) -> str:
         lift = f" (lift {h['mean_lift']})" if h.get('mean_lift') is not None else ''
         why = f" - {h['reason'][:120]}" if h.get('reason') else ''
         lines.append(f"- {h['id']} [{scope}] {h['status']}{verdict}{lift}: {(h['patch_text'] or '')[:140]}{why}")
+    misses = drill_misses(L)
+    if misses:
+        lines.append(misses)
     if not queued:
         lines.append('Nothing is queued for a trial. If you have seen the firm repeatedly miss real effects, waste '
                      'sessions, or wave weak work through, propose ONE concrete rule now (process_history, then '
