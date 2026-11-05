@@ -352,3 +352,12 @@ def test_disk_guard_is_per_drive_and_configurable(tmp_path, monkeypatch):
     assert S.disk_guard_cfg()['D:\\'][0] < S.disk_guard_cfg()['C:\\'][0]
     (tmp_path / 'supervisor.json').write_text(json.dumps({'disk_guard': {'D:\\': [0.5, 1]}}))
     assert S.disk_guard_cfg() == {'D:\\': (0.5, 1.0)}
+
+
+def test_history_shows_each_variant_once_with_its_latest_verdict(tmp_path):
+    L = _ledger(tmp_path)
+    vid = PT.propose(L, 'researcher', 'Rank-test check every feature cross-sectionally.', 'r', 'lead', pod='xsec')['id']
+    for i, v in enumerate(('ABORTED', 'REJECT', 'ACCEPT')):
+        L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES(?,?,?,?)", (f'PT-{i}', vid, v, i + 1))
+    h = [r for r in PT.history(L) if r['id'] == vid]
+    assert len(h) == 1 and h[0]['verdict'] == 'ACCEPT' and h[0]['trials'] == 3
