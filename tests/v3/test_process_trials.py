@@ -314,3 +314,41 @@ def test_trial_loop_requeues_interrupted_trials_and_runs_the_queue(tmp_path):
     assert L.q("SELECT verdict FROM process_trials WHERE id='PT-dead'")[0]['verdict'] == 'ABORTED'
     assert any('ABORTED' in m for m in logs) and any('trial start' in m for m in logs)
     assert L.q('SELECT status FROM process_variants WHERE id=?', (vid,))[0]['status'] in ('active', 'rejected')
+
+
+def test_prune_drops_market_copies_but_keeps_ledgers_and_secrets(tmp_path):
+    import os
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-done','PV-x','REJECT',1)")
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-live','PV-y','RUNNING',1)")
+    real = tmp_path / 'real_store'
+    (real / 'perps').mkdir(parents=True)
+    (real / 'perps' / 'keep.parquet').write_bytes(b'x' * 10)
+    for tid in ('PT-done', 'PT-live'):
+        run = tmp_path / 'trials' / tid / 'base-0' / 'drills' / 'base_planted'
+        for sub in ('store/perps', 'artifacts', 'workspaces/r1'):
+            (run / sub).mkdir(parents=True)
+        (run / 'store' / 'perps' / 'panel.parquet').write_bytes(b'x' * 1000)
+        (run / 'desk.sqlite3').write_bytes(b'db')
+        (run / 'drill_secret.json').write_text('{}')
+    linked = tmp_path / 'trials' / 'PT-done' / 'cand-0' / 'drills' / 'cand_null'
+    linked.mkdir(parents=True)
+    try:
+        os.symlink(real, linked / 'store', target_is_directory=True)
+    except OSError:
+        pass
+    out = PT.prune_finished(s, L)
+    done = tmp_path / 'trials' / 'PT-done' / 'base-0' / 'drills' / 'base_planted'
+    assert out['runs'] == 2 and not (done / 'store').exists() and not (done / 'workspaces').exists()
+    assert (done / 'desk.sqlite3').exists() and (done / 'drill_secret.json').exists()
+    assert (tmp_path / 'trials' / 'PT-live' / 'base-0' / 'drills' / 'base_planted' / 'store').exists()
+    assert (real / 'perps' / 'keep.parquet').exists()                   # a linked store is never followed
+
+
+def test_disk_guard_is_per_drive_and_configurable(tmp_path, monkeypatch):
+    from desk.ops import supervisor as S
+    monkeypatch.setattr(S, 'HOME', tmp_path)
+    assert S.disk_guard_cfg()['D:\\'][0] < S.disk_guard_cfg()['C:\\'][0]
+    (tmp_path / 'supervisor.json').write_text(json.dumps({'disk_guard': {'D:\\': [0.5, 1]}}))
+    assert S.disk_guard_cfg() == {'D:\\': (0.5, 1.0)}

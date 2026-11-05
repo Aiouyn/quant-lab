@@ -351,7 +351,14 @@ python -m desk process trial                        # trial the oldest proposal 
 python -m desk process trial PV-1a2b3c --desk macro --pairs 3 --hours 2 --agents 8
 python -m desk process retire PV-1a2b3c --rationale "superseded"
 python -m desk process loop --desk perps --pairs 3 --hours 2 --agents 6   # trial every queued proposal, forever
+python -m desk process prune                        # delete market copies of finished trials (ledgers kept)
 ```
+
+Each drill run is pruned as soon as it is scored: its market copy, factor cache and agent workspaces are deleted, and
+its ledger and `drill_secret.json` stay so every score can still be audited. Links (a junction to the real store) are
+never followed. The supervisor's disk guard is per drive: by default the firm pauses below 3 GB free on C: (resumes at
+6 GB) and below 0.75 GB on D: (resumes at 1.25 GB). Override with `"disk_guard": {"D:\\": [0.5, 1.0]}` in
+`supervisor.json`.
 
 The supervisor runs `process loop` as its `trials` service, so every proposal is trialled without a human. A trial cut
 off by a reboot is marked ABORTED and its proposal re-queued. When nothing has been proposed or queued for 12 hours,

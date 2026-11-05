@@ -244,6 +244,7 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             _seed_arm(Ledger(home / 'drills' / name / 'desk.sqlite3'), arms[arm])
             runner(s, name, hours, agents)
             rep = panel_drill_report(s, desk, kind)
+            prune_run(home / 'drills' / name)               # scored: drop the bulky market copy, keep ledger + secret
             rec.update({'score': _score(rep, kind), 'verdict': rep.get('verdict'), 'approved': rep.get('approved'),
                         'strategies': rep.get('strategies'), 'best_corr': (rep.get('best_corr_with_hidden') or [])[:3],
                         'best_factor_corr': (rep.get('best_factor_corr_with_hidden') or [])[:3]})
@@ -283,6 +284,39 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
     L.event('process-trials', 'PROCESS_TRIAL', {'trial': tid, 'variant': variant_id, **decision})
     return {'trial': tid, 'variant': variant_id, 'role': cand['role'], 'pod': cand['pod'], **decision,
             'pair_scores': pair_scores, 'null_false_discoveries_per_pair': nulls}
+
+
+BULKY = ('store', 'artifacts', 'workspaces')
+
+
+def prune_run(drill_home) -> int:
+    """Delete a scored drill run's market copy, cached factor values and agent workspaces (several GB per trial).
+    The drill ledger and drill_secret.json stay, so every score can still be audited."""
+    import shutil
+    from pathlib import Path
+    freed, home = 0, Path(drill_home).resolve()
+    for sub in BULKY:
+        d = Path(drill_home) / sub
+        if d.is_symlink() or getattr(d, 'is_junction', lambda: False)():
+            continue                                # a link to the real store: never follow it
+        if d.is_dir() and d.resolve().parent == home:
+            freed += sum(f.stat().st_size for f in d.rglob('*') if f.is_file())
+            shutil.rmtree(d, ignore_errors=True)
+    return freed
+
+
+def prune_finished(settings, L) -> dict:
+    """Prune every drill run of trials that are no longer RUNNING."""
+    root = settings.home / 'trials'
+    done = {r['id'] for r in L.q("SELECT id FROM process_trials WHERE verdict != 'RUNNING'")}
+    freed, runs = 0, 0
+    for tdir in (root.iterdir() if root.is_dir() else []):
+        if tdir.name not in done:
+            continue
+        for drill_home in tdir.glob('*/drills/*'):
+            freed += prune_run(drill_home)
+            runs += 1
+    return {'runs': runs, 'freed_gb': round(freed / 1e9, 2)}
 
 
 def recover_stale(L) -> list[str]:
