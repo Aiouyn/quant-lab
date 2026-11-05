@@ -5,9 +5,11 @@ Every 60 s:
     a dead service is restarted (with exponential backoff if it keeps dying);
   * code changes under desk/ (content hash) restart the long-running services so nothing runs stale code
     (recorders restart just after their hourly flush, at hh:00:45, to lose no data);
-  * disk guard: below MIN_FREE_GB on C: or D: the research firm is stopped gracefully and its restart is held until
-    RESUME_FREE_GB is available again (recorders keep running: they write little);
-  * daily at 13:10 UTC: desk.data.refresh (forward holdout data + panel rebuild).
+  * disk guard: below a per-drive floor (DISK_GUARD: C: 3/6 GB, D: 0.75/1.25 GB) the research firm and the trial loop
+    are stopped gracefully and held until every drive is back above its resume level (recorders keep running);
+  * daily at 13:10 UTC: desk.data.refresh (forward holdout data + panel rebuild);
+  * the `trials` service runs a drill trial for every queued process proposal (it exits between trials when the code
+    changed, and is restarted on the new code; a trial interrupted by a reboot is re-queued).
 Config/state: results/v3/supervisor.json (enable/disable services, firm size), status in supervisor_status.json,
 log in supervisor.log. Run: python -m desk.ops.supervisor   (installed as a Windows logon task by `--install`)
 """
@@ -29,6 +31,9 @@ ROOT = Path(__file__).resolve().parents[2]
 HOME = ROOT / 'results' / 'v3'
 PY = sys.executable.replace('pythonw.exe', 'python.exe')
 MIN_FREE_GB, RESUME_FREE_GB = 3.0, 6.0
+# per drive: (pause below, resume at). C: holds results (ledgers, workspaces, trials); D: holds the market store, which
+# the firm mostly reads (~0.3 GB written a day), so it gets a lower floor. Override in supervisor.json 'disk_guard'.
+DISK_GUARD = {'C:\\': (MIN_FREE_GB, RESUME_FREE_GB), 'D:\\': (0.75, 1.25)}
 
 DEFAULT = {
     'firm': {'enabled': True, 'cmd': ['-m', 'desk', 'run', '--agents', '16', '--hours', '8760'], 'match': 'desk run',
@@ -37,6 +42,8 @@ DEFAULT = {
                         'reload': 'after_flush'},
     'hl_recorder': {'enabled': True, 'cmd': ['-m', 'desk', 'record', '--coins', 'BTC,ETH,SOL,HYPE,XRP,DOGE,SUI,ENA', '--hours', '8760',
                                              '--archive', 'G:\\Mon Drive\\HL_L2'], 'match': 'desk record', 'reload': 'after_flush'},
+    'trials': {'enabled': True, 'cmd': ['-u', '-m', 'desk', 'process', 'loop', '--desk', 'perps', '--pairs', '3', '--hours', '2',
+                                        '--agents', '6'], 'match': 'desk process loop', 'reload': 'never', 'disk_guarded': True},
     'regime': {'enabled': True, 'cmd': ['-m', 'desk.live.regime', '--loop'], 'match': 'desk.live.regime', 'reload': 'now'},
     'dashboard': {'enabled': True, 'cmd': ['-m', 'desk', 'serve', '--port', '8900'], 'match': 'desk serve', 'reload': 'now'},
     'hl_carry_paper': {'enabled': True, 'cmd': ['-m', 'desk.live.hl_carry_paper', '2160'], 'match': 'desk.live.hl_carry_paper',
@@ -175,6 +182,16 @@ def stop(name, procs, graceful=False):
     log(f'stopped {name} ({len(procs)} process(es), graceful={graceful})')
 
 
+def disk_guard_cfg():
+    """{drive: (pause_below_gb, resume_at_gb)} from supervisor.json 'disk_guard', else DISK_GUARD."""
+    f = HOME / 'supervisor.json'
+    try:
+        g = json.loads(f.read_text()).get('disk_guard') if f.exists() else None
+    except (OSError, ValueError):
+        g = None
+    return {d: (float(v[0]), float(v[1])) for d, v in g.items()} if g else dict(DISK_GUARD)
+
+
 def free_gb(drive):
     try:
         return shutil.disk_usage(drive).free / 1e9
@@ -239,15 +256,18 @@ def main():
                 for k in state:
                     state[k]['pending_reload'] = True
                 h0 = h
-        low = min(free_gb('C:\\'), free_gb('D:\\'))
-        if low < MIN_FREE_GB and not disk_paused:
+        guard = disk_guard_cfg()
+        free = {d: free_gb(d) for d in guard}
+        low = min(free.values())
+        short = [d for d, (lo, _) in guard.items() if free[d] < lo]
+        if short and not disk_paused:
             disk_paused = True
-            log(f'DISK GUARD: {low:.1f} GB free -> pausing the firm')
+            log(f'DISK GUARD: {", ".join(f"{d} {free[d]:.1f} GB" for d in short)} free -> pausing the firm')
             request_graceful_stop('firm')
             state['firm']['stopping_since'] = time.time()
-        elif disk_paused and low >= RESUME_FREE_GB:
+        elif disk_paused and all(free[d] >= hi for d, (_, hi) in guard.items()):
             disk_paused = False
-            log(f'disk recovered ({low:.1f} GB): firm may restart')
+            log(f'disk recovered ({", ".join(f"{d} {v:.1f} GB" for d, v in free.items())}): firm may restart')
         status = {'updated': time.time(), 'pid': os.getpid(), 'disk_free_min_gb': round(low, 1), 'disk_paused': disk_paused,
                   'services': {}}
         for name, svc in cfg.items():

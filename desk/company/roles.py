@@ -146,6 +146,9 @@ HOW WE WORK
 - Communicate crisply: message colleagues with ids and numbers. Ask for reviews. Build on others' factors by id.
 - Be token-efficient: think hard, act decisively, avoid repeating tool calls whose results you already have.
 - When your session's goal is reached or you are blocked, call end_session with a concise summary.
+- The firm never pauses itself waiting for a human. If you think a line of research should stop, say so (memo or
+  message) and move to the best remaining direction: untried data, a different mechanism or horizon, or a process
+  change. Only an OPERATOR DIRECTIVE in your brief can halt or redirect the whole firm, and it overrides any memo.
 '''
 
 PERPS = ("PERPS desk (main ground): strategies set DESK = 'perps', PARAMS, WARMUP_DAYS and "

@@ -66,13 +66,15 @@ def main(argv=None):
     rsi_p.add_argument('--apply', action='store_true', help='quarantine: actually move rows (default is a dry run)')
     pr = sub.add_parser('process', help='process changes for agent charters: list, propose, trial (paired drill A/B), '
                                         'retire. A change goes live only when a trial accepts it.')
-    pr.add_argument('action', nargs='?', default='list', choices=['list', 'propose', 'trial', 'retire'])
+    pr.add_argument('action', nargs='?', default='list', choices=['list', 'propose', 'trial', 'retire', 'loop', 'prune'])
     pr.add_argument('variant_id', nargs='?', help='trial/retire: variant id (trial defaults to the oldest proposal)')
     pr.add_argument('--role'); pr.add_argument('--pod'); pr.add_argument('--patch'); pr.add_argument('--rationale')
     pr.add_argument('--desk', choices=['perps', 'macro'], default='perps')
     pr.add_argument('--pairs', type=int, default=3); pr.add_argument('--hours', type=float, default=2.0)
     pr.add_argument('--agents', type=int, default=8)
     pr.add_argument('--serial', action='store_true', help='trial: run the 3 drills of each pair one after another')
+    op = sub.add_parser('operator', help='post an operator directive shown first in every agent brief (no text: show the current one)')
+    op.add_argument('text', nargs='?')
     cm = sub.add_parser('costs', help='review cost-model proposals from agents (loosening needs a human)')
     cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
     cm.add_argument('proposal_id', nargs='?', type=int)
@@ -137,6 +139,13 @@ def main(argv=None):
         from .company.ledger import Ledger
         Ledger(s.ledger).request_stop()
         _print('stop requested; agents finish their current step')
+        return 0
+    if a.cmd == 'operator':
+        from .company.ledger import Ledger
+        L = Ledger(s.ledger)
+        if a.text:
+            L.memo('operator', 'operator', a.text)
+        _print(L.latest_memo('operator') or 'no operator directive')
         return 0
     if a.cmd == 'status':
         from .company.ledger import Ledger
@@ -248,6 +257,15 @@ def main(argv=None):
             ok = PT.retire(L, a.variant_id, a.rationale or 'retired by human')
             print(f'{a.variant_id} retired' if ok else f'{a.variant_id} is not active or proposed')
             return 0 if ok else 1
+        if a.action == 'prune':                      # delete market copies of finished trials (ledgers are kept)
+            _print(PT.prune_finished(s, L))
+            return 0
+        if a.action == 'loop':                       # supervisor service: trial every queued proposal, forever
+            from .ops.supervisor import code_hash
+            h0 = code_hash()
+            PT.trial_loop(s, desk=a.desk, pairs=a.pairs, hours=a.hours, agents=a.agents,
+                          stop=lambda: code_hash() != h0, log=lambda m: print(m, flush=True))
+            return 0
         vid = a.variant_id or PT.next_proposed(L)
         if not vid:
             print('no proposed process variant to trial')

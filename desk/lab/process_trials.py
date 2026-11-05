@@ -244,6 +244,7 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             _seed_arm(Ledger(home / 'drills' / name / 'desk.sqlite3'), arms[arm])
             runner(s, name, hours, agents)
             rep = panel_drill_report(s, desk, kind)
+            prune_run(home / 'drills' / name)               # scored: drop the bulky market copy, keep ledger + secret
             rec.update({'score': _score(rep, kind), 'verdict': rep.get('verdict'), 'approved': rep.get('approved'),
                         'strategies': rep.get('strategies'), 'best_corr': (rep.get('best_corr_with_hidden') or [])[:3],
                         'best_factor_corr': (rep.get('best_factor_corr_with_hidden') or [])[:3]})
@@ -285,6 +286,68 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             'pair_scores': pair_scores, 'null_false_discoveries_per_pair': nulls}
 
 
+BULKY = ('store', 'artifacts', 'workspaces')
+
+
+def prune_run(drill_home) -> int:
+    """Delete a scored drill run's market copy, cached factor values and agent workspaces (several GB per trial).
+    The drill ledger and drill_secret.json stay, so every score can still be audited."""
+    import shutil
+    from pathlib import Path
+    freed, home = 0, Path(drill_home).resolve()
+    for sub in BULKY:
+        d = Path(drill_home) / sub
+        if d.is_symlink() or getattr(d, 'is_junction', lambda: False)():
+            continue                                # a link to the real store: never follow it
+        if d.is_dir() and d.resolve().parent == home:
+            freed += sum(f.stat().st_size for f in d.rglob('*') if f.is_file())
+            shutil.rmtree(d, ignore_errors=True)
+    return freed
+
+
+def prune_finished(settings, L) -> dict:
+    """Prune every drill run of trials that are no longer RUNNING."""
+    root = settings.home / 'trials'
+    done = {r['id'] for r in L.q("SELECT id FROM process_trials WHERE verdict != 'RUNNING'")}
+    freed, runs = 0, 0
+    for tdir in (root.iterdir() if root.is_dir() else []):
+        if tdir.name not in done:
+            continue
+        for drill_home in tdir.glob('*/drills/*'):
+            freed += prune_run(drill_home)
+            runs += 1
+    return {'runs': runs, 'freed_gb': round(freed / 1e9, 2)}
+
+
+def recover_stale(L) -> list[str]:
+    """Trials still marked RUNNING when the trial loop starts were killed (reboot, crash): mark them ABORTED and put
+    their variants back in the queue. Only call this from the single trial loop."""
+    out = []
+    for r in L.q("SELECT id, variant_id FROM process_trials WHERE verdict='RUNNING'"):
+        L.x("UPDATE process_trials SET verdict='ABORTED', finished=? WHERE id=?", (time.time(), r['id']))
+        L.x("UPDATE process_variants SET status='proposed' WHERE id=? AND status='testing'", (r['variant_id'],))
+        out.append(r['id'])
+    return out
+
+
+def trial_loop(settings, desk='perps', pairs=DEFAULT_PAIRS, hours=DEFAULT_HOURS, agents=DEFAULT_AGENTS,
+               idle_s=600, stop=None, log=print, runner=None):
+    """Run queued proposals one after another, forever (managed by the supervisor). Returns when stop() is true,
+    which the supervisor service uses to restart on new code between trials."""
+    from ..company.ledger import Ledger
+    L = Ledger(settings.ledger)
+    for tid in recover_stale(L):
+        log(f'trial {tid} was interrupted: marked ABORTED, its proposal re-queued')
+    while not (stop and stop()):
+        vid = next_proposed(L)
+        if not vid:
+            time.sleep(idle_s)
+            continue
+        log(f'trial start {vid}')
+        res = run_trial(settings, vid, desk=desk, pairs=pairs, hours=hours, agents=agents, runner=runner)
+        log(f"trial {res['trial']} {vid}: {res['verdict']} - {res.get('reason')}")
+
+
 def next_proposed(L) -> str | None:
     r = L.q("SELECT id FROM process_variants WHERE status='proposed' ORDER BY created LIMIT 1")
     return r[0]['id'] if r else None
@@ -293,8 +356,10 @@ def next_proposed(L) -> str | None:
 def history(L, limit: int = 20) -> list[dict]:
     """What was tried and what the drills said: agents read this before proposing again."""
     out = []
-    for r in L.q('SELECT v.id, v.role, v.pod, v.patch_text, v.author, v.status, t.verdict, t.results '
-                 'FROM process_variants v LEFT JOIN process_trials t ON t.variant_id=v.id '
+    for r in L.q('SELECT v.id, v.role, v.pod, v.patch_text, v.author, v.status, t.verdict, t.results, '
+                 '(SELECT COUNT(*) FROM process_trials x WHERE x.variant_id=v.id) trials '
+                 'FROM process_variants v LEFT JOIN process_trials t ON t.id = (SELECT id FROM process_trials y '
+                 '  WHERE y.variant_id=v.id ORDER BY y.created DESC, y.rowid DESC LIMIT 1) '
                  'ORDER BY v.created DESC LIMIT ?', (limit,)):
         dec = (json.loads(r.pop('results') or '{}') or {}).get('decision') or {}
         out.append({**r, 'reason': dec.get('reason'), 'mean_lift': dec.get('mean_lift')})

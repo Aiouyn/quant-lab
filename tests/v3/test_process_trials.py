@@ -258,3 +258,122 @@ def test_registered_factors_earn_a_quarter_credit():
     rep['best_factor_corr_with_hidden'] = [(0.05, 'F-2', 'weak')]
     rep['best_corr_with_hidden'] = []
     assert PT._score(rep, 'planted') == 0.0
+
+
+def test_proposer_briefs_show_the_process_pipeline_and_nudge_when_empty(tmp_path):
+    from desk.company.runtime import process_pipeline_text
+    L = _ledger(tmp_path)
+    assert 'Nothing is queued' in process_pipeline_text(L)               # nothing ever proposed: nudge
+    vid = PT.propose(L, 'researcher', 'Split dev in halves.', 'drills', 'a1')['id']
+    txt = process_pipeline_text(L)
+    assert vid in txt and 'Nothing is queued' not in txt
+    L.x("UPDATE process_variants SET status='rejected' WHERE id=?", (vid,))
+    assert 'Nothing is queued' in process_pipeline_text(L)
+
+
+def test_briefs_show_where_drills_lost_the_planted_signal(tmp_path):
+    from desk.company.runtime import process_pipeline_text
+    L = _ledger(tmp_path)
+    runs = [{'kind': 'planted', 'score': 0.17, 'approved': 0, 'best_corr': [[0.33, 'S-1', 'rejected_review']]},
+            {'kind': 'planted', 'score': 0.4, 'approved': 1, 'best_corr': [[0.4, 'S-2', 'approved']]},
+            {'kind': 'planted', 'score': 0.1, 'approved': 0, 'best_corr': [], 'best_factor_corr': [[0.46, 'F-1', 'active']]},
+            {'kind': 'null', 'score': 0}]
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,results,created) VALUES('PT-1','PV-x','REJECT',?,1)",
+        (json.dumps({'runs': runs}),))
+    txt = process_pipeline_text(L)
+    assert '3 planted runs' in txt and 'approved in 1' in txt
+    assert 'rejected_review: 1' in txt and 'factor only, never submitted: 1' in txt
+
+
+def test_cio_gets_a_mandatory_proposal_objective_when_the_queue_is_dry(tmp_path):
+    import time as _t
+    from desk.company.runtime import proposal_due
+    L = _ledger(tmp_path)
+    assert proposal_due(L)                                                # never proposed
+    vid = PT.propose(L, 'lead', 'rule', 'why', 'cio')['id']
+    assert not proposal_due(L)                                            # queued
+    L.x("UPDATE process_variants SET status='rejected' WHERE id=?", (vid,))
+    assert not proposal_due(L)                                            # proposed recently
+    L.x("UPDATE process_variants SET created=? WHERE id=?", (_t.time() - 13 * 3600, vid))
+    assert proposal_due(L)
+
+
+def test_trial_loop_requeues_interrupted_trials_and_runs_the_queue(tmp_path):
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    vid = PT.propose(L, 'researcher', 'Rank-test check every feature cross-sectionally.', 'r', 'lead', pod='xsec')['id']
+    L.x("UPDATE process_variants SET status='testing' WHERE id=?", (vid,))
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-dead',?,'RUNNING',1)", (vid,))
+    calls = {'n': 0}
+
+    def stop():
+        calls['n'] += 1
+        return calls['n'] > 1                                             # one pass through the loop
+    logs = []
+    PT.trial_loop(s, pairs=1, hours=0.0, agents=1, idle_s=0, stop=stop, log=logs.append, runner=_fake_firm())
+    assert L.q("SELECT verdict FROM process_trials WHERE id='PT-dead'")[0]['verdict'] == 'ABORTED'
+    assert any('ABORTED' in m for m in logs) and any('trial start' in m for m in logs)
+    assert L.q('SELECT status FROM process_variants WHERE id=?', (vid,))[0]['status'] in ('active', 'rejected')
+
+
+def test_prune_drops_market_copies_but_keeps_ledgers_and_secrets(tmp_path):
+    import os
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-done','PV-x','REJECT',1)")
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-live','PV-y','RUNNING',1)")
+    real = tmp_path / 'real_store'
+    (real / 'perps').mkdir(parents=True)
+    (real / 'perps' / 'keep.parquet').write_bytes(b'x' * 10)
+    for tid in ('PT-done', 'PT-live'):
+        run = tmp_path / 'trials' / tid / 'base-0' / 'drills' / 'base_planted'
+        for sub in ('store/perps', 'artifacts', 'workspaces/r1'):
+            (run / sub).mkdir(parents=True)
+        (run / 'store' / 'perps' / 'panel.parquet').write_bytes(b'x' * 1000)
+        (run / 'desk.sqlite3').write_bytes(b'db')
+        (run / 'drill_secret.json').write_text('{}')
+    linked = tmp_path / 'trials' / 'PT-done' / 'cand-0' / 'drills' / 'cand_null'
+    linked.mkdir(parents=True)
+    try:
+        os.symlink(real, linked / 'store', target_is_directory=True)
+    except OSError:
+        pass
+    out = PT.prune_finished(s, L)
+    done = tmp_path / 'trials' / 'PT-done' / 'base-0' / 'drills' / 'base_planted'
+    assert out['runs'] == 2 and not (done / 'store').exists() and not (done / 'workspaces').exists()
+    assert (done / 'desk.sqlite3').exists() and (done / 'drill_secret.json').exists()
+    assert (tmp_path / 'trials' / 'PT-live' / 'base-0' / 'drills' / 'base_planted' / 'store').exists()
+    assert (real / 'perps' / 'keep.parquet').exists()                   # a linked store is never followed
+
+
+def test_disk_guard_is_per_drive_and_configurable(tmp_path, monkeypatch):
+    from desk.ops import supervisor as S
+    monkeypatch.setattr(S, 'HOME', tmp_path)
+    assert S.disk_guard_cfg()['D:\\'][0] < S.disk_guard_cfg()['C:\\'][0]
+    (tmp_path / 'supervisor.json').write_text(json.dumps({'disk_guard': {'D:\\': [0.5, 1]}}))
+    assert S.disk_guard_cfg() == {'D:\\': (0.5, 1.0)}
+
+
+def test_history_shows_each_variant_once_with_its_latest_verdict(tmp_path):
+    L = _ledger(tmp_path)
+    vid = PT.propose(L, 'researcher', 'Rank-test check every feature cross-sectionally.', 'r', 'lead', pod='xsec')['id']
+    for i, v in enumerate(('ABORTED', 'REJECT', 'ACCEPT')):
+        L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES(?,?,?,?)", (f'PT-{i}', vid, v, i + 1))
+    h = [r for r in PT.history(L) if r['id'] == vid]
+    assert len(h) == 1 and h[0]['verdict'] == 'ACCEPT' and h[0]['trials'] == 3
+
+
+def test_operator_directive_leads_every_brief_and_the_firm_never_self_freezes(tmp_path):
+    import time as _t
+    from types import SimpleNamespace
+    from desk.company.roles import charter
+    from desk.company.runtime import Org
+    L = _ledger(tmp_path)
+    L.memo('cio', 'desk', 'Stop all new theses until the operator decides.')
+    L.memo('operator', 'operator', 'Continue: focus on the macro data.')
+    org = SimpleNamespace(ledger=L, started=_t.time(), deadline=_t.time() + 3600, settings=SimpleNamespace(home=tmp_path),
+                          cost_params=lambda: dict(taker_bps=4.5, slippage_bps=0.5, impact_mult=1, latency_s=1))
+    agent = SimpleNamespace(name='xsec-r1', role='researcher', pod='xsec', workspace=tmp_path)
+    txt = Org.brief(org, agent)
+    assert txt.index('OPERATOR DIRECTIVE') < txt.index('DESK MEMO') and 'macro data' in txt
+    assert 'never pauses itself' in charter('researcher', 'xsec')
