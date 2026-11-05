@@ -66,7 +66,7 @@ def main(argv=None):
     rsi_p.add_argument('--apply', action='store_true', help='quarantine: actually move rows (default is a dry run)')
     pr = sub.add_parser('process', help='process changes for agent charters: list, propose, trial (paired drill A/B), '
                                         'retire. A change goes live only when a trial accepts it.')
-    pr.add_argument('action', nargs='?', default='list', choices=['list', 'propose', 'trial', 'retire'])
+    pr.add_argument('action', nargs='?', default='list', choices=['list', 'propose', 'trial', 'retire', 'loop'])
     pr.add_argument('variant_id', nargs='?', help='trial/retire: variant id (trial defaults to the oldest proposal)')
     pr.add_argument('--role'); pr.add_argument('--pod'); pr.add_argument('--patch'); pr.add_argument('--rationale')
     pr.add_argument('--desk', choices=['perps', 'macro'], default='perps')
@@ -248,6 +248,12 @@ def main(argv=None):
             ok = PT.retire(L, a.variant_id, a.rationale or 'retired by human')
             print(f'{a.variant_id} retired' if ok else f'{a.variant_id} is not active or proposed')
             return 0 if ok else 1
+        if a.action == 'loop':                       # supervisor service: trial every queued proposal, forever
+            from .ops.supervisor import code_hash
+            h0 = code_hash()
+            PT.trial_loop(s, desk=a.desk, pairs=a.pairs, hours=a.hours, agents=a.agents,
+                          stop=lambda: code_hash() != h0, log=lambda m: print(m, flush=True))
+            return 0
         vid = a.variant_id or PT.next_proposed(L)
         if not vid:
             print('no proposed process variant to trial')

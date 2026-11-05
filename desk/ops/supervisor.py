@@ -7,7 +7,9 @@ Every 60 s:
     (recorders restart just after their hourly flush, at hh:00:45, to lose no data);
   * disk guard: below MIN_FREE_GB on C: or D: the research firm is stopped gracefully and its restart is held until
     RESUME_FREE_GB is available again (recorders keep running: they write little);
-  * daily at 13:10 UTC: desk.data.refresh (forward holdout data + panel rebuild).
+  * daily at 13:10 UTC: desk.data.refresh (forward holdout data + panel rebuild);
+  * the `trials` service runs a drill trial for every queued process proposal (it exits between trials when the code
+    changed, and is restarted on the new code; a trial interrupted by a reboot is re-queued).
 Config/state: results/v3/supervisor.json (enable/disable services, firm size), status in supervisor_status.json,
 log in supervisor.log. Run: python -m desk.ops.supervisor   (installed as a Windows logon task by `--install`)
 """
@@ -37,6 +39,8 @@ DEFAULT = {
                         'reload': 'after_flush'},
     'hl_recorder': {'enabled': True, 'cmd': ['-m', 'desk', 'record', '--coins', 'BTC,ETH,SOL,HYPE,XRP,DOGE,SUI,ENA', '--hours', '8760',
                                              '--archive', 'G:\\Mon Drive\\HL_L2'], 'match': 'desk record', 'reload': 'after_flush'},
+    'trials': {'enabled': True, 'cmd': ['-u', '-m', 'desk', 'process', 'loop', '--desk', 'perps', '--pairs', '3', '--hours', '2',
+                                        '--agents', '6'], 'match': 'desk process loop', 'reload': 'never', 'disk_guarded': True},
     'regime': {'enabled': True, 'cmd': ['-m', 'desk.live.regime', '--loop'], 'match': 'desk.live.regime', 'reload': 'now'},
     'dashboard': {'enabled': True, 'cmd': ['-m', 'desk', 'serve', '--port', '8900'], 'match': 'desk serve', 'reload': 'now'},
     'hl_carry_paper': {'enabled': True, 'cmd': ['-m', 'desk.live.hl_carry_paper', '2160'], 'match': 'desk.live.hl_carry_paper',
