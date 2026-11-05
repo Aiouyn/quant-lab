@@ -169,6 +169,10 @@ class Org:
         parts = [f'SESSION BRIEF for {agent.name} (role={agent.role}, pod={agent.pod}) - '
                  f'{time.strftime("%Y-%m-%d %H:%M")} - run elapsed {(now - self.started) / 3600:.1f} h, '
                  f'remaining {(self.deadline - now) / 3600:.1f} h.']
+        op = L.latest_memo('operator')
+        if op:
+            parts.append(f'== OPERATOR DIRECTIVE ({(now - op["created"]) / 3600:.1f} h ago; overrides any desk memo) ==\n'
+                         f'{op["body"][:2000]}')
         memo = L.latest_memo('desk')
         if memo:
             parts.append(f'== DESK MEMO (from {memo["author"]}, {(now - memo["created"]) / 60:.0f} min ago) ==\n{memo["body"][:2500]}')

@@ -101,6 +101,7 @@ python -m desk serve --port 8900         # read-only control room: http://127.0.
 python -m desk status                    # KPIs, token use, funnel
 python -m desk forward                   # ingest NEW Drive days -> rolling forward holdout for approved strategies (also automatic every 6 h)
 python -m desk stop                      # graceful stop (agents finish their current step)
+python -m desk operator "Continue: focus on X"   # directive shown first in every brief (overrides desk memos)
 ```
 
 - **Model: Claude on your Claude plan.** Set `LLM_PROVIDER=claude_code` and run a small firm (`--agents 4`). Each agent

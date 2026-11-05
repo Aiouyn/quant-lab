@@ -73,6 +73,8 @@ def main(argv=None):
     pr.add_argument('--pairs', type=int, default=3); pr.add_argument('--hours', type=float, default=2.0)
     pr.add_argument('--agents', type=int, default=8)
     pr.add_argument('--serial', action='store_true', help='trial: run the 3 drills of each pair one after another')
+    op = sub.add_parser('operator', help='post an operator directive shown first in every agent brief (no text: show the current one)')
+    op.add_argument('text', nargs='?')
     cm = sub.add_parser('costs', help='review cost-model proposals from agents (loosening needs a human)')
     cm.add_argument('action', nargs='?', default='list', choices=['list', 'approve', 'reject'])
     cm.add_argument('proposal_id', nargs='?', type=int)
@@ -137,6 +139,13 @@ def main(argv=None):
         from .company.ledger import Ledger
         Ledger(s.ledger).request_stop()
         _print('stop requested; agents finish their current step')
+        return 0
+    if a.cmd == 'operator':
+        from .company.ledger import Ledger
+        L = Ledger(s.ledger)
+        if a.text:
+            L.memo('operator', 'operator', a.text)
+        _print(L.latest_memo('operator') or 'no operator directive')
         return 0
     if a.cmd == 'status':
         from .company.ledger import Ledger
