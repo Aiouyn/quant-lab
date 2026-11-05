@@ -242,8 +242,15 @@ class Org:
         cost = self.cost_params()
         parts.append(f'== COST MODEL == taker {cost["taker_bps"]} bps + slippage {cost["slippage_bps"]} bps per side, '
                      f'impact x{cost["impact_mult"]}, latency {cost["latency_s"]}s, hourly funding on.')
-        parts.append('Plan this session: choose the single highest-value objective for the firm given everything above, '
-                     'execute it with tools, record what you learned, update your notebook, and end_session.')
+        if agent.role == 'cio' and proposal_due(L):
+            parts.append('THIS SESSION\'S OBJECTIVE (set by the firm, overrides your own plan): no process change has been '
+                         'proposed or queued for a while, so the firm has stopped improving how it works. Read '
+                         'process_history and the drill evidence above, pick the biggest loss point, and file exactly ONE '
+                         'concrete, testable rule with propose_process_change (role, optional pod, rule text, the evidence '
+                         'as rationale). Then end_session.')
+        else:
+            parts.append('Plan this session: choose the single highest-value objective for the firm given everything above, '
+                         'execute it with tools, record what you learned, update your notebook, and end_session.')
         return '\n\n'.join(parts)
 
     # ------------------------------------------------------------------ CIO analytics
@@ -276,6 +283,16 @@ class Org:
         from .rsi import rsi_snapshot
         out['rsi'] = rsi_snapshot(L)['kpis']
         return out
+
+
+PROPOSAL_GAP_S = 12 * 3600
+
+
+def proposal_due(L, gap_s: float = PROPOSAL_GAP_S) -> bool:
+    """True when nothing is queued for a trial and no process change was proposed for `gap_s`."""
+    q = L.q("SELECT COUNT(*) n, MAX(created) last FROM process_variants")[0]
+    queued = L.q("SELECT COUNT(*) n FROM process_variants WHERE status IN ('proposed','testing')")[0]['n']
+    return not queued and (not q['last'] or time.time() - q['last'] > gap_s)
 
 
 def drill_misses(L, trials: int = 6) -> str:

@@ -285,6 +285,35 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
             'pair_scores': pair_scores, 'null_false_discoveries_per_pair': nulls}
 
 
+def recover_stale(L) -> list[str]:
+    """Trials still marked RUNNING when the trial loop starts were killed (reboot, crash): mark them ABORTED and put
+    their variants back in the queue. Only call this from the single trial loop."""
+    out = []
+    for r in L.q("SELECT id, variant_id FROM process_trials WHERE verdict='RUNNING'"):
+        L.x("UPDATE process_trials SET verdict='ABORTED', finished=? WHERE id=?", (time.time(), r['id']))
+        L.x("UPDATE process_variants SET status='proposed' WHERE id=? AND status='testing'", (r['variant_id'],))
+        out.append(r['id'])
+    return out
+
+
+def trial_loop(settings, desk='perps', pairs=DEFAULT_PAIRS, hours=DEFAULT_HOURS, agents=DEFAULT_AGENTS,
+               idle_s=600, stop=None, log=print, runner=None):
+    """Run queued proposals one after another, forever (managed by the supervisor). Returns when stop() is true,
+    which the supervisor service uses to restart on new code between trials."""
+    from ..company.ledger import Ledger
+    L = Ledger(settings.ledger)
+    for tid in recover_stale(L):
+        log(f'trial {tid} was interrupted: marked ABORTED, its proposal re-queued')
+    while not (stop and stop()):
+        vid = next_proposed(L)
+        if not vid:
+            time.sleep(idle_s)
+            continue
+        log(f'trial start {vid}')
+        res = run_trial(settings, vid, desk=desk, pairs=pairs, hours=hours, agents=agents, runner=runner)
+        log(f"trial {res['trial']} {vid}: {res['verdict']} - {res.get('reason')}")
+
+
 def next_proposed(L) -> str | None:
     r = L.q("SELECT id FROM process_variants WHERE status='proposed' ORDER BY created LIMIT 1")
     return r[0]['id'] if r else None

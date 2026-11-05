@@ -350,7 +350,12 @@ python -m desk process propose --role researcher --pod xsec --patch "..." --rati
 python -m desk process trial                        # trial the oldest proposal (or pass its id)
 python -m desk process trial PV-1a2b3c --desk macro --pairs 3 --hours 2 --agents 8
 python -m desk process retire PV-1a2b3c --rationale "superseded"
+python -m desk process loop --desk perps --pairs 3 --hours 2 --agents 6   # trial every queued proposal, forever
 ```
+
+The supervisor runs `process loop` as its `trials` service, so every proposal is trialled without a human. A trial cut
+off by a reboot is marked ABORTED and its proposal re-queued. When nothing has been proposed or queued for 12 hours,
+the CIO's next session is given one objective: file one concrete rule aimed at the biggest loss point in recent drills.
 
 For each pair, one planted market is built with a fixed seed and copied for both arms; the BASE arm runs the firm
 with today's live rules, the CAND arm adds the candidate. The candidate also runs one null market per pair. The rule

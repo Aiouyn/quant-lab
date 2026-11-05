@@ -283,3 +283,34 @@ def test_briefs_show_where_drills_lost_the_planted_signal(tmp_path):
     txt = process_pipeline_text(L)
     assert '3 planted runs' in txt and 'approved in 1' in txt
     assert 'rejected_review: 1' in txt and 'factor only, never submitted: 1' in txt
+
+
+def test_cio_gets_a_mandatory_proposal_objective_when_the_queue_is_dry(tmp_path):
+    import time as _t
+    from desk.company.runtime import proposal_due
+    L = _ledger(tmp_path)
+    assert proposal_due(L)                                                # never proposed
+    vid = PT.propose(L, 'lead', 'rule', 'why', 'cio')['id']
+    assert not proposal_due(L)                                            # queued
+    L.x("UPDATE process_variants SET status='rejected' WHERE id=?", (vid,))
+    assert not proposal_due(L)                                            # proposed recently
+    L.x("UPDATE process_variants SET created=? WHERE id=?", (_t.time() - 13 * 3600, vid))
+    assert proposal_due(L)
+
+
+def test_trial_loop_requeues_interrupted_trials_and_runs_the_queue(tmp_path):
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    vid = PT.propose(L, 'researcher', 'Rank-test check every feature cross-sectionally.', 'r', 'lead', pod='xsec')['id']
+    L.x("UPDATE process_variants SET status='testing' WHERE id=?", (vid,))
+    L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES('PT-dead',?,'RUNNING',1)", (vid,))
+    calls = {'n': 0}
+
+    def stop():
+        calls['n'] += 1
+        return calls['n'] > 1                                             # one pass through the loop
+    logs = []
+    PT.trial_loop(s, pairs=1, hours=0.0, agents=1, idle_s=0, stop=stop, log=logs.append, runner=_fake_firm())
+    assert L.q("SELECT verdict FROM process_trials WHERE id='PT-dead'")[0]['verdict'] == 'ABORTED'
+    assert any('ABORTED' in m for m in logs) and any('trial start' in m for m in logs)
+    assert L.q('SELECT status FROM process_variants WHERE id=?', (vid,))[0]['status'] in ('active', 'rejected')
