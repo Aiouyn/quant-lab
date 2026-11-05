@@ -222,6 +222,8 @@ def build_macro_store(settings, force: bool = False, try_remote: bool = True) ->
     frames = macro_data.fetch_universe()
     macro_data.check_complete(frames)
     panel = macro_data.assemble(frames)
+    from .macro_alt import build as add_alt
+    panel, _ = add_alt(settings, panel)
     atomic_write_parquet(panel, panel_path)
     atomic_write_parquet(panel.filter(pl.col('date') <= date.fromisoformat(splits['dev'][1])), dev_path)
     prov = write_provenance(root, 'macro', 'yahoo_finance_v8_chart', panel, 'date', 'symbol', fetched_at=fetched_at)

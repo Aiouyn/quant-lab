@@ -160,11 +160,14 @@ MACRO = ("MACRO desk: strategies set DESK = 'macro', PARAMS, WARMUP_DAYS and sig
          "weight in [-1,1] per row of the DAILY cross-asset panel (macro_panel(): ~119 symbols since the 1990s-2000s: "
          "US/intl/country/sector/factor equity ETFs, Treasuries/credit/TIPS/EM bonds, commodities, REITs, currency ETFs, "
          "FX spot, BTC/ETH; tradable=0 feature series: equity indices, VIX/VIX3M/VVIX/MOVE/OVX/GVZ, yields IRX/FVX/TNX/TYX, "
-         "dollar index, continuous futures). Decide at close t, execute at close t+1, per-asset costs, 1%/yr short borrow, "
+         "dollar index, continuous futures; alt feature rows dated by publication, value in close: FRED:* rates, curve "
+         "slopes, real yields, breakevens, credit spreads, and COT:<market>:spec_net_oi|comm_net_oi|oi CFTC positioning "
+         "for equity/rate/commodity/FX/BTC futures). Decide at close t, execute at close t+1, per-asset costs, 1%/yr short borrow, "
          "gross <= 2. Dev 2000-2014, val 2015-2019, holdout 2020-2025H1, forward 2025H2 onwards.")
 PRED = ("PRED desk: strategies set DESK = 'pred' and signal(panel, params) -> weight in [-1,1] per row of the HOURLY "
         "panel of resolved Polymarket binary markets (pred_panel(): ts, market, p = YES price, end_ms, category, "
-        "hours_to_end); +w holds YES, -w holds NO, 1-cent half-spread on every trade incl. rebalancing, YES pays 1/0 at "
+        "hours_to_end, vol_usd_1h / vol_usd_cum = traded dollars so far, lagged 1 h; each market appears once its "
+        "volume-to-date passes $250k); +w holds YES, -w holds NO, 1-cent half-spread on every trade incl. rebalancing, YES pays 1/0 at "
         "the end. Dev to 2026-02 (mostly 2025-26), val 2026-03..05, holdout 2026-06..07, forward 2026-08+.")
 PODS = {
     'pred': 'Prediction markets (Polymarket): a younger, retail-heavy market where documented biases may survive - '

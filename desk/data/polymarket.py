@@ -5,6 +5,8 @@
 2. prices: hourly YES price history per market from clob prices-history (fidelity 60 min), for markets with
    volume >= MIN_VOLUME.
 Panel: <store>/pred/panel.parquet  rows (ts hour ms, market, p = YES price at ts, end_ms, outcome, category, volume)
+   plus, once the volume history is backfilled (desk.data.pred_volume): vol_usd_1h, vol_usd_cum, and each market only
+   from the hour its volume-to-date crossed MIN_VOLUME (point-in-time universe, no selection on future popularity).
 Run: python -m desk.data.polymarket  (resumable; prices cached per market under <store>/pred/prices/)
 """
 from __future__ import annotations
@@ -127,7 +129,21 @@ def fetch_prices(c, token, cache: Path, end_s=None, window_d=14, max_windows=26)
     return df
 
 
-def build(settings, workers=8):
+PIT_MIN_COVERAGE = 0.98     # share of markets whose volume history is cached before the point-in-time universe applies
+
+
+def point_in_time_status(root: Path, sel: pl.DataFrame) -> dict:
+    """Whether the panel can use the point-in-time universe: volume history cached for >= PIT_MIN_COVERAGE of the
+    markets and not disabled with PRED_PIT_UNIVERSE=0. Until then the panel keeps the lifetime-volume universe (and
+    coverage.json says so), so a half-finished backfill never silently shrinks the desk."""
+    import os
+    from .pred_volume import coverage
+    cov = coverage(root, sel['yes_token'].to_list())
+    enabled = os.environ.get('PRED_PIT_UNIVERSE', '1') != '0'
+    return {'applied': bool(enabled and cov >= PIT_MIN_COVERAGE), 'volume_coverage': round(cov, 4), 'enabled': enabled}
+
+
+def build(settings, workers=8, volume_minutes=None):
     root = settings.store / 'pred'
     cache = root / 'prices'
     cache.mkdir(parents=True, exist_ok=True)
@@ -143,6 +159,12 @@ def build(settings, workers=8):
             for i, _ in enumerate(pool.map(lambda a: fetch_prices(c, a[0], cache, a[1]) is not None, zip(toks, ends))):
                 if i % 500 == 0:
                     print('prices', i, '/', len(toks), flush=True)
+    if volume_minutes:                    # incremental volume-history fetch for newly resolved markets (time-boxed)
+        from .pred_volume import backfill
+        try:
+            backfill(settings, minutes=volume_minutes, tokens=sel['yes_token'].to_list())
+        except Exception as e:
+            print('pred volume backfill failed:', repr(e)[:200], flush=True)
     # memory-light assembly: stream the per-market cache files instead of holding every history in RAM
     keymap = pl.DataFrame({'key': [tk[-24:] for tk in toks], 'yes_token': toks})
     files = [str(cache / f'{k}.parquet') for k in keymap['key'].to_list() if (cache / f'{k}.parquet').exists()]
@@ -152,12 +174,19 @@ def build(settings, workers=8):
           .group_by(['key', 'ts']).agg(pl.col('p').last())
           .join(keymap.lazy(), on='key').drop('key'))
     meta = sel.select('market', 'yes_token', 'end', 'outcome', 'category', 'volume').lazy()
-    panel = (px.join(meta, on='yes_token')
-             .with_columns(pl.col('end').str.to_datetime(strict=False, time_zone='UTC').dt.epoch('ms').alias('end_ms'))
-             .drop('yes_token', 'end').filter(pl.col('end_ms').is_not_null() & (pl.col('ts') <= pl.col('end_ms')))
-             .with_columns(pl.col('market').cast(pl.Int64)).sort(['ts', 'market']).collect(engine='streaming'))
+    lz = (px.join(meta, on='yes_token')
+          .with_columns(pl.col('end').str.to_datetime(strict=False, time_zone='UTC').dt.epoch('ms').alias('end_ms'))
+          .drop('end').filter(pl.col('end_ms').is_not_null() & (pl.col('ts') <= pl.col('end_ms'))))
+    pit = point_in_time_status(root, sel)
+    if pit['applied']:                    # universe membership dated by volume-to-date (see desk.data.pred_volume)
+        from .pred_volume import apply_point_in_time, volume_frame
+        act, entry = volume_frame(root, sel.select('yes_token', 'volume'), MIN_VOLUME)
+        pit['markets_with_entry'] = len(entry)
+        lz = apply_point_in_time(lz, act, entry)
+    panel = lz.drop('yes_token').with_columns(pl.col('market').cast(pl.Int64)).sort(['ts', 'market']).collect(engine='streaming')
     panel.write_parquet(root / 'panel.parquet', compression='zstd')
-    rep = {'markets': panel['market'].n_unique(), 'rows': len(panel), 'first': int(panel['ts'].min()), 'last': int(panel['ts'].max())}
+    rep = {'markets': panel['market'].n_unique(), 'rows': len(panel), 'first': int(panel['ts'].min()), 'last': int(panel['ts'].max()),
+           'point_in_time_universe': pit}
     (root / 'coverage.json').write_text(json.dumps(rep))
     return rep
 

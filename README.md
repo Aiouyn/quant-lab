@@ -73,9 +73,16 @@ Sealed data is finite: every look at it spends some of its value. Phase 1b limit
   back-adjusted `adjclose` (and `adj_open`) revealed dividends paid after each date. Agent sandboxes read the carry
   desk through a dev-only copy (`store/carry_views/dev`) built at startup and on refresh; val/holdout hours are not in
   it at all.
-- **Known remaining bias.** The pred universe is resolved Polymarket markets with lifetime volume >= $250k: a
-  selection on future popularity that needs per-market volume history to remove. Treat pred results as optimistic
-  until confirmed on forward data.
+- **Pred universe is point-in-time** (once `python -m desk.data.pred_volume` has backfilled >= 98% of markets): each
+  market enters the panel only from the hour its volume-to-date crossed $250k, using per-market fill history from
+  Polymarket's free Goldsky subgraph, and strategies see `vol_usd_1h` / `vol_usd_cum` (lagged one hour). Until the
+  backfill completes, `pred/coverage.json` says `point_in_time_universe.applied: false` and the old lifetime-volume
+  selection (a look-ahead on future popularity) still applies. Pre-CLOB markets (before late 2022) have no fill
+  history and are dropped.
+- **Macro alt data** (`desk/data/macro_alt.py`): FRED rates, curve slopes, real yields, breakevens and credit spreads
+  (visible at d + 2 business days), CFTC COT positioning for 22 futures (visible a week after the Tuesday report),
+  and with a free `FRED_API_KEY` the INITIAL releases of claims, payrolls, CPI, etc. dated by release day. All are
+  feature-only panel rows (`tradable = 0`, value in `close`); `MACRO_ALT_DATA=0` turns them off.
 
 ## Why v3 exists (what was wrong with v2)
 
