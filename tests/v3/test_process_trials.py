@@ -361,3 +361,19 @@ def test_history_shows_each_variant_once_with_its_latest_verdict(tmp_path):
         L.x("INSERT INTO process_trials(id,variant_id,verdict,created) VALUES(?,?,?,?)", (f'PT-{i}', vid, v, i + 1))
     h = [r for r in PT.history(L) if r['id'] == vid]
     assert len(h) == 1 and h[0]['verdict'] == 'ACCEPT' and h[0]['trials'] == 3
+
+
+def test_operator_directive_leads_every_brief_and_the_firm_never_self_freezes(tmp_path):
+    import time as _t
+    from types import SimpleNamespace
+    from desk.company.roles import charter
+    from desk.company.runtime import Org
+    L = _ledger(tmp_path)
+    L.memo('cio', 'desk', 'Stop all new theses until the operator decides.')
+    L.memo('operator', 'operator', 'Continue: focus on the macro data.')
+    org = SimpleNamespace(ledger=L, started=_t.time(), deadline=_t.time() + 3600, settings=SimpleNamespace(home=tmp_path),
+                          cost_params=lambda: dict(taker_bps=4.5, slippage_bps=0.5, impact_mult=1, latency_s=1))
+    agent = SimpleNamespace(name='xsec-r1', role='researcher', pod='xsec', workspace=tmp_path)
+    txt = Org.brief(org, agent)
+    assert txt.index('OPERATOR DIRECTIVE') < txt.index('DESK MEMO') and 'macro data' in txt
+    assert 'never pauses itself' in charter('researcher', 'xsec')
