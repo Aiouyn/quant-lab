@@ -164,21 +164,22 @@ def fetch_all(cache: Path, key: str | None = None) -> tuple[pl.DataFrame, dict]:
     back to its last cached file (reported as 'cached')."""
     cache.mkdir(parents=True, exist_ok=True)
     rep, parts = {}, []
-    state = {'ok': 0, 'fail': 0}
+    state = {}                         # per host: a blocked FRED must not stop the CFTC downloads
 
     def keep(name, cls, fn):
         f = cache / f'{name.replace(":", "_")}.parquet'
         try:
-            if state['fail'] >= 3 and not state['ok']:
-                raise RuntimeError('offline: first sources all failed, not retrying the rest')
+            st = state.setdefault(name.split(':')[0], {'ok': 0, 'fail': 0})
+            if st['fail'] >= 3 and not st['ok']:
+                raise RuntimeError('host unreachable: its first sources all failed, not retrying the rest')
             df = fn()
-            state['ok'] += 1
+            st['ok'] += 1
             if len(df) < MIN_ROWS:
                 raise RuntimeError(f'only {len(df)} rows')
             df.write_parquet(f)
             rep[name] = len(df)
         except Exception as e:
-            state['fail'] += 1
+            st['fail'] += 1
             if f.exists():
                 df = pl.read_parquet(f); rep[name] = f'cached ({repr(e)[:80]})'
             else:

@@ -172,3 +172,20 @@ def test_alt_feature_rows_do_not_change_macro_pnl():
     a = run_macro(base, w_base, MacroCost())
     b = run_macro(merged, w_merged, MacroCost())
     assert np.allclose(a['pnl'], b['pnl'])
+
+
+def test_blocked_fred_does_not_stop_cot(tmp_path, monkeypatch):
+    monkeypatch.setattr(macro_alt, 'FRED_DAILY', {f'S{i}': 'x' for i in range(5)})
+    monkeypatch.setattr(macro_alt, 'COT_MARKETS', {'13874A': 'ES'})
+    calls = []
+
+    def blocked(c, sid):
+        calls.append(sid); raise RuntimeError('blocked')
+    monkeypatch.setattr(macro_alt, 'fred_daily', blocked)
+    rows = [{'cftc_contract_market_code': '13874A', 'report_date_as_yyyy_mm_dd': str(date(2020, 1, 7) + timedelta(weeks=i)),
+             'open_interest_all': '1000', 'noncomm_positions_long_all': '300', 'noncomm_positions_short_all': '100',
+             'comm_positions_long_all': '400', 'comm_positions_short_all': '600'} for i in range(60)]
+    monkeypatch.setattr(macro_alt, 'cot_fetch', lambda c, code: macro_alt.cot_frame(rows))
+    alt, rep = macro_alt.fetch_all(tmp_path)
+    assert len(calls) == 3                                             # FRED given up after 3 failures
+    assert rep['COT:ES'] == 180 and alt['symbol'].str.starts_with('COT:').all()
