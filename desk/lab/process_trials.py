@@ -356,8 +356,10 @@ def next_proposed(L) -> str | None:
 def history(L, limit: int = 20) -> list[dict]:
     """What was tried and what the drills said: agents read this before proposing again."""
     out = []
-    for r in L.q('SELECT v.id, v.role, v.pod, v.patch_text, v.author, v.status, t.verdict, t.results '
-                 'FROM process_variants v LEFT JOIN process_trials t ON t.variant_id=v.id '
+    for r in L.q('SELECT v.id, v.role, v.pod, v.patch_text, v.author, v.status, t.verdict, t.results, '
+                 '(SELECT COUNT(*) FROM process_trials x WHERE x.variant_id=v.id) trials '
+                 'FROM process_variants v LEFT JOIN process_trials t ON t.id = (SELECT id FROM process_trials y '
+                 '  WHERE y.variant_id=v.id ORDER BY y.created DESC, y.rowid DESC LIMIT 1) '
                  'ORDER BY v.created DESC LIMIT ?', (limit,)):
         dec = (json.loads(r.pop('results') or '{}') or {}).get('decision') or {}
         out.append({**r, 'reason': dec.get('reason'), 'mean_lift': dec.get('mean_lift')})
