@@ -28,6 +28,10 @@ SAFE_ENV = ('SYSTEMROOT', 'SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE', 'H
 
 PREAMBLE = '''import sys
 sys.path[0] = {root!r}                       # not the scripts folder: a planted module there must not shadow anything
+try:                                          # dateutil.tz (imported by pandas) reads the Windows timezone registry
+    import dateutil.tz                        # at import time: load it before the guard, which blocks winreg
+except Exception:
+    pass
 from desk.lab.guard import install_sandbox_guard as _guard
 _guard({policy!r})
 del _guard
