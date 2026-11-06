@@ -17,7 +17,8 @@ from pathlib import Path
 import polars as pl
 
 SRC = 'loopfactory:QUANT_DATA/hyperliquid/asset_ctxs'
-ROOT = Path(os.getenv('DESK_HLCTX', 'D:/quant_lab/hlctx'))   # set DESK_HLCTX to move the cache off D:
+ROOT = Path(os.getenv('DESK_HLCTX') or ('D:/quant_lab/hlctx' if os.path.isdir('D:/quant_lab/hlctx')   # D: died 2026-11-06
+         else Path(__file__).resolve().parents[2] / 'results' / 'v3' / 'hlctx'))
 MIN_VLM = 2e6
 
 
