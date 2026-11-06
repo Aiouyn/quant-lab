@@ -26,7 +26,8 @@ def build_day(name):
     if out.exists():
         return 0
     import lz4.frame
-    raw = subprocess.run(['rclone', 'cat', f'{SRC}/{name}.csv.lz4'], capture_output=True, timeout=600).stdout
+    from .drive import cat
+    raw = cat(f'{SRC}/{name}.csv.lz4')
     if not raw:
         return -1
     df = pl.read_csv(io.BytesIO(lz4.frame.decompress(raw)), infer_schema_length=None)
@@ -43,7 +44,8 @@ def build_day(name):
 
 def build(start='20230520', end='29991231', workers=8):
     ROOT.mkdir(parents=True, exist_ok=True)
-    names = subprocess.run(['rclone', 'lsf', SRC], capture_output=True, text=True).stdout.split()
+    from .drive import lsf
+    names = lsf(SRC)
     names = [n.split('.')[0] for n in names if start <= n.split('.')[0] <= end]
     done = 0
     with ThreadPoolExecutor(workers) as pool:
