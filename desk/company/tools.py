@@ -168,6 +168,16 @@ class Toolbox:
         self.L = org.ledger
         self.s = org.settings
 
+    def _live(self):
+        return {a.name for a in getattr(self.org, 'agents', [])}
+
+    def _not_live(self, name):
+        live = self._live()
+        if name and live and name not in live:
+            return {'error': f'{name} is not running in this firm (no sessions will happen). Live staff: '
+                             + ', '.join(sorted(live)) + '. Assign or reassign one of them instead.'}
+        return None
+
     async def call(self, name, args):
         if name not in ROLE_TOOLS[self.agent.role]:
             return {'error': f'{name} is not available to role {self.agent.role}'}
@@ -196,6 +206,8 @@ class Toolbox:
 
     # ------------------------------------------------------------ common
     async def t_board_post(self, kind, title, body, assignee=None, pod=None, tags=None):
+        if (err := self._not_live(assignee)):
+            return err
         bid = self.L.post(kind, title, body, self.agent.name, pod or self.agent.pod, assignee, tags=tags,
                           status='claimed' if assignee else 'open')
         if assignee and assignee != self.agent.name:
@@ -209,6 +221,8 @@ class Toolbox:
         return self.L.board_item(id) or {'error': 'not found'}
 
     async def t_board_update(self, id, status=None, comment=None, assignee=None):
+        if (err := self._not_live(assignee)):
+            return err
         item = self.L.board_item(id)
         if not item:
             return {'error': 'not found'}
@@ -489,6 +503,8 @@ class Toolbox:
         from .roles import PODS
         if pod not in PODS:
             return {'error': f'unknown pod; choose from {list(PODS)}'}
+        if (err := self._not_live(agent)):
+            return err
         r = self.L.q('SELECT role FROM agents WHERE name=?', (agent,))
         if not r or r[0]['role'] not in ('researcher',):
             return {'error': 'only researchers can be reassigned'}

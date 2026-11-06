@@ -78,6 +78,10 @@ class Org:
         self.pipeline = Pipeline(settings, self.ledger, self)
         self.agents = []
         for name, role, pod in roster(n_agents):
+            moved = self.ledger.q("SELECT payload FROM events WHERE kind='REASSIGN' AND payload LIKE ? ORDER BY id DESC LIMIT 1",
+                                  (f'%"agent": "{name}"%',))
+            if moved and role == 'researcher':           # a CIO reassignment survives firm restarts
+                pod = json.loads(moved[0]['payload']).get('pod') or pod
             self.ledger.upsert_agent(name, role, pod)
             self.ledger.x('UPDATE agents SET model=? WHERE name=?', (self.model_for_role(role), name))
             self.agents.append(Agent(name, role, pod, settings.workspaces / name))
@@ -246,6 +250,12 @@ class Org:
         cost = self.cost_params()
         parts.append(f'== COST MODEL == taker {cost["taker_bps"]} bps + slippage {cost["slippage_bps"]} bps per side, '
                      f'impact x{cost["impact_mult"]}, latency {cost["latency_s"]}s, hourly funding on.')
+        if agent.role in ('cio', 'lead'):
+            staff = L.q('SELECT name, role, pod FROM agents WHERE name IN (%s)' % ','.join('?' * len(self.agents)),
+                        tuple(a.name for a in self.agents)) if getattr(self, 'agents', None) else []
+            if staff:
+                parts.append('== LIVE STAFF (only these agents run; assign and reassign only them) ==\n'
+                             + ', '.join(f'{r["name"]} ({r["role"]}, {r["pod"]})' for r in staff))
         if agent.role == 'cio' and proposal_due(L):
             parts.append('THIS SESSION\'S OBJECTIVE (set by the firm, overrides your own plan): no process change has been '
                          'proposed or queued for a while, so the firm has stopped improving how it works. Read '
