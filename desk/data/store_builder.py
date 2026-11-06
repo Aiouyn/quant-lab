@@ -301,7 +301,10 @@ def ensure_store_panels(settings, force: bool = False, try_remote: bool = True) 
     settings.ensure()
     macro_res = build_macro_store(settings, force=force, try_remote=try_remote)
     pc_res = build_perps_and_carry_stores(settings, force=force, try_remote=try_remote)
-    pred_res = build_pred_store(settings, force=force, try_remote=try_remote)
+    try:                    # pred is optional: an unreachable Polymarket must not fail the other three desks
+        pred_res = build_pred_store(settings, force=force, try_remote=try_remote)
+    except StoreBuildError as e:
+        pred_res = {'status': 'unavailable', 'error': str(e)[:300]}
     return {
         'macro': macro_res,
         'perps': pc_res['perps'],
