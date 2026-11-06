@@ -25,7 +25,8 @@ from pathlib import Path
 
 import polars as pl
 
-HLCTX = Path(os.getenv('DESK_HLCTX', 'D:/quant_lab/hlctx'))
+HLCTX = Path(os.getenv('DESK_HLCTX') or ('D:/quant_lab/hlctx' if os.path.isdir('D:/quant_lab/hlctx')   # D: died 2026-11-06
+          else Path(__file__).resolve().parents[2] / 'results' / 'v3' / 'hlctx'))
 HOUR = 3_600_000
 
 
