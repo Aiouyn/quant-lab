@@ -49,7 +49,8 @@ def hl_hourly(files):
 
 
 def bn_metrics(settings):
-    uni = {u['binance']: u['coin'] for u in json.loads((settings.store / 'carry' / 'universe.json').read_text())}
+    uf = settings.store / 'carry' / 'universe.json'   # written by the carry build; without it, map by symbol name
+    uni = {u['binance']: u['coin'] for u in json.loads(uf.read_text())} if uf.exists() else {}
     cols = ['sum_open_interest_value', 'count_long_short_ratio', 'sum_toptrader_long_short_ratio', 'sum_taker_long_short_vol_ratio']
     frames = []
     for d in glob.glob(str(settings.home / 'bn_metrics' / '*')):
