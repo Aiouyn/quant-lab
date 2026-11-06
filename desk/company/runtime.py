@@ -371,10 +371,9 @@ def run_company(settings, agents=28, hours=8.0, concurrency=None, drill=None, to
     from ..data.store import FeatureStore
     try:
         FeatureStore(settings).build_dev_view()
-    except Exception as e:                     # panel-desk drills have no OKX store
-        if not drill:
-            raise
-        print(f'l2 dev view not built for this drill: {e!r}'[:200])
+    except Exception as e:                     # panel-desk drills have no OKX store; since the 2026-11-06 D: failure
+                                               # the firm runs the panel desks without the OKX L2 store as well
+        print(f'l2 dev view not built ({"drill" if drill else "L2 desk unavailable"}): {e!r}'[:300])
     try:                                       # agents read the carry desk only through its dev-only copy
         from ..lab.carry import write_dev_view as carry_dev_view
         carry_dev_view(settings)
@@ -422,7 +421,7 @@ async def _main(settings, n_agents, hours, concurrency, tokens_per_hour=None):
                     await org.pipeline.forward_check()
                 except Exception as e:
                     L.event('runtime', 'FORWARD_ERROR', {'error': repr(e)[:500]})
-            if time.time() - last_view > 600:          # newly ingested dev days become visible to sandboxes
+            if (settings.store / 'splits.json').exists() and time.time() - last_view > 600:   # L2 store built; newly ingested dev days become visible to sandboxes
                 last_view = time.time()
                 try:
                     await asyncio.to_thread(FeatureStore(settings).build_dev_view)
