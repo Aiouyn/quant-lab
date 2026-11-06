@@ -135,6 +135,16 @@ async def _wait_for_memory(mem_mb, headroom_mb=1500, typical_mb=2000, max_wait_s
     return round(time.time() - t0, 1)
 
 
+# agent run_python peaks are ~0.1-0.5 GB (measured 119 MB for a full perps_panel load); the old 2 GB + 1.5 GB gate
+# blocked every call for 15 min whenever the owner's apps left < 3.5 GB free (2026-11-05). Wait briefly, then tell
+# the agent instead of burning its session; _watch's system floor still stops a run that grows.
+RUN_TYPICAL_MB, RUN_HEADROOM_MB, RUN_MAX_WAIT_S = 700, 800, 120
+
+
+def _ram_free_mb():
+    return psutil.virtual_memory().available / 1e6 if psutil is not None else float('inf')
+
+
 async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_mb=None, slot=None, extra_env=None):
     """Run agent code with `from desk.research import *` preloaded. Returns stdout/stderr/status."""
     timeout_s = min(int(timeout_s or settings.sandbox_timeout_s), 1800)
@@ -164,7 +174,12 @@ async def run_python(code: str, workspace: Path, settings, timeout_s=None, mem_m
                 'NUMBA_CACHE_DIR': ws / '.numba_cache', 'MPLCONFIGDIR': ws / '.mpl'})
     tq = time.time()
     async with (slot or _nullslot()):
-        await _wait_for_memory(mem_mb)
+        await _wait_for_memory(mem_mb, RUN_HEADROOM_MB, RUN_TYPICAL_MB, RUN_MAX_WAIT_S)
+        if _ram_free_mb() < RUN_TYPICAL_MB + RUN_HEADROOM_MB:
+            return {'status': 'queued_low_ram', 'seconds': 0.0, 'queued_s': round(time.time() - tq, 1), 'peak_mb': 0,
+                    'stdout': '', 'stderr': f'The machine has under {(RUN_TYPICAL_MB + RUN_HEADROOM_MB) / 1000:.1f} GB '
+                    'of free RAM (the owner is using it). Your code did NOT run. Do other work (read, plan, write the '
+                    'notebook) and retry in a few minutes; keep runs small.', 'script': str(path.relative_to(workspace))}
         t0 = time.time()
         proc = await asyncio.create_subprocess_exec(sys.executable, '-u', str(path), cwd=str(workspace), env=env,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
