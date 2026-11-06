@@ -10,3 +10,8 @@ def test_carry_store_does_not_import_httpx():
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout.strip()
     assert out == 'False'
 
+
+
+def test_sandbox_preamble_preloads_dateutil_tz_before_guard():
+    from desk.lab.sandbox import PREAMBLE
+    assert PREAMBLE.index('import dateutil.tz') < PREAMBLE.index('_guard({policy!r})')

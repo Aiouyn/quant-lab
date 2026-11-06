@@ -23,7 +23,7 @@
   "desk/lab/perps.py": "d540954c3aa9bb97dd4003f1a2b66301134816020c93e243735b57e7a63fc625",
   "desk/lab/pred.py": "231664f1c6b7f10f4caf565860dc37ee0a84f2aad4518d4dd340643b9539e49c",
   "desk/lab/process_trials.py": "f00c3e3fea38d256a9593c6a204f6b2d3f411045f8916e1bd2ad674a1ab252f5",
-  "desk/lab/sandbox.py": "2f23d01daaadb225adb0d7c17c69945c7521fdc8cb705e442ad175f9533c8d3c",
+  "desk/lab/sandbox.py": "75de5d8c5ae8f2e9217e010573737f65850d4b8a24ed3f9dbfde0ecff7a2dfb6",
   "desk/lab/snapback.py": "f183011f1aa1e70abdd16451d75aaf92d02d11ccad64c920d7738c870eb86831",
   "desk/lab/stats.py": "8ca1e1b0b0d94a4e2f1d26dca96a24957af8b53c9f6c7ac140519637efd7b51c",
   "desk/lab/strategy.py": "6e3f8419ffab189e30639aca9780c8e20b0ff2ed79d89efa588d936917e06c99",
@@ -32,5 +32,5 @@
   "desk/pipeline/bundle.py": "96469813c64e7bdec2a35f02e9fa239852f2112e2644947f6c7471520219c611",
   "desk/pipeline/validation.py": "26195e8455b0fab3081778912b492bf285ab5709ad075cc14d3a1e8e9d780b8d"
  },
- "sealed": "2026-11-06 14:16:44"
+ "sealed": "2026-11-06 19:22:41"
 }
