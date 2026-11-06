@@ -395,3 +395,46 @@ def test_cio_can_only_staff_agents_that_actually_run(tmp_path):
     assert asyncio.run(tb.t_reassign_agent('xsec-r1', 'positioning', 'untested')) == {'ok': True}
     moved = L.q("SELECT payload FROM events WHERE kind='REASSIGN' AND payload LIKE ?", ('%"agent": "xsec-r1"%',))
     assert moved and json.loads(moved[0]['payload'])['pod'] == 'positioning'          # what Org restores on restart
+
+
+def test_trial_loop_backs_off_after_errors_and_waits_for_a_readable_store(tmp_path, monkeypatch):
+    s = _settings(tmp_path)
+    L = _ledger(tmp_path)
+    vid = PT.propose(L, 'researcher', 'Rank-test check every feature cross-sectionally.', 'r', 'lead', pod='xsec')['id']
+    sleeps, calls = [], {'n': 0}
+    monkeypatch.setattr(PT.time, 'sleep', lambda x: sleeps.append(x))
+
+    def broken(s_, drill, hours, agents):
+        raise OSError(22, 'Invalid argument')
+
+    def stop():
+        calls['n'] += 1
+        return calls['n'] > 3
+    PT.trial_loop(s, pairs=1, hours=0.0, agents=1, idle_s=0, stop=stop, log=lambda m: None, runner=broken)
+    assert L.q("SELECT COUNT(*) n FROM process_trials")[0]['n'] == 3              # one trial per pass, never a spin
+    assert sleeps == [900, 1800, 3600]                                            # backoff doubles
+    assert len(L.q('SELECT id FROM process_trials')[0]['id']) == len('PT-') + 10
+    assert PT.purge_empty_errors(L) == 3 and not L.q('SELECT id FROM process_trials')
+    L.x("UPDATE process_variants SET status='testing' WHERE id=?", (vid,))       # stuck without a running trial
+    PT.recover_stale(L)
+    assert PT.next_proposed(L) == vid
+    monkeypatch.setattr(PT, 'store_problem', lambda *a: 'D:/store/splits.json: OSError(22)')
+    calls['n'] = 0
+    PT.trial_loop(s, pairs=1, hours=0.0, agents=1, idle_s=0, stop=stop, log=lambda m: None, runner=broken)
+    assert not L.q('SELECT id FROM process_trials')                              # nothing started on a bad store
+
+
+def test_supervisor_holds_store_users_when_the_store_is_unreadable(tmp_path, monkeypatch):
+    from desk.ops import supervisor as S
+    monkeypatch.setattr(S, 'HOME', tmp_path)
+    (tmp_path / 'store').mkdir()
+    (tmp_path / 'store' / 'splits.json').write_text('{}')
+    assert S.store_problem() is None
+    real_open = open
+
+    def failing(path, *a, **k):
+        if str(path).endswith('splits.json'):
+            raise OSError(22, 'Invalid argument')
+        return real_open(path, *a, **k)
+    monkeypatch.setattr('builtins.open', failing)
+    assert 'Invalid argument' in S.store_problem()
