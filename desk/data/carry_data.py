@@ -23,7 +23,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date as Date, datetime, timezone
 from pathlib import Path
 
-import httpx
 import numpy as np
 import polars as pl
 
@@ -38,6 +37,7 @@ def carry_root(settings):
 
 
 def universe(n=30):
+    import httpx                              # lazy: CarryStore imports this module inside agent sandboxes
     with httpx.Client(timeout=30) as c:
         meta, ctx = c.post(HL, json={'type': 'metaAndAssetCtxs'}).json()
         info = c.get(f'{FAPI}/fapi/v1/exchangeInfo').json()
@@ -156,6 +156,7 @@ def build_coin(u, root: Path, start=CARRY_START):
     out = root / 'coins' / f'{coin}.parquet'
     if out.exists():
         return {'coin': coin, 'cached': True}
+    import httpx                              # lazy: CarryStore imports this module inside agent sandboxes
     with httpx.Client(timeout=60, follow_redirects=True) as c:
         hl = hl_funding(coin, int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp() * 1000), c)
         if hl is None or len(hl) < 24 * 30:
@@ -336,6 +337,7 @@ def build_bybit_pair(coin, root: Path):
     hl = pl.read_parquet(src).select('ts', 'hl_funding', 'hl_premium')
     sym = f'{coin}USDT'
     start, end = int(hl['ts'][0]), int(hl['ts'][-1]) + HOUR
+    import httpx                              # lazy: CarryStore imports this module inside agent sandboxes
     with httpx.Client(timeout=30) as c:
         info = _by_get(c, 'instruments-info', {'category': 'linear', 'symbol': sym})
         if not info:
