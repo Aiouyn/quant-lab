@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import math
 import time
 import uuid
@@ -336,6 +337,8 @@ def recover_stale(L) -> list[str]:
 def store_problem(settings, desk='perps') -> str | None:
     """Read the files every drill copies from the main store. A failing disk (D: on 2026-11-06) made each trial
     ERROR instantly; the loop must wait for the store instead of burning proposals."""
+    if os.path.lexists(settings.store) and not settings.store.exists():
+        return f'{settings.store} is a link to a missing drive'
     for f in (settings.store / 'splits.json', settings.store / desk / 'splits.json', settings.store / desk / 'panel.parquet'):
         try:
             if f.exists():

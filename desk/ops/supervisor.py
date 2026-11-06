@@ -186,6 +186,8 @@ def store_problem():
     """The feature store must be readable before the firm, trials or the daily refresh start: on 2026-11-06 a failing
     D: drive made the firm crash-loop 36 times and the trial loop file 10k empty trials."""
     f = HOME / 'store' / 'splits.json'
+    if os.path.lexists(HOME / 'store') and not (HOME / 'store').exists():
+        return f'{HOME / "store"} is a link to a missing drive'
     try:
         if f.exists():
             with open(f, 'rb') as fh:

@@ -194,7 +194,14 @@ class Settings:
 
     def ensure(self):
         for p in (self.home, self.store, self.workspaces, self.artifacts):
-            p.mkdir(parents=True, exist_ok=True)
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+            except (FileExistsError, OSError):
+                # a link whose target is gone (store junction to a dead D: on 2026-11-06) must not kill services that
+                # never read the store (recorders, dashboard); users of the store fail on their own read instead
+                if p == self.store and os.path.lexists(p):
+                    continue
+                raise
         return self
 
     def public(self):
