@@ -11,12 +11,13 @@ import io
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 from pathlib import Path
 
 import polars as pl
 
 SRC = 'loopfactory:QUANT_DATA/hyperliquid/asset_ctxs'
-ROOT = Path('D:/quant_lab/hlctx')
+ROOT = Path(os.getenv('DESK_HLCTX', 'D:/quant_lab/hlctx'))   # set DESK_HLCTX to move the cache off D:
 MIN_VLM = 2e6
 
 
