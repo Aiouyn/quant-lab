@@ -65,3 +65,14 @@ def _run_hoist(tmp_path):
     from desk.lab.sandbox import run_python
     r = asyncio.run(run_python('from __future__ import annotations\nprint("hi")', tmp_path, SETTINGS, timeout_s=120))
     assert r['status'] == 'ok' and 'hi' in r['stdout']
+
+
+def test_run_python_reports_low_ram_fast_instead_of_blocking(tmp_path, monkeypatch):
+    import asyncio
+    from desk.config import SETTINGS
+    from desk.lab import sandbox
+    monkeypatch.setattr(sandbox, 'RUN_MAX_WAIT_S', 0)
+    monkeypatch.setattr(sandbox, '_ram_free_mb', lambda: 500.0)
+    r = asyncio.run(sandbox.run_python('print("hi")', tmp_path, SETTINGS, timeout_s=60))
+    assert r['status'] == 'queued_low_ram' and 'did NOT run' in r['stderr'] and r['stdout'] == ''
+    assert sandbox.RUN_TYPICAL_MB + sandbox.RUN_HEADROOM_MB <= 2000             # gate well under the old 3.5 GB
