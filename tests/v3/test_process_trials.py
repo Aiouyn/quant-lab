@@ -377,3 +377,21 @@ def test_operator_directive_leads_every_brief_and_the_firm_never_self_freezes(tm
     txt = Org.brief(org, agent)
     assert txt.index('OPERATOR DIRECTIVE') < txt.index('DESK MEMO') and 'macro data' in txt
     assert 'never pauses itself' in charter('researcher', 'xsec')
+
+
+def test_cio_can_only_staff_agents_that_actually_run(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    from desk.company.tools import Toolbox
+    L = _ledger(tmp_path)
+    for n, r, p in (('cio', 'cio', 'exec'), ('xsec-r1', 'researcher', 'xsec'), ('xsec-r2', 'researcher', 'xsec')):
+        L.upsert_agent(n, r, p)
+    live = [SimpleNamespace(name='cio'), SimpleNamespace(name='xsec-r1')]   # xsec-r2 is a leftover of a bigger run
+    org = SimpleNamespace(ledger=L, settings=None, agents=live)
+    tb = Toolbox(org, SimpleNamespace(name='cio', role='cio', pod='exec'))
+    out = asyncio.run(tb.t_reassign_agent('xsec-r2', 'positioning', 'untested'))
+    assert 'not running' in out['error'] and 'xsec-r1' in out['error']
+    assert 'error' in asyncio.run(tb.t_board_post('thesis', 't', 'b', assignee='positioning-lead'))
+    assert asyncio.run(tb.t_reassign_agent('xsec-r1', 'positioning', 'untested')) == {'ok': True}
+    moved = L.q("SELECT payload FROM events WHERE kind='REASSIGN' AND payload LIKE ?", ('%"agent": "xsec-r1"%',))
+    assert moved and json.loads(moved[0]['payload'])['pod'] == 'positioning'          # what Org restores on restart
