@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 from pathlib import Path
 
 import polars as pl
 
-HLCTX = Path('D:/quant_lab/hlctx')
+HLCTX = Path(os.getenv('DESK_HLCTX', 'D:/quant_lab/hlctx'))
 HOUR = 3_600_000
 
 

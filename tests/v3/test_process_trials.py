@@ -438,3 +438,16 @@ def test_supervisor_holds_store_users_when_the_store_is_unreadable(tmp_path, mon
         return real_open(path, *a, **k)
     monkeypatch.setattr('builtins.open', failing)
     assert 'Invalid argument' in S.store_problem()
+
+
+def test_a_store_link_to_a_dead_drive_is_unreadable_but_does_not_kill_other_services(tmp_path, monkeypatch):
+    import os
+    from desk.config import SETTINGS
+    from desk.ops import supervisor as S
+    os.symlink(tmp_path / 'dead_drive', tmp_path / 'store', target_is_directory=True)
+    s = dataclasses.replace(SETTINGS, home=tmp_path, store_dir=None)
+    s.ensure()                                                     # recorders and dashboard still start
+    assert (tmp_path / 'workspaces').is_dir()
+    monkeypatch.setattr(S, 'HOME', tmp_path)
+    assert 'missing drive' in S.store_problem()
+    assert 'missing drive' in PT.store_problem(s)
