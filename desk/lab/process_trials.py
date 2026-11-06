@@ -53,8 +53,8 @@ PARTIAL_MIN_CORR = 0.1     # below this |corr| a strategy is treated as not trac
 ARM_STATUS = 'arm'         # rows written by the trial runner into a trial run's own (fresh) ledger
 
 
-def _new_id(prefix):
-    return f'{prefix}-{uuid.uuid4().hex[:6]}'
+def _new_id(prefix, n=6):
+    return f'{prefix}-{uuid.uuid4().hex[:n]}'
 
 
 # ---------------------------------------------------------------------------------------------- variants
@@ -226,7 +226,7 @@ def run_trial(settings, variant_id: str, desk: str = 'perps', pairs: int = DEFAU
     if cand['status'] not in ('proposed', 'testing'):
         raise SystemExit(f'{variant_id} is {cand["status"]}; only proposed variants are trialled')
     live = live_variants(L)
-    tid = _new_id('PT')
+    tid = _new_id('PT', 10)                                  # 6 hex collided after 10k rows (11-06)
     L.x('UPDATE process_variants SET status=? WHERE id=?', ('testing', variant_id))
     L.x('INSERT INTO process_trials(id,variant_id,desk,pairs,hours,agents,results,verdict,created) VALUES(?,?,?,?,?,?,?,?,?)',
         (tid, variant_id, desk, pairs, hours, agents, '{}', 'RUNNING', time.time()))
@@ -321,31 +321,68 @@ def prune_finished(settings, L) -> dict:
 
 def recover_stale(L) -> list[str]:
     """Trials still marked RUNNING when the trial loop starts were killed (reboot, crash): mark them ABORTED and put
-    their variants back in the queue. Only call this from the single trial loop."""
+    their variants back in the queue; variants left in 'testing' with no running trial are re-queued too. Only call
+    this from the single trial loop."""
     out = []
     for r in L.q("SELECT id, variant_id FROM process_trials WHERE verdict='RUNNING'"):
         L.x("UPDATE process_trials SET verdict='ABORTED', finished=? WHERE id=?", (time.time(), r['id']))
         L.x("UPDATE process_variants SET status='proposed' WHERE id=? AND status='testing'", (r['variant_id'],))
         out.append(r['id'])
+    L.x("UPDATE process_variants SET status='proposed' WHERE status='testing' AND id NOT IN "
+        "(SELECT variant_id FROM process_trials WHERE verdict='RUNNING')")
     return out
 
 
+def store_problem(settings, desk='perps') -> str | None:
+    """Read the files every drill copies from the main store. A failing disk (D: on 2026-11-06) made each trial
+    ERROR instantly; the loop must wait for the store instead of burning proposals."""
+    for f in (settings.store / 'splits.json', settings.store / desk / 'splits.json', settings.store / desk / 'panel.parquet'):
+        try:
+            if f.exists():
+                with open(f, 'rb') as fh:
+                    fh.read(4096)
+        except OSError as e:
+            return f'{f}: {e!r}'
+    return None
+
+
+def purge_empty_errors(L) -> int:
+    """Delete ERROR trials that scored no run at all (no information; e.g. 10k rows from the 11-06 disk failure)."""
+    rows = [r['id'] for r in L.q("SELECT id, results FROM process_trials WHERE verdict='ERROR'")
+            if not any(run.get('score') is not None for run in (json.loads(r['results'] or '{}') or {}).get('runs', []))]
+    for i in range(0, len(rows), 500):
+        chunk = rows[i:i + 500]
+        L.x(f"DELETE FROM process_trials WHERE id IN ({','.join('?' * len(chunk))})", tuple(chunk))
+    return len(rows)
+
+
 def trial_loop(settings, desk='perps', pairs=DEFAULT_PAIRS, hours=DEFAULT_HOURS, agents=DEFAULT_AGENTS,
-               idle_s=600, stop=None, log=print, runner=None):
+               idle_s=600, stop=None, log=print, runner=None, error_backoff_s=900):
     """Run queued proposals one after another, forever (managed by the supervisor). Returns when stop() is true,
     which the supervisor service uses to restart on new code between trials."""
     from ..company.ledger import Ledger
     L = Ledger(settings.ledger)
     for tid in recover_stale(L):
         log(f'trial {tid} was interrupted: marked ABORTED, its proposal re-queued')
+    errors = 0
     while not (stop and stop()):
         vid = next_proposed(L)
         if not vid:
             time.sleep(idle_s)
             continue
+        bad = store_problem(settings, desk)
+        if bad:
+            log(f'store unreadable, not starting a trial: {bad}')
+            time.sleep(idle_s)
+            continue
         log(f'trial start {vid}')
         res = run_trial(settings, vid, desk=desk, pairs=pairs, hours=hours, agents=agents, runner=runner)
         log(f"trial {res['trial']} {vid}: {res['verdict']} - {res.get('reason')}")
+        errors = errors + 1 if res['verdict'] == 'ERROR' else 0
+        if errors:                                      # never spin: 15 min, 30, 60 ... capped at 6 h
+            wait = min(error_backoff_s * 2 ** (errors - 1), 6 * 3600)
+            log(f'{errors} trial error(s) in a row: waiting {wait / 60:.0f} min')
+            time.sleep(wait)
 
 
 def next_proposed(L) -> str | None:

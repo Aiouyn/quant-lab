@@ -182,6 +182,21 @@ def stop(name, procs, graceful=False):
     log(f'stopped {name} ({len(procs)} process(es), graceful={graceful})')
 
 
+def store_problem():
+    """The feature store must be readable before the firm, trials or the daily refresh start: on 2026-11-06 a failing
+    D: drive made the firm crash-loop 36 times and the trial loop file 10k empty trials."""
+    f = HOME / 'store' / 'splits.json'
+    try:
+        if f.exists():
+            with open(f, 'rb') as fh:
+                fh.read(4096)
+        elif (HOME / 'store').exists():
+            os.listdir(HOME / 'store')
+    except OSError as e:
+        return repr(e)[:200]
+    return None
+
+
 def disk_guard_cfg():
     """{drive: (pause_below_gb, resume_at_gb)} from supervisor.json 'disk_guard', else DISK_GUARD."""
     f = HOME / 'supervisor.json'
@@ -235,7 +250,7 @@ def main():
     # processes found at startup may run older code: reload them once (paper sessions excepted: reload='never')
     cold = '--after' not in sys.argv                                # after a handover the services are already fresh
     state = {k: {'restarts': [], 'pending_reload': cold, 'stopping_since': None} for k in DEFAULT}
-    disk_paused = False
+    disk_paused = store_down = False
     last_refresh_day = None
     pending_hash, pending_since = None, 0.0
     last_kpi_hour = None
@@ -268,8 +283,14 @@ def main():
         elif disk_paused and all(free[d] >= hi for d, (_, hi) in guard.items()):
             disk_paused = False
             log(f'disk recovered ({", ".join(f"{d} {v:.1f} GB" for d, v in free.items())}): firm may restart')
+        bad_store = store_problem()
+        if bad_store and not store_down:
+            log(f'STORE UNREADABLE ({bad_store}): not starting firm/trials or the daily refresh until it reads again')
+        elif store_down and not bad_store:
+            log('store readable again: firm and trials may start')
+        store_down = bool(bad_store)
         status = {'updated': time.time(), 'pid': os.getpid(), 'disk_free_min_gb': round(low, 1), 'disk_paused': disk_paused,
-                  'services': {}}
+                  'store_unreadable': bad_store, 'services': {}}
         for name, svc in cfg.items():
             st = state.setdefault(name, {'restarts': [], 'pending_reload': False, 'stopping_since': None})
             procs = find(svc['match'])
@@ -288,6 +309,9 @@ def main():
                 st['stopping_since'] = None
             if svc.get('disk_guarded') and disk_paused:
                 status['services'][name] = {'enabled': True, 'running': bool(procs), 'held': 'disk'}
+                continue
+            if svc.get('disk_guarded') and store_down and not procs:
+                status['services'][name] = {'enabled': True, 'running': False, 'held': 'store'}
                 continue
             if procs and st['pending_reload'] and svc.get('reload', 'now') != 'never':
                 due = svc['reload'] in ('now', 'graceful') or (svc['reload'] == 'after_flush' and now.minute == 0 and now.second >= 45) \
@@ -328,11 +352,27 @@ def main():
                 log(f'kpi snapshot failed: {e!r}'[:300])
         if now.hour == 13 and now.minute >= 10 and last_refresh_day != now.date():
             last_refresh_day = now.date()
-            log('daily refresh (forward data + perps panel)')
-            subprocess.Popen([PY, '-m', 'desk.data.refresh'], cwd=str(ROOT), creationflags=0x08000000,
-                             stdout=open(HOME / 'services' / 'refresh.log', 'a'), stderr=open(HOME / 'services' / 'refresh.err', 'a'))
+            if store_down:
+                log('daily refresh skipped: store unreadable')
+            elif not cfg_raw().get('daily_refresh', True):
+                log('daily refresh skipped: disabled in supervisor.json')
+            else:
+                start_refresh()
         (HOME / 'supervisor_status.json').write_text(json.dumps(status, indent=1))
         time.sleep(60)
+
+
+def cfg_raw():
+    try:
+        return json.loads((HOME / 'supervisor.json').read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def start_refresh():
+    log('daily refresh (forward data + perps panel)')
+    subprocess.Popen([PY, '-m', 'desk.data.refresh'], cwd=str(ROOT), creationflags=0x08000000,
+                     stdout=open(HOME / 'services' / 'refresh.log', 'a'), stderr=open(HOME / 'services' / 'refresh.err', 'a'))
 
 
 def install():
