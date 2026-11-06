@@ -133,6 +133,10 @@ def build(settings, workers=8):
     cache.mkdir(parents=True, exist_ok=True)
     with httpx.Client(headers=UA) as c:
         mk = fetch_markets(c, root)
+        if mk.is_empty():                                         # e.g. gamma API unreachable (DNS-blocked ISP)
+            from .provenance import StoreBuildError
+            raise StoreBuildError('pred: Polymarket gamma API returned no resolved markets (unreachable or blocked from '
+                                  'this network?). No synthetic fill.')
         mk.write_parquet(root / 'markets.parquet')
         sel = mk.filter(pl.col('volume') >= MIN_VOLUME)
         print(f'resolved binary markets with lifetime volume >= {MIN_VOLUME:.0f}: {len(sel)}', flush=True)

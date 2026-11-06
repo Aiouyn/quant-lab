@@ -177,3 +177,16 @@ def test_macro_build_writes_provenance_atomically(tmp_path, monkeypatch):
 def test_provenance_refuses_empty_panel(tmp_path):
     with pytest.raises(StoreBuildError):
         write_provenance(tmp_path, 'pred', 'x', pl.DataFrame({'ts': [], 'market': []}), 'ts', 'market')
+
+
+def test_unreachable_polymarket_leaves_pred_unavailable_not_fatal(tmp_path, monkeypatch):
+    from desk.data import polymarket
+    s = _settings(tmp_path)
+    monkeypatch.setattr(polymarket, 'fetch_markets', lambda c, root: pl.DataFrame())
+    with pytest.raises(StoreBuildError, match='no resolved markets'):
+        store_builder.build_pred_store(s, force=True)
+    assert not (s.store / 'pred' / 'markets.parquet').exists()
+    monkeypatch.setattr(store_builder, 'build_macro_store', lambda *a, **k: {'status': 'built'})
+    monkeypatch.setattr(store_builder, 'build_perps_and_carry_stores', lambda *a, **k: {'perps': {}, 'carry': {}})
+    res = store_builder.ensure_store_panels(s, force=True)
+    assert res['pred']['status'] == 'unavailable' and 'Polymarket' in res['pred']['error']
