@@ -239,12 +239,20 @@ def build_perps_and_carry_stores(settings, force: bool = False, try_remote: bool
                 'carry': {**json.loads((carry_root / 'provenance.json').read_text(encoding='utf-8')), 'status': 'cached'}}
     _need_remote('perps/carry', try_remote, settings.store)
     perps_root.mkdir(parents=True, exist_ok=True)
-
-    # perps: real HL minute asset contexts (desk.data.hl_ctx) -> hourly panel
     files = sorted(Path(perps_panel.HLCTX).glob('*.parquet'))
     if not files:
         raise StoreBuildError(f'perps: no Hyperliquid asset-ctx files in {perps_panel.HLCTX} (source '
                               'QUANT_DATA/hyperliquid/asset_ctxs via desk.data.hl_ctx); run the harvest first. No synthetic fill.')
+
+    # carry first: it writes carry/universe.json (HL coin <-> Binance symbol map) that the perps panel's
+    # Binance metrics join reads. Per-coin HL funding + Binance futures downloads; raises on any failed coin.
+    fetched_at = datetime.now(timezone.utc)
+    carry_data.build_carry_data(settings)
+    cpanel = carry_data.load_panel(settings)
+    carry_prov = write_provenance(carry_root, 'carry', 'hyperliquid_fundingHistory+binance_fapi', cpanel, 'ts', 'coin',
+                                  fetched_at=fetched_at)
+
+    # perps: real HL minute asset contexts (desk.data.hl_ctx) -> hourly panel
     splits = freeze_splits(perps_root / 'splits.json', PERPS_SPLITS, 'perps')
     fetched_at = datetime.now(timezone.utc)
     fd, tmp = tempfile.mkstemp(prefix='.panel.parquet.', suffix='.tmp', dir=perps_root)
@@ -264,12 +272,6 @@ def build_perps_and_carry_stores(settings, force: bool = False, try_remote: bool
                                   fetched_at=fetched_at, input_files=len(files),
                                   input_range=[files[0].stem, files[-1].stem])
 
-    # carry: per-coin HL funding + Binance futures downloads; raises on any failed coin, freezes splits itself
-    fetched_at = datetime.now(timezone.utc)
-    carry_data.build_carry_data(settings)
-    cpanel = carry_data.load_panel(settings)
-    carry_prov = write_provenance(carry_root, 'carry', 'hyperliquid_fundingHistory+binance_fapi', cpanel, 'ts', 'coin',
-                                  fetched_at=fetched_at)
     return {'perps': {**perps_prov, 'status': 'built'}, 'carry': {**carry_prov, 'status': 'built'}}
 
 

@@ -59,6 +59,41 @@ def test_perps_without_hl_ctx_files_raises(tmp_path, monkeypatch):
         store_builder.build_perps_and_carry_stores(_settings(tmp_path), force=True)
 
 
+def test_empty_store_builds_carry_universe_before_perps_panel(tmp_path, monkeypatch):
+    """Regression (2026-11-06 rebuild after the D: failure): perps_panel.bn_metrics reads carry/universe.json, so on
+    an empty store the carry build must run first."""
+    from desk.data import perps_panel
+    hl = tmp_path / 'hlctx'; hl.mkdir()
+    (hl / '2026-01-01.parquet').write_bytes(b'')
+    monkeypatch.setattr(perps_panel, 'HLCTX', hl)
+    order = []
+    def carry(settings, **k):
+        order.append('carry')
+        (settings.store / 'carry').mkdir(parents=True, exist_ok=True)
+        (settings.store / 'carry' / 'universe.json').write_text('[]')
+    def panel(settings, out=None):
+        assert (settings.store / 'carry' / 'universe.json').exists(), 'perps panel built before carry universe'
+        order.append('perps')
+        raise RuntimeError('stop here')
+    monkeypatch.setattr(carry_data, 'build_carry_data', carry)
+    monkeypatch.setattr(carry_data, 'load_panel', lambda s: pl.DataFrame({'ts': [1], 'coin': ['BTC']}))
+    monkeypatch.setattr(store_builder, 'write_provenance', lambda *a, **k: {})
+    monkeypatch.setattr(perps_panel, 'build', panel)
+    with pytest.raises(RuntimeError, match='stop here'):
+        store_builder.build_perps_and_carry_stores(_settings(tmp_path), force=True)
+    assert order == ['carry', 'perps']
+
+
+def test_bn_metrics_without_carry_universe_maps_by_symbol(tmp_path):
+    from desk.data import perps_panel
+    s = _settings(tmp_path)
+    d = tmp_path / 'bn_metrics' / '1000PEPEUSDT'; d.mkdir(parents=True)
+    pl.DataFrame({'create_time': ['2026-01-01 00:00:00'], 'sum_open_interest_value': ['1.5'], 'count_long_short_ratio': ['1'],
+                  'sum_toptrader_long_short_ratio': ['1'], 'sum_taker_long_short_vol_ratio': ['1']}).write_parquet(d / '2026-01.parquet')
+    m = perps_panel.bn_metrics(s)
+    assert m['coin'].to_list() == ['kPEPE'] and m['sum_open_interest_value'].to_list() == [1.5]
+
+
 def test_failed_carry_coin_raises_and_does_not_freeze_splits(tmp_path, monkeypatch):
     monkeypatch.setattr(carry_data, 'universe', lambda n=30: [{'coin': 'BTC', 'binance': 'BTCUSDT'},
                                                               {'coin': 'ETH', 'binance': 'ETHUSDT'}])
