@@ -28,7 +28,8 @@ def live_day(settings, d: str):
     local = settings.home / 'parity' / 'hl_asset_ctxs' / f'{d}.parquet'
     if local.exists():
         return pl.read_parquet(local)
-    raw = subprocess.run(['rclone', 'cat', f'{LIVE}/{d}.parquet'], capture_output=True, timeout=600).stdout
+    from .drive import cat
+    raw = cat(f'{LIVE}/{d}.parquet')
     return pl.read_parquet(io.BytesIO(raw)) if raw else None
 
 
